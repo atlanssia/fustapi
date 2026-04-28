@@ -1,6 +1,10 @@
-//! Cloud provider dispatch.
+//! Cloud provider adapters (DeepSeek, OpenAI).
 //!
-//! Routes requests to cloud providers (DeepSeek, OpenAI) as fallback backends.
+//! These providers connect to cloud inference APIs as fallback when
+//! local providers are unavailable.
 
 pub mod deepseek;
-pub mod openai;
+pub mod openai_cloud;
+
+pub use deepseek::{DeepSeekConfig, DeepSeekProvider};
+pub use openai_cloud::{OpenAIConfig, OpenAIProvider};
