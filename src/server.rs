@@ -9,12 +9,14 @@ use axum::{
     extract::DefaultBodyLimit,
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::info;
+
+use crate::protocol;
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -37,10 +39,20 @@ struct HealthResponse {
     status: &'static str,
 }
 
-/// Error response for unknown routes.
+/// Model info for /v1/models endpoint.
 #[derive(Serialize)]
-struct ErrorResponse {
-    error: &'static str,
+struct ModelInfo {
+    id: String,
+    object: &'static str,
+    created: u64,
+    owned_by: &'static str,
+}
+
+/// Model list response.
+#[derive(Serialize)]
+struct ModelListResponse {
+    object: &'static str,
+    data: Vec<ModelInfo>,
 }
 
 /// Run the HTTP server.
@@ -50,6 +62,9 @@ struct ErrorResponse {
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router = Router::new()
         .route("/health", get(health_handler))
+        .route("/v1/chat/completions", post(chat_completions_handler))
+        .route("/v1/messages", post(messages_handler))
+        .route("/v1/models", get(models_handler))
         .fallback(fallback_handler)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)); // 10MB body limit
 
@@ -68,12 +83,47 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
 
 /// GET /health — returns {"status": "ok"}.
 async fn health_handler() -> impl IntoResponse {
-    (StatusCode::OK, axum::Json(HealthResponse { status: "ok" }))
+    (StatusCode::OK, Json(HealthResponse { status: "ok" }))
+}
+
+/// POST /v1/chat/completions — OpenAI-compatible chat completions endpoint.
+async fn chat_completions_handler(
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    let protocol = protocol::detect_protocol("/v1/chat/completions", &headers);
+    match protocol::dispatch_request(protocol, body).await {
+        Ok(response) => response,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/messages — Anthropic-compatible messages endpoint.
+async fn messages_handler(
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    let protocol = protocol::detect_protocol("/v1/messages", &headers);
+    match protocol::dispatch_request(protocol, body).await {
+        Ok(response) => response,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// GET /v1/models — returns a list of available models.
+async fn models_handler() -> impl IntoResponse {
+    let models = vec![
+        ModelInfo { id: "fustapi-mock".to_string(), object: "model", created: 1_000_000_000, owned_by: "fustapi" },
+        ModelInfo { id: "gpt-4".to_string(), object: "model", created: 1_000_000_000, owned_by: "openai" },
+        ModelInfo { id: "claude-3".to_string(), object: "model", created: 1_000_000_000, owned_by: "anthropic" },
+    ];
+
+    (StatusCode::OK, Json(ModelListResponse { object: "list", data: models })).into_response()
 }
 
 /// Fallback handler for unknown routes — returns 404 with JSON error.
 async fn fallback_handler() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, axum::Json(ErrorResponse { error: "not found" }))
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": { "message": "not found" } })))
 }
 
 /// Wait for SIGINT or SIGTERM signal to trigger graceful shutdown.
@@ -94,8 +144,6 @@ async fn shutdown_signal() {
         }
         #[cfg(not(unix))]
         {
-            // On non-Unix, only listen for Ctrl+C (already handled above).
-            // This branch is a no-op; the ctrl_c branch will fire first.
             tokio::signal::ctrl_c().await.ok();
         }
     };
