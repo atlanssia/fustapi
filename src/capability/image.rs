@@ -20,7 +20,7 @@ pub struct ImageInput {
 }
 
 /// Source of an image input.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ImageSource {
     /// Base64-encoded image data.

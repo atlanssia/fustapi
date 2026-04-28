@@ -16,7 +16,7 @@ pub struct ToolCall {
 }
 
 /// A tool definition provided to the LLM for discovery.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ToolDefinition {
     /// The name of the tool.
     pub name: String,
