@@ -8,6 +8,7 @@
 //! - `capability` — Tool calling and image input abstraction
 //! - `provider` — Provider trait and adapter registry
 //! - `streaming` — Streaming engine (LLMChunk, SSE)
+//! - `web` — Embedded Web UI (control plane)
 
 pub mod config;
 pub mod server;
@@ -16,3 +17,4 @@ pub mod protocol;
 pub mod capability;
 pub mod provider;
 pub mod streaming;
+pub mod web;

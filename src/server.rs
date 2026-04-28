@@ -17,6 +17,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::protocol;
+use crate::web;
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -61,6 +62,12 @@ struct ModelListResponse {
 /// graceful shutdown on SIGINT/SIGTERM.
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router = Router::new()
+        // Web UI routes (served before API routes)
+        .route("/ui", axum::routing::get(web::ui_handler))
+        .route("/ui/", axum::routing::get(web::ui_handler))
+        .route("/api/providers", axum::routing::get(web::providers_api_handler))
+        .route("/api/models", axum::routing::get(web::models_api_handler))
+        // API routes
         .route("/health", get(health_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
         .route("/v1/messages", post(messages_handler))
