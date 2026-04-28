@@ -1,0 +1,45 @@
+[package]
+name = "fustapi"
+version = "0.1.0"
+edition = "2021"
+description = "Local-first, high-performance LLM API aggregation gateway"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# HTTP framework (tokio-native, lighter than actix-web)
+axum = { version = "0.8", features = ["json", "query"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config parsing
+toml = "0.8"
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Streaming utilities
+futures = "0.3"
+
+# Async trait support for Provider trait
+async-trait = "0.1"
+
+# Error handling
+thiserror = "2"
+
+# Cross-platform home directory resolution
+dirs = "6"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
