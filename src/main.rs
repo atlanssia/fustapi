@@ -5,7 +5,6 @@
 use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
-use tracing::info;
 
 /// Local-first, high-performance LLM API aggregation gateway.
 #[derive(Parser)]
@@ -20,13 +19,13 @@ struct Cli {
 enum Commands {
     /// Start the gateway server.
     Serve {
-        /// Host to bind to.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Host to bind to (overrides config).
+        #[arg(long)]
+        host: Option<String>,
 
-        /// Port to listen on.
-        #[arg(long, default_value_t = 8080)]
-        port: u16,
+        /// Port to listen on (overrides config).
+        #[arg(long)]
+        port: Option<u16>,
     },
 
     /// Configuration management.
@@ -54,11 +53,7 @@ async fn main() {
 
     match cli.command {
         Commands::Serve { host, port } => {
-            let addr = SocketAddr::from((
-                host.parse::<std::net::IpAddr>().expect("invalid host"),
-                port,
-            ));
-            let config = fustapi::server::ServerConfig { addr };
+            let config = load_server_config(host, port);
             if let Err(e) = fustapi::server::run(config).await {
                 eprintln!("Server error: {e}");
                 std::process::exit(1);
@@ -66,23 +61,69 @@ async fn main() {
         }
         Commands::Config { command } => match command {
             ConfigSubcommand::Init => {
-                info!("Initializing default configuration...");
-                config_init().await;
+                if let Err(e) = fustapi::config::init_config() {
+                    eprintln!("Failed to initialize config: {e}");
+                    std::process::exit(1);
+                }
             }
         },
         Commands::Providers => {
-            info!("Listing providers...");
             providers_list();
         }
     }
 }
 
-/// Stub: initialize default configuration file.
-async fn config_init() {
-    println!("todo: write default config file");
+/// Load server configuration, merging CLI overrides with config file / defaults.
+fn load_server_config(cli_host: Option<String>, cli_port: Option<u16>) -> fustapi::server::ServerConfig {
+    let config = fustapi::config::load().unwrap_or_else(|e| {
+        eprintln!("Warning: Could not load config ({e}). Using defaults.");
+        fustapi::config::default_config()
+    });
+
+    let host = cli_host.unwrap_or(config.server.host);
+    let port = cli_port.unwrap_or(config.server.port);
+
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .expect("invalid host:port combination");
+
+    fustapi::server::ServerConfig { addr }
 }
 
-/// Stub: list configured providers.
+/// List configured providers from the config file.
 fn providers_list() {
-    println!("todo: list providers");
+    let config = match fustapi::config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Warning: Could not load config ({e}).");
+            println!("Run `fustapi config init` to create a configuration file.");
+            return;
+        }
+    };
+
+    if config.providers.is_empty() && config.router.is_empty() {
+        println!("No providers or model routing configured.");
+        println!("Run `fustapi config init` to create a configuration file.");
+        return;
+    }
+
+    if !config.providers.is_empty() {
+        println!("Configured providers:");
+        println!("{:<20} {:<45} API Key", "Name", "Endpoint");
+        println!("{}", "─".repeat(70));
+
+        for (name, provider) in &config.providers {
+            let has_key = provider.api_key.as_ref().map_or("no", |_| "yes");
+            println!("{:<20} {:<45} {}", name, provider.endpoint, has_key);
+        }
+
+        println!();
+    }
+
+    if !config.router.is_empty() {
+        println!("Model routing:");
+        for (model, providers) in &config.router {
+            println!("  {} → {}", model, providers.join(" → "));
+        }
+    }
 }
