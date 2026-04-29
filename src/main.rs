@@ -85,14 +85,16 @@ fn load_server_config(
         fustapi::config::default_config()
     });
 
-    let host = cli_host.unwrap_or(config.server.host);
+    let host = cli_host.unwrap_or_else(|| config.server.host.clone());
     let port = cli_port.unwrap_or(config.server.port);
 
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .expect("invalid host:port combination");
 
-    fustapi::server::ServerConfig { addr }
+    let router = fustapi::router::RealRouter::from_config(&config);
+
+    fustapi::server::ServerConfig { addr, router: std::sync::Arc::new(router) }
 }
 
 /// List configured providers from the config file.

@@ -4,19 +4,21 @@
 //! graceful shutdown.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put, delete},
 };
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::protocol;
+use crate::router::{RealRouter, Router as _};
 use crate::web;
 
 /// Server configuration.
@@ -24,12 +26,15 @@ use crate::web;
 pub struct ServerConfig {
     /// The address to bind to.
     pub addr: SocketAddr,
+    /// The router instance for provider dispatch.
+    pub router: Arc<RealRouter>,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            router: Arc::new(RealRouter::from_config(&crate::config::default_config())),
         }
     }
 }
@@ -61,29 +66,53 @@ struct ModelListResponse {
 /// Binds to the configured address, starts the axum router, and handles
 /// graceful shutdown on SIGINT/SIGTERM.
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let router = Router::new()
+    let router = config.router.clone();
+    let router2 = router.clone();
+    let router3 = router.clone();
+    let router_for_v1_models = router.clone();
+    let app = Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
         .route("/ui/", axum::routing::get(web::ui_handler))
+        // Control plane API — providers
         .route(
             "/api/providers",
-            axum::routing::get(web::providers_api_handler),
+            get(web::providers_api_handler)
+                .post(web::create_provider),
         )
-        .route("/api/models", axum::routing::get(web::models_api_handler))
+        .route(
+            "/api/providers/:id",
+            put(web::update_provider)
+                .delete(web::delete_provider),
+        )
+        // Control plane API — model routes
+        .route(
+            "/api/models",
+            get(web::models_api_handler),
+        )
+        .route(
+            "/api/routes",
+            post(web::create_route),
+        )
+        .route(
+            "/api/routes/:model",
+            delete(web::delete_route),
+        )
         // API routes
         .route("/health", get(health_handler))
-        .route("/v1/chat/completions", post(chat_completions_handler))
-        .route("/v1/messages", post(messages_handler))
-        .route("/v1/models", get(models_handler))
+        .route("/v1/chat/completions", post(move |headers, body| chat_completions_handler(headers, body, router2.clone())))
+        .route("/v1/messages", post(move |headers, body| messages_handler(headers, body, router3.clone())))
+        .route("/v1/models", get(move |headers| models_handler(headers, router_for_v1_models.clone())))
         .fallback(fallback_handler)
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)); // 10MB body limit
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB body limit
+        .layer(axum::extract::Extension(router));
 
     let addr = config.addr;
     let listener = TcpListener::bind(addr).await?;
 
     info!("Listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, router)
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
@@ -100,52 +129,44 @@ async fn health_handler() -> impl IntoResponse {
 async fn chat_completions_handler(
     headers: axum::http::HeaderMap,
     body: String,
+    router: Arc<RealRouter>,
 ) -> impl IntoResponse {
     let protocol = protocol::detect_protocol("/v1/chat/completions", &headers);
-    match protocol::dispatch_request(protocol, body).await {
+    match protocol::dispatch_request(protocol, body, &router).await {
         Ok(response) => response,
         Err(e) => e.into_response(),
     }
 }
 
 /// POST /v1/messages — Anthropic-compatible messages endpoint.
-async fn messages_handler(headers: axum::http::HeaderMap, body: String) -> impl IntoResponse {
+async fn messages_handler(
+    headers: axum::http::HeaderMap,
+    body: String,
+    router: Arc<RealRouter>,
+) -> impl IntoResponse {
     let protocol = protocol::detect_protocol("/v1/messages", &headers);
-    match protocol::dispatch_request(protocol, body).await {
+    match protocol::dispatch_request(protocol, body, &router).await {
         Ok(response) => response,
         Err(e) => e.into_response(),
     }
 }
 
 /// GET /v1/models — returns a list of available models.
-async fn models_handler() -> impl IntoResponse {
-    let models = vec![
-        ModelInfo {
-            id: "fustapi-mock".to_string(),
+async fn models_handler(_headers: axum::http::HeaderMap, router: Arc<RealRouter>) -> impl IntoResponse {
+    let model_ids = router.list_models();
+    let models = model_ids
+        .into_iter()
+        .map(|id| ModelInfo {
+            id,
             object: "model",
             created: 1_000_000_000,
             owned_by: "fustapi",
-        },
-        ModelInfo {
-            id: "gpt-4".to_string(),
-            object: "model",
-            created: 1_000_000_000,
-            owned_by: "openai",
-        },
-        ModelInfo {
-            id: "claude-3".to_string(),
-            object: "model",
-            created: 1_000_000_000,
-            owned_by: "anthropic",
-        },
-    ];
+        })
+        .collect();
 
     (
         StatusCode::OK,
-        Json(ModelListResponse {
-            object: "list",
-            data: models,
-        }),
+        Json(ModelListResponse { object: "list", data: models }),
     )
         .into_response()
 }

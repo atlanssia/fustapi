@@ -1,9 +1,12 @@
 //! Model-to-provider router with priority ordering and fallback.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
-use crate::provider::UnifiedRequest;
-use crate::streaming::LLMStream;
+use crate::config;
+use crate::provider::{Provider, ProviderError, UnifiedRequest};
+use crate::streaming::{LLMStream, StreamError};
 
 /// Error type for router operations.
 #[derive(Debug)]
@@ -28,6 +31,19 @@ impl std::fmt::Display for RouterError {
 
 impl std::error::Error for RouterError {}
 
+impl From<ProviderError> for RouterError {
+    fn from(e: ProviderError) -> Self {
+        match e {
+            ProviderError::ModelNotFound(model) => RouterError::ModelNotFound(model),
+            ProviderError::Connection(msg) => RouterError::ProviderError(msg),
+            ProviderError::Request(msg) => RouterError::ProviderError(msg),
+            ProviderError::Internal(msg) => RouterError::Internal(msg),
+            ProviderError::Stream(msg) => RouterError::ProviderError(msg),
+            ProviderError::Capability(_) | ProviderError::Api(_) => RouterError::Internal("provider error".to_string()),
+        }
+    }
+}
+
 /// Trait for resolving model names to provider backends.
 #[async_trait]
 pub trait Router: Send + Sync {
@@ -37,65 +53,57 @@ pub trait Router: Send + Sync {
     /// Get list of available models.
     fn list_models(&self) -> Vec<String>;
 
+    /// Get list of configured providers.
+    fn list_providers(&self) -> Vec<String>;
+
     /// Stream a chat completion through the selected provider.
     async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError>;
 }
 
-/// Mock router that returns canned responses for testing.
-#[derive(Debug, Clone)]
-pub struct MockRouter {
-    models: Vec<String>,
+/// Real router that uses configured providers.
+pub struct RealRouter {
+    providers: HashMap<String, Box<dyn Provider>>,
+    routes: HashMap<String, Vec<String>>,
 }
 
-impl MockRouter {
-    /// Create a new mock router with default models.
-    pub fn new() -> Self {
-        Self {
-            models: vec![
-                "fustapi-mock".to_string(),
-                "gpt-4".to_string(),
-                "claude-3".to_string(),
-            ],
+impl std::fmt::Debug for RealRouter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RealRouter")
+            .field("provider_names", &self.providers.keys().collect::<Vec<_>>())
+            .field("routes", &self.routes)
+            .finish()
+    }
+}
+
+impl RealRouter {
+    /// Create a new real router from config.
+    pub fn from_config(config: &config::AppConfig) -> Self {
+        let mut providers = HashMap::new();
+        let mut routes = HashMap::new();
+
+        // Create provider instances from config
+        for (name, cfg) in &config.providers {
+            let provider = config::create_provider(name, cfg);
+            providers.insert(name.clone(), provider);
         }
-    }
-}
 
-impl Default for MockRouter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Router for MockRouter {
-    fn resolve(&self, model: &str) -> Result<String, RouterError> {
-        if self.models.iter().any(|m| m == model) {
-            Ok(model.to_string())
-        } else {
-            Err(RouterError::ModelNotFound(model.to_string()))
+        // Copy routes from config
+        for (model, provider_names) in &config.router {
+            routes.insert(model.clone(), provider_names.clone());
         }
+
+        Self { providers, routes }
     }
 
-    fn list_models(&self) -> Vec<String> {
-        self.models.clone()
-    }
-
-    async fn chat_stream(&self, _request: UnifiedRequest) -> Result<LLMStream, RouterError> {
-        use futures::stream;
-        let chunks = vec![
-            Ok(crate::streaming::LLMChunk {
-                content: Some("Hello from FustAPI mock router!".to_string()),
-                tool_call: None,
-                done: false,
-            }),
-            Ok(crate::streaming::LLMChunk {
-                content: None,
-                tool_call: None,
-                done: true,
-            }),
-        ];
-        // Box the stream as a trait object for dynamic dispatch.
-        let s: LLMStream = Box::new(stream::iter(chunks));
-        Ok(s)
+    /// Get the provider instance for a model name.
+    fn get_provider_for_model(&self, model: &str) -> Option<&Box<dyn Provider>> {
+        self.routes.get(model).and_then(|provider_names| {
+            provider_names.first().and_then(|name| self.providers.get(name))
+        })
     }
 }
+
+#[async_trait] impl Router for RealRouter { fn resolve(&self, model: &str) -> Result<String, RouterError> { if let Some(provider_names) = self.routes.get(model) { if let Some(first) = provider_names.first() { return Ok(first.clone()); } } Err(RouterError::ModelNotFound(model.to_string())) } fn list_models(&self) -> Vec<String> { self.routes.keys().cloned().collect() } fn list_providers(&self) -> Vec<String> { self.providers.keys().cloned().collect() } async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> { if let Some(provider) = self.get_provider_for_model(&request.model) { let stream = provider.chat_stream(request).await?; use tokio_stream::StreamExt; let s = stream.map(|chunk_result| match chunk_result { Ok(chunk) => Ok(chunk), Err(e) => Err(StreamError::Provider(e.to_string())) }); return Ok(Box::new(s) as LLMStream); } Err(RouterError::ModelNotFound(request.model)) } }
+
+/// Blanket impl for Arc<RealRouter>
+#[async_trait] impl Router for std::sync::Arc<RealRouter> { fn resolve(&self, model: &str) -> Result<String, RouterError> { (**self).resolve(model) } fn list_models(&self) -> Vec<String> { (**self).list_models() } fn list_providers(&self) -> Vec<String> { (**self).list_providers() } async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> { (**self).chat_stream(request).await } }

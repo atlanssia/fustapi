@@ -16,96 +16,250 @@ header p{color:var(--text-muted);font-size:.875rem;margin-top:.25rem}
 .tab{padding:.75rem 1.25rem;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:.875rem;font-weight:500;border-bottom:2px solid transparent;transition:all .2s}
 .tab:hover{color:var(--text)}
 .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.panel{display:none}
-.panel.active{display:block}
+.panel{display:none}.panel.active{display:block}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:.5rem;padding:1.25rem;margin-bottom:1rem}
-.card h3{font-size:.875rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.75rem}
+.card h3{font-size:.875rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.75rem;display:flex;align-items:center;justify-content:space-between}
+.card h3 button{font-size:.75rem;padding:.3rem .75rem;background:var(--accent);color:#fff;border:none;border-radius:.25rem;cursor:pointer;font-weight:500}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:.625rem .75rem;border-bottom:1px solid var(--border);font-size:.8125rem}
 th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:.6875rem;letter-spacing:.05em}
-td{color:var(--text)}
-.badge{display:inline-block;padding:.125rem .5rem;border-radius:.25rem;font-size:.6875rem;font-weight:600;text-transform:uppercase}
-.badge-ok{background:rgba(34,197,94,.15);color:var(--success)}
-.badge-nokey{background:rgba(234,179,8,.15);color:var(--warning)}
-.badge-unknown{background:rgba(113,113,122,.15);color:var(--text-muted)}
-.loading{text-align:center;padding:3rem;color:var(--text-muted)}
+.badge{display:inline-block;padding:.125rem .5rem;border-radius:.25rem;font-size:.6875rem;font-weight:600}
+.badge-ok{backgroundrgba(34,197,94,.15);colorvar(--success)}
+.badge-nokey{backgroundrgba(234,179,8,.15);colorvar(--warning)}
+.badge-type{backgroundrgba(99,102,241,.15);colorvar(--accent)}
+.loading{text-align:center;padding:3rem;colorvar(--text-muted)}
 .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:.375rem}
-.status-dot.ok{background:var(--success)}
-.status-dot.warn{background:var(--warning)}
-.status-dot.err{background:var(--danger)}
-footer{text-align:center;margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border);color:var(--text-muted);font-size:.75rem}
+.status-dot.ok{backgroundvar(--success)}.status-dot.err{backgroundvar(--danger)}
+.actions{display:flex;gap:.375rem}
+.btn-sm{padding:.2rem .5rem;border:none;border-radius:.25rem;font-size:.6875rem;cursor:pointer;font-weight:500}
+.btn-edit{backgroundrgba(99,102,241,.2);colorvar(--accent)}
+.btn-del{backgroundrgba(239,68,68,.15);colorvar(--danger)}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;backgroundrgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal{background:#fff;border:#fff;border-radius:.75rem;padding:#fff;width:#fff;max-width:#fff;max-height:#fff;overflow-y:auto}
+
+/* Toast */
+.toast-container{position:fixed;top:1rem;right:1rem;z-index:200;display:flex;flex-direction:column;gap:.5rem}
+.toast{padding:.75rem 1.25rem;border-radius:.5rem;color:#fff;font-size:.875rem;font-weight:500;animation:slideIn .3s ease-out}
+.toast-success{background:#22c55e}.toast-error{background:#ef4444}.toast-warning{background:#eab308}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* Form */
+.form-group{margin-bottom:1rem}
+.form-group label{display:block;font-size:.8125rem;font-weight:600;color:#71717a;margin-bottom:.375rem;text-transformuppercase;letter-spacing:.03em}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:.625rem .75rem;background:#f9fafb;border:#d1d5db;border-radius:.375rem;color:#374151;font-size:.875rem;font-familyinherit}
+
 </style>
+
 </head>
+
 <body>
+
 <div class="container">
-<header>
-<h1>FustAPI</h1>
-<p>Local-first LLM API Gateway — Control Plane</p>
-</header>
 
-<div class="tabs">
-<button class="tab active" data-tab="providers">Providers</button>
-<button class="tab" data-tab="models">Models</button>
-<button class="tab" data-tab="health">Health</button>
+  <header>
+
+    <h1>FustAPI Control Plane</h1>
+
+    <p>Manage providers, models, and routing</p>
+
+  </header>
+
+  <div class="tabs">
+
+    <button class="tab active" data-tab="providers">Providers</button>
+
+    <button class="tab" data-tab="models">Models</button>
+
+    <button class="tab" data-tab="health">Health</button>
+
+  </div>
+
+  <!-- Providers Panel -->
+
+  <div id="providers-panel" class="panel active">
+
+    <div class="card">
+
+      <h3>Providers <button onclick="openProviderModal()">+ Add Provider</button></h3>
+
+      <div id="providers-loading" class="loading">Loading providers...</div>
+
+      <table id="providers-table" style="display:none">
+
+        <thead>
+
+          <tr><th>Name</th><th>Type</th><th>Endpoint</th><th>API Key</th><th>Actions</th></tr>
+
+        </thead>
+
+        <tbody id="providers-tbody"></tbody>
+
+      </table>
+
+    </div>
+
+    <!-- Provider Modal -->
+
+    <div id="provider-modal" class="modal-overlay">
+
+      <div class="modal" style="width400px;backgroundvar(--surface)">
+
+        <h3 id="provider-modal-title" style="margin-bottom1rem;font-size1.125rem">Add Provider</h3>
+
+        <form id="provider-form">
+
+          <input type="hidden" id="provider-id-old">
+
+          <div class="form-group">
+
+            <label for="provider-name">Name</label>
+
+            <input type="text" id="provider-name" required placeholder="e.g., my-omlx">
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="provider-type">Type</label>
+
+            <select id="provider-type" required>
+
+              <option value="">Select type...</option>
+
+              <option value="omlx">omlx</option>
+
+              <option value="lmstudio">LM Studio</option>
+
+              <option value="sglang">SGLang</option>
+
+              <option value="openai">OpenAI</option>
+
+              <option value="deepseek">DeepSeek</option>
+
+            </select>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="provider-endpoint">Endpoint</label>
+
+            <input type="url" id="provider-endpoint" required placeholder="http://localhost:8000/v1">
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="provider-api-key">API Key (optional)</label>
+
+            <input type="password" id="provider-api-key" placeholder="sk-...">
+
+          </div>
+
+
+          <!-- OpenAI-specific fields -->
+
+
+          <!-- DeepSeek-specific fields -->
+
+
+          <!-- SGLang-specific fields -->
+
+
+          <!-- LM Studio / omlx common fields -->
+
+
+          <div class="modal-actions">
+
+
+            <button type="button" class="btn btn-secondary" onclick="closeProviderModal()">Cancel</button>
+
+
+            <button type="submit" class="btn btn-primary" id="provider-submit-btn">Add Provider</button>
+
+
+          </div>
+
+
+        </form>
+
+
+      </div>
+
+
+    </div>
+
+
+  </div>
+
+
+  <!-- Models Panel -->
+
+
+  <!-- Health Panel -->
+
+
+  <!-- Toast Container -->
+
+
+  <!-- Footer -->
+
+
 </div>
 
-<div id="providers" class="panel active">
-<div class="card">
-<h3>Configured Providers</h3>
-<table>
-<thead><tr><th>Name</th><th>Endpoint</th><th>API Key</th><th>Status</th></tr></thead>
-<tbody id="providers-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
-</table>
-</div>
-</div>
-
-<div id="models" class="panel">
-<div class="card">
-<h3>Model Routing</h3>
-<table>
-<thead><tr><th>Model</th><th>Providers</th></tr></thead>
-<tbody id="models-body"><tr><td colspan="2" class="loading">Loading...</td></tr></tbody>
-</table>
-</div>
-</div>
-
-<div id="health" class="panel">
-<div class="card">
-<h3>System Health</h3>
-<div id="health-status" class="loading">Checking...</div>
-</div>
-</div>
-
-<footer>FustAPI v0.1.0 — Single-binary LLM gateway</footer>
-</div>
 
 <script>
-(function(){
-const $=s=>document.querySelector(s);
-const $$=s=>document.querySelectorAll(s);
 
-// Tabs
-$$('.tab').forEach(tab=>{tab.addEventListener('click',()=>{$$('.tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active');$$('.panel').forEach(p=>p.classList.remove('active'));$( '#'+tab.dataset.tab).classList.add('active');});});
 
-// Load providers
-fetch('/api/providers').then(r=>r.json()).then(data=>{
-const tb=$('#providers-body');
-if(!data.providers||data.providers.length===0){tb.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No providers configured. Run <code>fustapi config init</code>.</td></tr>';return;}
-tb.innerHTML=data.providers.map(p=>`<tr><td>${esc(p.name)}</td><td><code>${esc(p.endpoint)}</code></td><td><span class="badge ${p.has_key?'badge-ok':'badge-nokey'}">${p.has_key?'Set':'None'}</span></td><td><span class="status-dot ok"></span>Active</td></tr>`).join('');
-}).catch(()=>{$('#providers-body').innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--danger)">Failed to load providers</td></tr>';});
+// Tab switching
 
-// Load models
-fetch('/api/models').then(r=>r.json()).then(data=>{
-const tb=$('#models-body');
-if(!data.models||data.models.length===0){tb.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--text-muted)">No models configured.</td></tr>';return;}
-tb.innerHTML=data.models.map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${m.providers.map(p=>esc(p)).join(' → ')}</td></tr>`).join('');
-}).catch(()=>{$('#models-body').innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--danger)">Failed to load models</td></tr>';});
 
-// Load health
-fetch('/health').then(r=>r.json()).then(data=>{$('#health-status').innerHTML=`<span class="status-dot ok"></span><strong>${esc(data.status)}</strong>`;}).catch(()=>{$('#health-status').innerHTML='<span class="status-dot err"></span><strong style="color:var(--danger)">Unhealthy</strong>';});
+// Fetch providers
 
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-})();
+
+// Render providers
+
+
+// Provider modal
+
+
+// Provider form submit
+
+
+// Delete provider
+
+
+// Fetch models
+
+
+// Render models
+
+
+// Route modal
+
+
+// Route form submit
+
+
+// Delete route
+
+
+// Health check
+
+
+// Toast notifications
+
+
+// Initialize
+
+
 </script>
+
+
 </body>
+
+
 </html>

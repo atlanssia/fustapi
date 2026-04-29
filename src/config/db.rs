@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_init_db_creates_tables() {
         let path = temp_db("init");
-        let mut conn = init_db(&path).expect("init_db failed");
+        let conn = init_db(&path).expect("init_db failed");
         let c: i64 = conn
             .query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))
             .unwrap();

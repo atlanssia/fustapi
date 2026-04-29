@@ -37,6 +37,13 @@ pub struct ProviderConfig {
     pub endpoint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Provider type (e.g., "openai", "omlx", "lmstudio", "sglang").
+    #[serde(default = "default_type")]
+    pub r#type: String,
+}
+
+fn default_type() -> String {
+    "openai".to_string()
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────
@@ -188,6 +195,7 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
             ProviderConfig {
                 endpoint: rec.base_url.clone(),
                 api_key: rec.api_key.clone(),
+                r#type: rec.r#type.clone(),
             },
         );
     }
@@ -239,8 +247,8 @@ pub fn load_merged(db_path: &Path) -> Result<AppConfig, ConfigError> {
 // ── Provider Factory ──────────────────────────────────────────────────
 
 /// Create a provider instance from a provider config entry.
-pub fn create_provider(name: &str, cfg: &ProviderConfig) -> Box<dyn crate::provider::Provider> {
-    match name {
+pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::provider::Provider> {
+    match cfg.r#type.as_str() {
         "omlx" => Box::new(crate::provider::omlx::OmlxProvider::new(
             crate::provider::omlx::OmlxConfig {
                 endpoint: cfg.endpoint.clone(),
@@ -282,7 +290,7 @@ pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError>
     for (id, cfg) in &config.providers {
         let rec = db::ProviderRecord {
             id: id.clone(),
-            r#type: id.clone(),
+            r#type: cfg.r#type.clone(),
             base_url: cfg.endpoint.clone(),
             api_key: cfg.api_key.clone(),
             is_local: true,
@@ -366,6 +374,7 @@ mod tests {
     fn test_save_and_load_default() {
         let dir = std::env::temp_dir().join("fustapi_test_config_save");
         let _ = std::fs::remove_file(dir.join("config.toml"));
+        #[allow(deprecated)]
         save_default(&dir.join("config.toml")).expect("save_default failed");
         let contents = std::fs::read_to_string(dir.join("config.toml")).expect("read test config");
         let parsed: AppConfig = toml::from_str(&contents).expect("parsed test config");
