@@ -61,10 +61,7 @@ pub struct UnifiedRequest {
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Stream a chat completion request to this provider.
-    async fn chat_stream(
-        &self,
-        request: UnifiedRequest,
-    ) -> Result<LLMStream, ProviderError>;
+    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError>;
 
     /// Whether this provider natively supports tool calling.
     fn supports_tools(&self) -> bool;
@@ -104,4 +101,19 @@ pub enum ProviderError {
     /// Internal provider error (unexpected behavior).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Provider API error.
+    #[error("api error: {0}")]
+    Api(String),
+
+    /// Stream error.
+    #[error("stream error: {0}")]
+    Stream(String),
 }
+
+// ── Provider module exports ───────────────────────────────────────────
+
+pub mod cloud;
+pub mod lmstudio;
+pub mod omlx;
+pub mod sglang;

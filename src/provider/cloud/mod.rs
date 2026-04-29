@@ -4,7 +4,7 @@
 //! local providers are unavailable.
 
 pub mod deepseek;
-pub mod openai_cloud;
+pub mod openai;
 
 pub use deepseek::{DeepSeekConfig, DeepSeekProvider};
-pub use openai_cloud::{OpenAIConfig, OpenAIProvider};
+pub use openai::{OpenAIConfig, OpenAIProvider};

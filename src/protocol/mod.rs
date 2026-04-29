@@ -2,12 +2,12 @@
 //!
 //! Routes incoming requests to the appropriate protocol parser (OpenAI or Anthropic).
 
-pub mod openai;
 pub mod anthropic;
+pub mod openai;
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
 /// Protocol identifier for dispatch decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +42,22 @@ async fn openai_handler(body: String) -> Result<Response, ProtocolError> {
 
     // Return a canned OpenAI response (mock provider)
     let response = openai::serialize_response(
-        "chatcmpl-mock-1", "mock", Some("Hello from FustAPI! (mock)"), None, "stop", 10, 5, 15,
-    ).map_err(|e| ProtocolError::Internal(e.to_string()))?;
+        "chatcmpl-mock-1",
+        "mock",
+        Some("Hello from FustAPI! (mock)"),
+        None,
+        "stop",
+        10,
+        5,
+        15,
+    )
+    .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
-    Ok((StatusCode::OK, Json(serde_json::from_str::<serde_json::Value>(&response).unwrap())).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::from_str::<serde_json::Value>(&response).unwrap()),
+    )
+        .into_response())
 }
 
 /// Handle an Anthropic-format request. Returns a canned response for now.
@@ -57,10 +69,19 @@ async fn anthropic_handler(body: String) -> Result<Response, ProtocolError> {
 
     // Return a canned Anthropic response (mock provider)
     let response = anthropic::serialize_response(
-        "msg-mock-1", "claude-3", Some("Hello from FustAPI! (mock)"), None, Some("end_turn"),
-    ).map_err(|e| ProtocolError::Internal(e.to_string()))?;
+        "msg-mock-1",
+        "claude-3",
+        Some("Hello from FustAPI! (mock)"),
+        None,
+        Some("end_turn"),
+    )
+    .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
-    Ok((StatusCode::OK, Json(serde_json::from_str::<serde_json::Value>(&response).unwrap())).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::from_str::<serde_json::Value>(&response).unwrap()),
+    )
+        .into_response())
 }
 
 /// Error type for protocol dispatch failures.
@@ -77,6 +98,10 @@ impl IntoResponse for ProtocolError {
             ProtocolError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
         };
 
-        (status, Json(serde_json::json!({ "error": { "message": error_msg } }))).into_response()
+        (
+            status,
+            Json(serde_json::json!({ "error": { "message": error_msg } })),
+        )
+            .into_response()
     }
 }

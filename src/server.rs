@@ -6,11 +6,11 @@
 use std::net::SocketAddr;
 
 use axum::{
+    Json, Router,
     extract::DefaultBodyLimit,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -65,7 +65,10 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
         .route("/ui/", axum::routing::get(web::ui_handler))
-        .route("/api/providers", axum::routing::get(web::providers_api_handler))
+        .route(
+            "/api/providers",
+            axum::routing::get(web::providers_api_handler),
+        )
         .route("/api/models", axum::routing::get(web::models_api_handler))
         // API routes
         .route("/health", get(health_handler))
@@ -106,10 +109,7 @@ async fn chat_completions_handler(
 }
 
 /// POST /v1/messages — Anthropic-compatible messages endpoint.
-async fn messages_handler(
-    headers: axum::http::HeaderMap,
-    body: String,
-) -> impl IntoResponse {
+async fn messages_handler(headers: axum::http::HeaderMap, body: String) -> impl IntoResponse {
     let protocol = protocol::detect_protocol("/v1/messages", &headers);
     match protocol::dispatch_request(protocol, body).await {
         Ok(response) => response,
@@ -120,17 +120,42 @@ async fn messages_handler(
 /// GET /v1/models — returns a list of available models.
 async fn models_handler() -> impl IntoResponse {
     let models = vec![
-        ModelInfo { id: "fustapi-mock".to_string(), object: "model", created: 1_000_000_000, owned_by: "fustapi" },
-        ModelInfo { id: "gpt-4".to_string(), object: "model", created: 1_000_000_000, owned_by: "openai" },
-        ModelInfo { id: "claude-3".to_string(), object: "model", created: 1_000_000_000, owned_by: "anthropic" },
+        ModelInfo {
+            id: "fustapi-mock".to_string(),
+            object: "model",
+            created: 1_000_000_000,
+            owned_by: "fustapi",
+        },
+        ModelInfo {
+            id: "gpt-4".to_string(),
+            object: "model",
+            created: 1_000_000_000,
+            owned_by: "openai",
+        },
+        ModelInfo {
+            id: "claude-3".to_string(),
+            object: "model",
+            created: 1_000_000_000,
+            owned_by: "anthropic",
+        },
     ];
 
-    (StatusCode::OK, Json(ModelListResponse { object: "list", data: models })).into_response()
+    (
+        StatusCode::OK,
+        Json(ModelListResponse {
+            object: "list",
+            data: models,
+        }),
+    )
+        .into_response()
 }
 
 /// Fallback handler for unknown routes — returns 404 with JSON error.
 async fn fallback_handler() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": { "message": "not found" } })))
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": { "message": "not found" } })),
+    )
 }
 
 /// Wait for SIGINT or SIGTERM signal to trigger graceful shutdown.
@@ -144,9 +169,9 @@ async fn shutdown_signal() {
     let terminate = async {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
             sigterm.recv().await;
         }
         #[cfg(not(unix))]

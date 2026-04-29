@@ -1,8 +1,9 @@
 //! omlx adapter — custom local inference protocol.
 
 use async_trait::async_trait;
+use futures::stream;
 
-use crate::provider::{Provider, UnifiedRequest, ProviderError};
+use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::LLMStream;
 
 /// omlx provider configuration.
@@ -49,7 +50,7 @@ impl Provider for OmlxProvider {
 
         // In production, we'd send the request and parse the omlx-specific response.
         // For now, return a placeholder stream.
-        Ok(Box::pin(tokio_stream::iter(vec![
+        let s: LLMStream = Box::new(stream::iter(vec![
             Ok(crate::streaming::LLMChunk {
                 content: Some("omlx response".to_string()),
                 tool_call: None,
@@ -60,12 +61,19 @@ impl Provider for OmlxProvider {
                 tool_call: None,
                 done: true,
             }),
-        ])))
+        ]));
+        Ok(s)
     }
 
-    fn supports_tools(&self) -> bool { true }
+    fn supports_tools(&self) -> bool {
+        true
+    }
 
-    fn supports_images(&self) -> bool { true }
+    fn supports_images(&self) -> bool {
+        true
+    }
 
-    fn name(&self) -> &str { "omlx" }
+    fn name(&self) -> &str {
+        "omlx"
+    }
 }

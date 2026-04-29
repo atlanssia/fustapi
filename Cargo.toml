@@ -38,6 +38,15 @@ thiserror = "2"
 # Cross-platform home directory resolution
 dirs = "6"
 
+# HTTP client for provider adapters
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# In-memory config with atomic swaps (control plane → data plane)
+arc-swap = "1.7"
+
+# SQLite for control plane storage (providers, routes, metrics)
+rusqlite = { version = "0.37", features = ["bundled"] }
+
 [profile.release]
 strip = true
 opt-level = "z"

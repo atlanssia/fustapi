@@ -1,10 +1,11 @@
 //! SGLang adapter — high-performance local streaming provider.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{Provider, UnifiedRequest, ProviderError};
-use crate::streaming::LLMStream;
+use crate::provider::{Provider, ProviderError, UnifiedRequest};
+use crate::streaming::{LLMStream, StreamError};
 
 /// SGLang provider configuration.
 #[derive(Debug, Clone)]
@@ -46,8 +47,12 @@ impl SglProvider {
     fn unified_to_sglang(&self, request: &UnifiedRequest) -> SglRequest {
         SglRequest {
             model: request.model.clone(),
-            messages: request.messages.iter().map(|m| self.message_to_sglang(m)).collect(),
-            stream: request.stream,
+            messages: request
+                .messages
+                .iter()
+                .map(|m| self.message_to_sglang(m))
+                .collect(),
+            stream: Some(request.stream),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
         }
@@ -72,7 +77,9 @@ impl Provider for SglProvider {
         let sglang_req = self.unified_to_sglang(&request);
         let url = format!("{}/v1/chat/completions", self.config.endpoint);
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Content-Type", "application/json")
             .json(&sglang_req)
             .send()
@@ -87,29 +94,48 @@ impl Provider for SglProvider {
         // Parse SSE stream from response body.
         // In production, we'd properly parse SSE format line by line.
         // For now, return a placeholder stream.
-        let stream = resp.bytes_stream().map(|result| {
-            match result {
-                Ok(_bytes) => Ok(crate::streaming::LLMChunk {
-                    content: Some("SGLang response".to_string()),
-                    tool_call: None,
-                    done: false,
-                }),
-                Err(e) => Err(ProviderError::Stream(e.to_string())),
-            }
+        let stream = resp.bytes_stream().map(|result| match result {
+            Ok(_bytes) => Ok(crate::streaming::LLMChunk {
+                content: Some("SGLang response".to_string()),
+                tool_call: None,
+                done: false,
+            }),
+            Err(e) => Err(StreamError::Provider(e.to_string())),
         });
 
-        Ok(Box::pin(stream))
+        let s: LLMStream = Box::new(stream);
+        Ok(s)
     }
 
-    fn supports_tools(&self) -> bool { true }
+    fn supports_tools(&self) -> bool {
+        true
+    }
 
-    fn supports_images(&self) -> bool { true }
+    fn supports_images(&self) -> bool {
+        true
+    }
 
-    fn name(&self) -> &str { "sglang" }
+    fn name(&self) -> &str {
+        "sglang"
+    }
 }
 
 // ── SGLang Request Types (for serialization) ─────────────────────────
 
-#[derive(Serialize)] struct SglRequest { model: String, messages: Vec<SglMessage>, #[serde(skip_serializing_if = "Option::is_none")] stream: Option<bool>, #[serde(skip_serializing_if = "Option::is_none")] temperature: Option<f32>, #[serde(skip_serializing_if = "Option::is_none")] max_tokens: Option<u32>, }
+#[derive(Serialize)]
+struct SglRequest {
+    model: String,
+    messages: Vec<SglMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
 
-#[derive(Serialize)] struct SglMessage { role: &'static str, content: String, }
+#[derive(Serialize)]
+struct SglMessage {
+    role: &'static str,
+    content: String,
+}

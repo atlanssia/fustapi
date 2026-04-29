@@ -3,11 +3,7 @@
 //! Serves a single-page application embedded at compile time via
 //! `include_bytes!`. No external dependencies or build tools required.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 
 use serde::Serialize;
 
@@ -21,10 +17,7 @@ pub fn ui_html() -> &'static [u8] {
 /// Returns the HTML page with appropriate content-type headers.
 pub async fn ui_handler() -> impl IntoResponse {
     (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/html; charset=utf-8",
-        )],
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
         ui_html(),
     )
 }
@@ -62,9 +55,11 @@ struct ModelsResponse {
 /// provider registry is added.
 pub async fn providers_api_handler() -> impl IntoResponse {
     // TODO: Wire to actual config providers when stateful registry is available.
-    let providers = vec![
-        ProviderInfo { name: "mock".to_string(), endpoint: "http://127.0.0.1:52415".to_string(), has_key: false },
-    ];
+    let providers = vec![ProviderInfo {
+        name: "mock".to_string(),
+        endpoint: "http://127.0.0.1:52415".to_string(),
+        has_key: false,
+    }];
 
     (StatusCode::OK, Json(ProvidersResponse { providers })).into_response()
 }
@@ -75,9 +70,18 @@ pub async fn providers_api_handler() -> impl IntoResponse {
 pub async fn models_api_handler() -> impl IntoResponse {
     // TODO: Wire to actual config router when stateful registry is available.
     let models = vec![
-        ModelInfo { id: "fustapi-mock".to_string(), providers: vec!["mock".to_string()] },
-        ModelInfo { id: "gpt-4".to_string(), providers: vec!["openai".to_string()] },
-        ModelInfo { id: "claude-3".to_string(), providers: vec!["anthropic".to_string()] },
+        ModelInfo {
+            id: "fustapi-mock".to_string(),
+            providers: vec!["mock".to_string()],
+        },
+        ModelInfo {
+            id: "gpt-4".to_string(),
+            providers: vec!["openai".to_string()],
+        },
+        ModelInfo {
+            id: "claude-3".to_string(),
+            providers: vec!["anthropic".to_string()],
+        },
     ];
 
     (StatusCode::OK, Json(ModelsResponse { models })).into_response()
@@ -93,12 +97,21 @@ mod tests {
         assert!(!html.is_empty(), "Embedded HTML should not be empty");
         let text = std::str::from_utf8(html).expect("HTML should be valid UTF-8");
         assert!(text.contains("<!DOCTYPE html>"), "HTML should have DOCTYPE");
-        assert!(text.contains("FustAPI"), "HTML should contain FustAPI branding");
+        assert!(
+            text.contains("FustAPI"),
+            "HTML should contain FustAPI branding"
+        );
     }
 
     #[test]
     fn providers_response_serializes() {
-        let resp = ProvidersResponse { providers: vec![ProviderInfo { name: "test".into(), endpoint: "http://localhost".into(), has_key: true }] };
+        let resp = ProvidersResponse {
+            providers: vec![ProviderInfo {
+                name: "test".into(),
+                endpoint: "http://localhost".into(),
+                has_key: true,
+            }],
+        };
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"name\":\"test\""));
         assert!(json.contains("\"has_key\":true"));
@@ -106,7 +119,12 @@ mod tests {
 
     #[test]
     fn models_response_serializes() {
-        let resp = ModelsResponse { models: vec![ModelInfo { id: "gpt-4".into(), providers: vec!["openai".into()] }] };
+        let resp = ModelsResponse {
+            models: vec![ModelInfo {
+                id: "gpt-4".into(),
+                providers: vec!["openai".into()],
+            }],
+        };
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"id\":\"gpt-4\""));
         assert!(json.contains("\"providers\":[\"openai\"]"));

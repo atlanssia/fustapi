@@ -65,8 +65,10 @@ impl std::error::Error for ParseError {
 #[derive(Deserialize)]
 struct ParsedToolCall {
     name: String,
-    #[serde(default)] arguments: Value,
-    #[serde(default)] input: Value,
+    #[serde(default)]
+    arguments: Value,
+    #[serde(default)]
+    input: Value,
 }
 
 /// Parse a tool call from LLM text output.
@@ -81,7 +83,8 @@ struct ParsedToolCall {
 pub fn parse_tool_call_from_text(text: &str) -> Result<Option<ToolCall>, ParseError> {
     // Try Anthropic-style <tool_use> tags first.
     if let Some(start) = text.find("<tool_use>")
-        && let Some(end) = text.rfind("</tool_use>") {
+        && let Some(end) = text.rfind("</tool_use>")
+    {
         let inner = &text[start + "<tool_use>".len()..end];
         return parse_json_tool_call(inner);
     }
@@ -107,7 +110,10 @@ fn parse_json_tool_call(json_str: &str) -> Result<Option<ToolCall>, ParseError> 
     } else {
         parsed.arguments
     };
-    Ok(Some(ToolCall { name: parsed.name, arguments }))
+    Ok(Some(ToolCall {
+        name: parsed.name,
+        arguments,
+    }))
 }
 
 /// Inject tool schemas into a system prompt for emulated tool calling.
@@ -129,7 +135,10 @@ pub fn inject_tool_schemas(system_prompt: &str, tools: &[ToolDefinition]) -> Str
     enhanced.push_str("\n\nYou have access to the following tools:\n\n");
     for tool in tools {
         enhanced.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-        enhanced.push_str(&format!("  Schema: {}\n\n", serde_json::to_string(&tool.parameters).unwrap_or_default()));
+        enhanced.push_str(&format!(
+            "  Schema: {}\n\n",
+            serde_json::to_string(&tool.parameters).unwrap_or_default()
+        ));
     }
     enhanced.push_str("When you need to use a tool, respond with a JSON object containing 'name' and 'arguments' fields.\n");
     enhanced
@@ -172,7 +181,10 @@ mod tests {
         let text = "{invalid json}";
         let result = parse_tool_call_from_text(text);
         assert!(result.is_err());
-        match result.unwrap_err() { ParseError::InvalidJson(_) => {}, other => panic!("expected InvalidJson, got {:?}", other) }
+        match result.unwrap_err() {
+            ParseError::InvalidJson(_) => {}
+            other => panic!("expected InvalidJson, got {:?}", other),
+        }
     }
 
     #[test]
@@ -188,7 +200,11 @@ mod tests {
     #[test]
     fn test_inject_single_tool() {
         let prompt = "You are a helpful assistant.";
-        let tools = vec![ToolDefinition { name: "get_weather".to_string(), description: "Get weather info".to_string(), parameters: serde_json::json!({"type":"object","properties":{}}) }];
+        let tools = vec![ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get weather info".to_string(),
+            parameters: serde_json::json!({"type":"object","properties":{}}),
+        }];
         let enhanced = inject_tool_schemas(prompt, &tools);
         assert!(enhanced.contains("get_weather"));
         assert!(enhanced.contains("Get weather info"));
@@ -199,8 +215,16 @@ mod tests {
     fn test_inject_multiple_tools() {
         let prompt = "You are helpful.";
         let tools = vec![
-            ToolDefinition { name: "get_weather".to_string(), description: "Get weather".to_string(), parameters: serde_json::json!({"type":"object"}) },
-            ToolDefinition { name: "search".to_string(), description: "Search web".to_string(), parameters: serde_json::json!({"type":"object"}) },
+            ToolDefinition {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            },
+            ToolDefinition {
+                name: "search".to_string(),
+                description: "Search web".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            },
         ];
         let enhanced = inject_tool_schemas(prompt, &tools);
         assert!(enhanced.contains("get_weather"));

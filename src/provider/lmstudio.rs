@@ -1,10 +1,11 @@
 //! LM Studio adapter — OpenAI-compatible local provider.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{Provider, UnifiedRequest, ProviderError};
-use crate::streaming::LLMStream;
+use crate::provider::{Provider, ProviderError, UnifiedRequest};
+use crate::streaming::{LLMStream, StreamError};
 
 /// LM Studio provider configuration.
 #[derive(Debug, Clone)]
@@ -46,13 +47,18 @@ impl LmStudioProvider {
     fn unified_to_openai(&self, request: &UnifiedRequest) -> LmStudioRequest {
         LmStudioRequest {
             model: request.model.clone(),
-            messages: request.messages.iter().map(|m| self.message_to_openai(m)).collect(),
-            stream: request.stream,
+            messages: request
+                .messages
+                .iter()
+                .map(|m| self.message_to_openai(m))
+                .collect(),
+            stream: Some(request.stream),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
-            tools: request.tools.as_ref().map(|tools| {
-                tools.iter().map(|t| self.tool_def_to_openai(t)).collect()
-            }),
+            tools: request
+                .tools
+                .as_ref()
+                .map(|tools| tools.iter().map(|t| self.tool_def_to_openai(t)).collect()),
         }
     }
 
@@ -86,7 +92,9 @@ impl Provider for LmStudioProvider {
         let openai_req = self.unified_to_openai(&request);
         let url = format!("{}/v1/chat/completions", self.config.endpoint);
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Content-Type", "application/json")
             .json(&openai_req)
             .send()
@@ -101,33 +109,64 @@ impl Provider for LmStudioProvider {
         // Parse SSE stream from response body.
         // In production, we'd properly parse SSE format line by line.
         // For now, return a placeholder stream that can be replaced with real parsing.
-        let stream = resp.bytes_stream().map(|result| {
-            match result {
-                Ok(_bytes) => Ok(crate::streaming::LLMChunk {
-                    content: Some("LM Studio response".to_string()),
-                    tool_call: None,
-                    done: false,
-                }),
-                Err(e) => Err(ProviderError::Stream(e.to_string())),
-            }
+        let stream = resp.bytes_stream().map(|result| match result {
+            Ok(_bytes) => Ok(crate::streaming::LLMChunk {
+                content: Some("LM Studio response".to_string()),
+                tool_call: None,
+                done: false,
+            }),
+            Err(e) => Err(StreamError::Provider(e.to_string())),
         });
 
-        Ok(Box::pin(stream))
+        let s: LLMStream = Box::new(stream);
+        Ok(s)
     }
 
-    fn supports_tools(&self) -> bool { true }
+    fn supports_tools(&self) -> bool {
+        true
+    }
 
-    fn supports_images(&self) -> bool { true }
+    fn supports_images(&self) -> bool {
+        true
+    }
 
-    fn name(&self) -> &str { "lmstudio" }
+    fn name(&self) -> &str {
+        "lmstudio"
+    }
 }
 
 // ── LM Studio Request Types (for serialization) ──────────────────────
 
-#[derive(Serialize)] struct LmStudioRequest { model: String, messages: Vec<LmStudioMessage>, #[serde(skip_serializing_if = "Option::is_none")] stream: Option<bool>, #[serde(skip_serializing_if = "Option::is_none")] temperature: Option<f32>, #[serde(skip_serializing_if = "Option::is_none")] max_tokens: Option<u32>, #[serde(skip_serializing_if = "Option::is_none")] tools: Option<Vec<LmStudioTool>>, }
+#[derive(Serialize)]
+struct LmStudioRequest {
+    model: String,
+    messages: Vec<LmStudioMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<LmStudioTool>>,
+}
 
-#[derive(Serialize)] struct LmStudioMessage { role: &'static str, content: Option<String>, }
+#[derive(Serialize)]
+struct LmStudioMessage {
+    role: &'static str,
+    content: Option<String>,
+}
 
-#[derive(Serialize)] struct LmStudioTool { #[serde(rename = "type")] r#type: String, function: LmStudioFunctionTool, }
+#[derive(Serialize)]
+struct LmStudioTool {
+    #[serde(rename = "type")]
+    r#type: String,
+    function: LmStudioFunctionTool,
+}
 
-#[derive(Serialize)] struct LmStudioFunctionTool { name: String, description: String, parameters: serde_json::Value, }
+#[derive(Serialize)]
+struct LmStudioFunctionTool {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}

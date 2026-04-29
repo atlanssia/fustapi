@@ -10,11 +10,11 @@
 //! - `streaming` — Streaming engine (LLMChunk, SSE)
 //! - `web` — Embedded Web UI (control plane)
 
-pub mod config;
-pub mod server;
-pub mod router;
-pub mod protocol;
 pub mod capability;
+pub mod config;
+pub mod protocol;
 pub mod provider;
+pub mod router;
+pub mod server;
 pub mod streaming;
 pub mod web;

@@ -74,7 +74,10 @@ async fn main() {
 }
 
 /// Load server configuration, merging CLI overrides with config file / defaults.
-fn load_server_config(cli_host: Option<String>, cli_port: Option<u16>) -> fustapi::server::ServerConfig {
+fn load_server_config(
+    cli_host: Option<String>,
+    cli_port: Option<u16>,
+) -> fustapi::server::ServerConfig {
     let config = fustapi::config::load().unwrap_or_else(|e| {
         eprintln!("Warning: Could not load config ({e}). Using defaults.");
         fustapi::config::default_config()
