@@ -80,7 +80,7 @@ fn load_server_config(
     cli_port: Option<u16>,
 ) -> fustapi::server::ServerConfig {
     #[allow(deprecated)]
-    let config = fustapi::config::load().unwrap_or_else(|e| {
+    let config = fustapi::config::load_merged(&fustapi::config::db_path()).unwrap_or_else(|e| {
         eprintln!("Warning: Could not load config ({e}). Using defaults.");
         fustapi::config::default_config()
     });
@@ -98,7 +98,7 @@ fn load_server_config(
 /// List configured providers from the config file.
 #[allow(deprecated)]
 fn providers_list() {
-    let config = match fustapi::config::load() {
+    let config = match fustapi::config::load_merged(&fustapi::config::db_path()) {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Warning: Could not load config ({e}).");
