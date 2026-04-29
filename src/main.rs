@@ -45,6 +45,7 @@ enum ConfigSubcommand {
     Init,
 }
 
+#[allow(deprecated)]
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -78,6 +79,7 @@ fn load_server_config(
     cli_host: Option<String>,
     cli_port: Option<u16>,
 ) -> fustapi::server::ServerConfig {
+    #[allow(deprecated)]
     let config = fustapi::config::load().unwrap_or_else(|e| {
         eprintln!("Warning: Could not load config ({e}). Using defaults.");
         fustapi::config::default_config()
@@ -94,6 +96,7 @@ fn load_server_config(
 }
 
 /// List configured providers from the config file.
+#[allow(deprecated)]
 fn providers_list() {
     let config = match fustapi::config::load() {
         Ok(cfg) => cfg,

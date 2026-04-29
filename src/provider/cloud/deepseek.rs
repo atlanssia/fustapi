@@ -3,13 +3,13 @@
 //! Fallback adapter for the DeepSeek API.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::LLMStream;
 use futures::stream;
 
 /// DeepSeek provider configuration.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeepSeekConfig {
     pub endpoint: String,
@@ -26,6 +26,7 @@ impl Default for DeepSeekConfig {
 }
 
 /// DeepSeek provider implementation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeepSeekProvider {
     config: DeepSeekConfig,

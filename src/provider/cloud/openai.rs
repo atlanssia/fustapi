@@ -9,6 +9,7 @@ use crate::streaming::LLMStream;
 use futures::stream;
 
 /// OpenAI provider configuration.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
     pub endpoint: String,
@@ -25,6 +26,7 @@ impl Default for OpenAIConfig {
 }
 
 /// OpenAI provider implementation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OpenAIProvider {
     config: OpenAIConfig,

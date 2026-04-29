@@ -86,7 +86,7 @@ pub fn upsert_provider(conn: &Transaction, p: &ProviderRecord) -> Result<()> {
 /// Upsert a single route record.
 pub fn upsert_route(conn: &Transaction, r: &RouteRecord) -> Result<()> {
     let j = serde_json::to_string(&r.provider_ids)
-        .map_err(|e| rusqlite::Error::ExecuteReturnedResults)?;
+        .map_err(|_e| rusqlite::Error::ExecuteReturnedResults)?;
     conn.execute(
         "INSERT OR REPLACE INTO routes (model, provider_ids) VALUES (?1, ?2)",
         params![&r.model, j],

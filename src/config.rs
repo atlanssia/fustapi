@@ -296,7 +296,7 @@ pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError>
         };
         upsert_route(&tx, &rec).map_err(ConfigError::DbError)?;
     }
-    tx.commit().map_err(|e| ConfigError::DbError(e))?;
+    tx.commit().map_err(ConfigError::DbError)?;
     info!(
         "Saved {} providers and {} routes to SQLite",
         config.providers.len(),
@@ -311,6 +311,7 @@ pub fn load() -> Result<AppConfig, ConfigError> {
     load_toml_config()
 }
 
+#[allow(deprecated)]
 #[deprecated(since = "0.2.0", note = "Use SQLite seed_if_empty() instead")]
 pub fn save_default(path: &Path) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
@@ -328,6 +329,7 @@ pub fn init_config() -> Result<(), ConfigError> {
         println!("Config file already exists at {:?}", path);
         return Ok(());
     }
+    #[allow(deprecated)]
     save_default(&path).map_err(ConfigError::IoError)?;
     println!("Config file created at {:?}", path);
     Ok(())

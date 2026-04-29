@@ -2,12 +2,13 @@
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::{LLMStream, StreamError};
 
 /// SGLang provider configuration.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SglConfig {
     /// The base URL of the SGLang server.
@@ -23,6 +24,7 @@ impl Default for SglConfig {
 }
 
 /// SGLang provider implementation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SglProvider {
     config: SglConfig,

@@ -7,6 +7,7 @@ use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::LLMStream;
 
 /// omlx provider configuration.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OmlxConfig {
     /// The base URL of the omlx server.
@@ -22,6 +23,7 @@ impl Default for OmlxConfig {
 }
 
 /// omlx provider implementation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OmlxProvider {
     config: OmlxConfig,
@@ -46,7 +48,7 @@ impl OmlxProvider {
 #[async_trait]
 impl Provider for OmlxProvider {
     async fn chat_stream(&self, _request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
-        let url = format!("{}/chat", self.config.endpoint);
+        let _url = format!("{}/chat", self.config.endpoint);
 
         // In production, we'd send the request and parse the omlx-specific response.
         // For now, return a placeholder stream.

@@ -2,12 +2,13 @@
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::{LLMStream, StreamError};
 
 /// LM Studio provider configuration.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LmStudioConfig {
     /// The base URL of the LM Studio server.
@@ -23,6 +24,7 @@ impl Default for LmStudioConfig {
 }
 
 /// LM Studio provider implementation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LmStudioProvider {
     config: LmStudioConfig,
