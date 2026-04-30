@@ -1,7 +1,7 @@
 # FustAPI User Manual
 
-> **Version:** 1.0.0
-> **Last Updated:** 2026-04-30
+> **Version:** 1.0.2
+> **Last Updated:** 2026-05-01
 
 ---
 
@@ -141,10 +141,10 @@ Configuration is now managed entirely through the **CLI** or the **Web UI**.
 fustapi providers list
 
 # Add a local provider (omlx)
-fustapi providers add my-omlx --type omlx --endpoint http://localhost:11434
+fustapi providers add my-omlx --type omlx --endpoint http://localhost:11434/v1
 
 # Add a cloud provider (DeepSeek)
-fustapi providers add ds --type deepseek --endpoint https://api.deepseek.com --api-key sk-...
+fustapi providers add ds --type deepseek --endpoint https://api.deepseek.com/v1 --api-key sk-...
 ```
 
 ### Managing Routes via CLI
@@ -309,13 +309,13 @@ Manage model routing.
 ## Provider Setup
 
 ### Local Providers
-- **omlx**: Default `http://localhost:11434`
-- **LM Studio**: Default `http://localhost:1234`
-- **SGLang**: Default `http://localhost:30000`
+- **omlx**: Default `http://localhost:11434/v1`
+- **LM Studio**: Default `http://localhost:1234/v1`
+- **SGLang**: Default `http://localhost:30000/v1`
 
 ### Cloud Providers
-- **DeepSeek**: `https://api.deepseek.com` (Requires API Key)
-- **OpenAI**: `https://api.openai.com` (Requires API Key)
+- **DeepSeek**: `https://api.deepseek.com/v1` (Requires API Key)
+- **OpenAI**: `https://api.openai.com/v1` (Requires API Key)
 
 ---
 
@@ -408,4 +408,4 @@ The release profile includes:
 
 ---
 
-*This manual covers FustAPI v1.0.0 features.*
+*This manual covers FustAPI v1.0.2 features.*

@@ -58,12 +58,15 @@ enum ProvidersCommand {
         /// Provider type (omlx, lmstudio, sglang, openai, deepseek).
         #[arg(long, rename_all = "lower")]
         r#type: String,
-        /// Provider endpoint URL.
+        /// Provider endpoint URL (include version path, e.g. /v1).
         #[arg(long)]
         endpoint: String,
         /// API key (for cloud providers).
         #[arg(long)]
         api_key: Option<String>,
+        /// Optional upstream model name override.
+        #[arg(long)]
+        upstream_model: Option<String>,
     },
 }
 
@@ -176,6 +179,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
             r#type,
             endpoint,
             api_key,
+            upstream_model,
         } => {
             let mut config = fustapi::config::load_from_db(&db_path)
                 .unwrap_or_else(|_| fustapi::config::default_config());
@@ -191,7 +195,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                 fustapi::config::ProviderConfig {
                     endpoint,
                     api_key,
-                    model: None,
+                    model: upstream_model,
                     r#type,
                 },
             );

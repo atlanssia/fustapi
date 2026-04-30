@@ -47,7 +47,7 @@ FustAPI uses a **configuration-first, database-backed** architecture. Runtime se
 fustapi providers list
 
 # Add a local provider (omlx example)
-fustapi providers add my-omlx --type omlx --endpoint http://localhost:11434
+fustapi providers add my-omlx --type omlx --endpoint http://localhost:11434/v1
 
 # Add a model route
 fustapi routes add gpt-4 --providers my-omlx
@@ -115,11 +115,11 @@ Client Request
 
 | Provider   | Type   | Default Endpoint              |
 |------------|--------|-------------------------------|
-| omlx       | Local  | `http://localhost:11434`      |
-| LM Studio  | Local  | `http://localhost:1234`       |
-| SGLang     | Local  | `http://localhost:30000`      |
-| DeepSeek   | Cloud  | `https://api.deepseek.com`    |
-| OpenAI     | Cloud  | `https://api.openai.com`      |
+| omlx       | Local  | `http://localhost:11434/v1`   |
+| LM Studio  | Local  | `http://localhost:1234/v1`    |
+| SGLang     | Local  | `http://localhost:30000/v1`   |
+| DeepSeek   | Cloud  | `https://api.deepseek.com/v1` |
+| OpenAI     | Cloud  | `https://api.openai.com/v1`   |
 
 ## 📁 Persistence & Bootstrap
 
