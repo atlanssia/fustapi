@@ -1,9 +1,10 @@
 //! HTTP server setup and routing.
 //!
 //! Initializes the axum HTTP server, configures routes, and handles
-//! graceful shutdown.
+//! graceful shutdown. Single port serves Web UI + LLM API + Control Plane.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -28,6 +29,8 @@ pub struct ServerConfig {
     pub addr: SocketAddr,
     /// The router instance for provider dispatch.
     pub router: Arc<RealRouter>,
+    /// Path to the SQLite database.
+    pub db_path: PathBuf,
 }
 
 impl Default for ServerConfig {
@@ -35,6 +38,7 @@ impl Default for ServerConfig {
         Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
             router: Arc::new(RealRouter::from_config(&crate::config::default_config())),
+            db_path: crate::config::BootstrapConfig::default().db_path(),
         }
     }
 }
@@ -67,6 +71,7 @@ struct ModelListResponse {
 /// graceful shutdown on SIGINT/SIGTERM.
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(config.router.clone()));
+    let db_path: Arc<PathBuf> = Arc::new(config.db_path.clone());
     let router2 = router_store.clone();
     let router3 = router_store.clone();
     let router_for_v1_models = router_store.clone();
@@ -103,6 +108,7 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         )
         .fallback(fallback_handler)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB body limit
+        .layer(axum::extract::Extension(db_path))
         .layer(axum::extract::Extension(router_store));
 
     let addr = config.addr;

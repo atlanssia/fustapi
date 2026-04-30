@@ -15,6 +15,7 @@
 use crate::router::{RealRouter, RouterStore};
 use axum::{Json, extract::Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// HTML content embedded at compile time.
@@ -86,16 +87,17 @@ pub struct MessageResponse {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn load_config() -> crate::config::AppConfig {
-    crate::config::load_merged(&crate::config::db_path())
+fn load_config(db_path: &std::path::Path) -> crate::config::AppConfig {
+    crate::config::load_from_db(db_path)
         .unwrap_or_else(|_| crate::config::default_config())
 }
 
 fn save_and_rebuild(
     config: &crate::config::AppConfig,
     router_store: &RouterStore,
+    db_path: &std::path::Path,
 ) -> Result<(), (StatusCode, String)> {
-    crate::config::save_to_db(config, &crate::config::db_path()).map_err(|e| {
+    crate::config::save_to_db(config, db_path).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to save config: {e}"),
@@ -167,8 +169,10 @@ fn provider_info_from_config(
 // ── GET Handlers ────────────────────────────────────────────────────
 
 /// GET /api/providers — returns provider list with real config data.
-pub async fn providers_api_handler() -> impl IntoResponse {
-    let config = load_config();
+pub async fn providers_api_handler(
+    Extension(db_path): Extension<Arc<PathBuf>>,
+) -> impl IntoResponse {
+    let config = load_config(&db_path);
     let providers = config
         .providers
         .keys()
@@ -183,8 +187,10 @@ pub async fn providers_api_handler() -> impl IntoResponse {
 }
 
 /// GET /api/models — returns model routing with real provider data.
-pub async fn models_api_handler() -> impl IntoResponse {
-    let config = load_config();
+pub async fn models_api_handler(
+    Extension(db_path): Extension<Arc<PathBuf>>,
+) -> impl IntoResponse {
+    let config = load_config(&db_path);
     let models = config
         .router
         .keys()
@@ -203,9 +209,10 @@ pub async fn models_api_handler() -> impl IntoResponse {
 /// POST /api/providers — create a new provider. Persists to DB.
 pub async fn create_provider(
     Extension(router_store): Extension<RouterStore>,
+    Extension(db_path): Extension<Arc<PathBuf>>,
     Json(form): Json<ProviderForm>,
 ) -> impl IntoResponse {
-    let mut config = load_config();
+    let mut config = load_config(&db_path);
     let name = form.name.clone();
 
     if let Err(message) = validate_provider_form(&form) {
@@ -232,7 +239,7 @@ pub async fn create_provider(
         .providers
         .insert(name.clone(), provider_config_from_form(form, None));
 
-    if let Err(e) = save_and_rebuild(&config, &router_store) {
+    if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
     }
 
@@ -248,9 +255,10 @@ pub async fn create_provider(
 /// POST /api/routes — create/update a model route. Persists to DB.
 pub async fn create_route(
     Extension(router_store): Extension<RouterStore>,
+    Extension(db_path): Extension<Arc<PathBuf>>,
     Json(form): Json<RouteForm>,
 ) -> impl IntoResponse {
-    let mut config = load_config();
+    let mut config = load_config(&db_path);
 
     if let Err(message) = validate_route_form(&form) {
         return (
@@ -282,7 +290,7 @@ pub async fn create_route(
     let existed = config.router.contains_key(&form.model);
     config.router.insert(form.model.clone(), form.providers);
 
-    if let Err(e) = save_and_rebuild(&config, &router_store) {
+    if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
     }
 
@@ -305,10 +313,11 @@ pub async fn create_route(
 /// PUT /api/providers/:id — update an existing provider. Persists to DB.
 pub async fn update_provider(
     Extension(router_store): Extension<RouterStore>,
+    Extension(db_path): Extension<Arc<PathBuf>>,
     Path(id): Path<String>,
     Json(form): Json<ProviderForm>,
 ) -> impl IntoResponse {
-    let mut config = load_config();
+    let mut config = load_config(&db_path);
 
     if let Err(message) = validate_provider_form(&form) {
         return (
@@ -355,7 +364,7 @@ pub async fn update_provider(
 
     config.providers.insert(name.clone(), provider_config);
 
-    if let Err(e) = save_and_rebuild(&config, &router_store) {
+    if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
     }
 
@@ -373,9 +382,10 @@ pub async fn update_provider(
 /// DELETE /api/providers/:id — delete a provider and clean up routes referencing it. Persists to DB.
 pub async fn delete_provider(
     Extension(router_store): Extension<RouterStore>,
+    Extension(db_path): Extension<Arc<PathBuf>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let mut config = load_config();
+    let mut config = load_config(&db_path);
 
     if !config.providers.contains_key(&id) {
         return (
@@ -395,7 +405,7 @@ pub async fn delete_provider(
         !providers.is_empty()
     });
 
-    if let Err(e) = save_and_rebuild(&config, &router_store) {
+    if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
     }
 
@@ -411,9 +421,10 @@ pub async fn delete_provider(
 /// DELETE /api/routes/:model — delete a model route. Persists to DB.
 pub async fn delete_route(
     Extension(router_store): Extension<RouterStore>,
+    Extension(db_path): Extension<Arc<PathBuf>>,
     Path(model): Path<String>,
 ) -> impl IntoResponse {
-    let mut config = load_config();
+    let mut config = load_config(&db_path);
 
     if config.router.remove(&model).is_none() {
         return (
@@ -425,7 +436,7 @@ pub async fn delete_route(
             .into_response();
     }
 
-    if let Err(e) = save_and_rebuild(&config, &router_store) {
+    if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
     }
 
