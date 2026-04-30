@@ -127,7 +127,7 @@ impl OpenAIProvider {
             }
 
             if let Some(tool_calls) = &choice.message.tool_calls {
-                for (_i, tc) in tool_calls.iter().enumerate() {
+                for tc in tool_calls.iter() {
                     chunks.push(LLMChunk {
                         content: None,
                         tool_call: Some(crate::capability::ToolCall {
@@ -248,70 +248,61 @@ pub fn parse_openai_sse_stream(
                                 (stream, buffer, tool_name, tool_args),
                             ));
                         }
-                        if !data.is_empty() {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(choices) = v.get("choices") {
-                                    if let Some(choice) = choices.get(0) {
-                                        if let Some(delta) = choice.get("delta") {
-                                            let content_str = delta
-                                                .get("content")
-                                                .or_else(|| delta.get("reasoning_content"))
-                                                .and_then(|c| c.as_str());
-                                            if let Some(content) = content_str {
-                                                if !content.is_empty() {
-                                                    return Some((
-                                                        Ok(crate::streaming::LLMChunk {
-                                                            content: Some(content.to_string()),
-                                                            tool_call: None,
-                                                            done: false,
-                                                        }),
-                                                        (stream, buffer, tool_name, tool_args),
-                                                    ));
-                                                }
-                                            }
-                                            if let Some(tool_calls) = delta.get("tool_calls") {
-                                                if let Some(tc) = tool_calls.get(0) {
-                                                    if let Some(func) = tc.get("function") {
-                                                        let new_name = func
-                                                            .get("name")
-                                                            .and_then(|n| n.as_str());
-                                                        let new_args = func
-                                                            .get("arguments")
-                                                            .and_then(|a| a.as_str())
-                                                            .unwrap_or("");
+                        if !data.is_empty()
+                            && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+                            && let Some(choices) = v.get("choices")
+                            && let Some(choice) = choices.get(0)
+                            && let Some(delta) = choice.get("delta")
+                        {
+                            let content_str = delta
+                                .get("content")
+                                .or_else(|| delta.get("reasoning_content"))
+                                .and_then(|c| c.as_str());
+                            if let Some(content) = content_str
+                                && !content.is_empty()
+                            {
+                                return Some((
+                                    Ok(crate::streaming::LLMChunk {
+                                        content: Some(content.to_string()),
+                                        tool_call: None,
+                                        done: false,
+                                    }),
+                                    (stream, buffer, tool_name, tool_args),
+                                ));
+                            }
+                            if let Some(tool_calls) = delta.get("tool_calls")
+                                && let Some(tc) = tool_calls.get(0)
+                                && let Some(func) = tc.get("function")
+                            {
+                                let new_name = func.get("name").and_then(|n| n.as_str());
+                                let new_args =
+                                    func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
 
-                                                        if let Some(name) = new_name {
-                                                            let mut flush_tc = None;
-                                                            if let Some(old_name) = tool_name.take()
-                                                            {
-                                                                let parsed_args =
-                                                                    serde_json::from_str(
-                                                                        &tool_args,
-                                                                    )
-                                                                    .unwrap_or(
-                                                                        serde_json::json!({}),
-                                                                    );
-                                                                flush_tc = Some(
-                                                                    crate::capability::ToolCall {
-                                                                        name: old_name,
-                                                                        arguments: parsed_args,
-                                                                    },
-                                                                );
-                                                            }
-                                                            tool_name = Some(name.to_string());
-                                                            tool_args = new_args.to_string();
-
-                                                            if flush_tc.is_some() {
-                                                                return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: flush_tc, done: false }), (stream, buffer, tool_name, tool_args)));
-                                                            }
-                                                        } else {
-                                                            tool_args.push_str(new_args);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                if let Some(name) = new_name {
+                                    let mut flush_tc = None;
+                                    if let Some(old_name) = tool_name.take() {
+                                        let parsed_args = serde_json::from_str(&tool_args)
+                                            .unwrap_or(serde_json::json!({}));
+                                        flush_tc = Some(crate::capability::ToolCall {
+                                            name: old_name,
+                                            arguments: parsed_args,
+                                        });
                                     }
+                                    tool_name = Some(name.to_string());
+                                    tool_args = new_args.to_string();
+
+                                    if flush_tc.is_some() {
+                                        return Some((
+                                            Ok(crate::streaming::LLMChunk {
+                                                content: None,
+                                                tool_call: flush_tc,
+                                                done: false,
+                                            }),
+                                            (stream, buffer, tool_name, tool_args),
+                                        ));
+                                    }
+                                } else {
+                                    tool_args.push_str(new_args);
                                 }
                             }
                         }

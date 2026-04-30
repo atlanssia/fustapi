@@ -32,7 +32,6 @@ open http://localhost:8080/ui
 ```bash
 make build
 sudo make install          # installs to /usr/local/bin/fustapi
-fustapi config init       # create ~/.fustapi/config.toml
 fustapi serve             # start the gateway
 ```
 
@@ -41,7 +40,7 @@ fustapi serve             # start the gateway
 ```powershell
 cargo build --release
 copy target\release\fustapi.exe "C:\Program Files\fustapi\"
-# Config lives at %APPDATA%\fustapi\config.toml
+# Data lives at %APPDATA%\fustapi\fustapi.db
 ```
 
 ---
@@ -86,9 +85,6 @@ WantedBy=multi-user.target
 ### 3. Enable and start
 
 ```bash
-sudo -u fustapi fustapi config init
-sudo chmod 600 /home/fustapi/.fustapi/config.toml
-
 sudo systemctl daemon-reload
 sudo systemctl enable --now fustapi
 sudo journalctl -u fustapi -f
@@ -188,11 +184,11 @@ Caddy auto-provisions TLS via Let's Encrypt.
 
 ## Production Checklist
 
-- [ ] Config file permissions: `chmod 600 ~/.fustapi/config.toml`
-- [ ] API keys set for cloud providers (if used as fallback)
+- [ ] Data directory permissions: `chmod 700 ~/.fustapi`
+- [ ] API keys set for cloud providers via Web UI or CLI
 - [ ] `RUST_LOG=info` (not `debug` or `trace`)
 - [ ] Reverse proxy configured with TLS termination
 - [ ] `proxy_buffering off` in reverse proxy (required for streaming)
 - [ ] Service auto-restart enabled (systemd `Restart=always` or Docker `restart: unless-stopped`)
 - [ ] Health check monitored: `curl http://localhost:8080/health` → `{"status":"ok"}`
-- [ ] Backup strategy for `~/.fustapi/fustapi.db` and `config.toml`
+- [ ] Backup strategy for `~/.fustapi/fustapi.db`

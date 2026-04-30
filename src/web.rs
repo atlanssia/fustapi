@@ -176,7 +176,6 @@ pub async fn providers_api_handler(
         .providers
         .keys()
         .cloned()
-        .into_iter()
         .map(|name| {
             let cfg = config.providers.get(&name);
             provider_info_from_config(name, cfg)
@@ -192,7 +191,6 @@ pub async fn models_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) -> 
         .router
         .keys()
         .cloned()
-        .into_iter()
         .map(|id| {
             let providers = config.router.get(&id).cloned().unwrap_or_default();
             ModelInfo { id, providers }

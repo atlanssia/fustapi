@@ -1,8 +1,8 @@
 # FustAPI v1 Design Specification
 
 > **Version:** 1.0
-> **Date:** 2026-04-28
-> **Status:** Draft
+> **Date:** 2026-04-30
+> **Status:** Stable
 
 ---
 
@@ -61,8 +61,9 @@ Local inference providers are the primary backends. Cloud providers serve as fal
 - Distributed as a single Rust binary
 - Web UI is embedded at compile time
 - No external service dependencies (no Redis, no PostgreSQL)
-- SQLite is the only acceptable embedded database
-- Configuration via file (`~/.fustapi/config.toml`)
+- SQLite is the core embedded database for runtime configuration
+- Bootstrap parameters via CLI flags or environment variables
+- No legacy configuration files (`config.toml` removed)
 
 ---
 
@@ -295,7 +296,7 @@ Maps user-facing model names to backend provider(s).
 - Models are matched by exact name
 - Provider lists are ordered by priority (first = preferred)
 - If the primary provider fails, fall through to the next in the list
-- Router configuration lives in `~/.fustapi/config.toml`
+- Router configuration is persisted in the SQLite database
 
 ---
 
@@ -344,44 +345,25 @@ Maps user-facing model names to backend provider(s).
 
 ```bash
 fustapi serve              # Start the gateway server
-fustapi config init        # Initialize default configuration
 fustapi providers list     # List configured providers
+fustapi providers add      # Add a provider
+fustapi routes list        # List model routes
+fustapi routes add         # Add a model route
 ```
 
-### 11.2 Configuration Path
+### 11.2 Persistence Path
 
 ```bash
-~/.fustapi/config.toml
+~/.fustapi/fustapi.db
 ```
 
-### 11.3 Configuration Structure (v1)
+Bootstrap parameters can be set via CLI flags or environment variables:
 
-```toml
-[server]
-host = "127.0.0.1"
-port = 8080
-
-[router]
-"gpt-4" = ["omlx"]
-"claude-3" = ["sglang"]
-
-[providers.omlx]
-endpoint = "http://localhost:11434"
-
-[providers.lmstudio]
-endpoint = "http://localhost:1234"
-
-[providers.sglang]
-endpoint = "http://localhost:30000"
-
-[providers.deepseek]
-api_key = "sk-..."
-endpoint = "https://api.deepseek.com"
-
-[providers.openai]
-api_key = "sk-..."
-endpoint = "https://api.openai.com"
-```
+| Parameter | CLI Flag | Env Var | Default |
+|-----------|----------|---------|---------|
+| Host | `--host` | `FUSTAPI_HOST` | `127.0.0.1` |
+| Port | `--port` | `FUSTAPI_PORT` | `8080` |
+| Data Dir | `--data-dir` | `FUSTAPI_DATA_DIR` | `~/.fustapi` |
 
 ---
 
@@ -418,8 +400,8 @@ endpoint = "https://api.openai.com"
 | SSE             | tokio-stream / custom        |
 | CLI             | clap                         |
 | Web UI          | React + Tailwind (embedded)  |
-| Config          | TOML (toml crate)            |
-| Database (opt)  | SQLite (rusqlite)            |
+| Config          | CLI + Environment Variables  |
+| Database        | SQLite (rusqlite)            |
 
 ---
 
@@ -479,8 +461,9 @@ fustapi/
 - ✅ Anthropic API compatibility
 - ✅ AI IDE compatibility (Claude Code, OpenCode)
 - ✅ Basic Web UI (provider management, model mapping)
-- ✅ CLI (`serve`, `config init`, `providers list`)
+- ✅ CLI (`serve`, `providers`, `routes`)
 - ✅ Single binary distribution with embedded Web UI
+- ✅ CI/CD with multi-platform releases
 
 ### Out of Scope (v1)
 

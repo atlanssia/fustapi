@@ -2,7 +2,7 @@
 
 **Local-first, high-performance LLM API aggregation gateway**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-brightred.svg)](https://www.rust-lang.org)
 
 FustAPI is a single-binary gateway that provides a unified entry point for AI IDEs and applications to interact with multiple LLM backends through **OpenAI-compatible** and **Anthropic-compatible** APIs.
@@ -21,39 +21,45 @@ FustAPI is a single-binary gateway that provides a unified entry point for AI ID
 
 ### Install
 
+FustAPI provides pre-compiled binaries for major platforms through [GitHub Releases](https://github.com/atlanssia/fustapi/releases).
+
 ```bash
-# Clone and build
+# Or build from source
 git clone https://github.com/atlanssia/fustapi.git
 cd fustapi
 make build
 
-# Or install system-wide
+# Install system-wide
 sudo make install
 ```
 
 ### Configure
 
-```bash
-# Initialize default configuration
-fustapi config init
+FustAPI uses a **configuration-first, database-backed** architecture. Runtime settings (providers, routes) are managed via the Web UI or CLI and stored in SQLite.
 
-# Edit the config file
-$EDITOR ~/.fustapi/config.toml
+```bash
+# List configured providers
+fustapi providers list
+
+# Add a local provider (omlx example)
+fustapi providers add my-omlx --type omlx --endpoint http://localhost:11434
+
+# Add a model route
+fustapi routes add gpt-4 --providers my-omlx
 ```
 
 ### Run
 
 ```bash
-# Start the server
+# Start the server (defaults to 127.0.0.1:8080)
 fustapi serve
 
-# Health check
-curl http://localhost:8080/health
-# → {"status":"ok"}
-
-# Open the Web UI
-open http://localhost:8080/ui
+# Optional: customize address and data directory
+fustapi serve --host 0.0.0.0 --port 9000 --data-dir /path/to/data
 ```
+
+- **Web UI**: Open `http://localhost:8080/ui` to manage providers and routes.
+- **Health Check**: `curl http://localhost:8080/health` → `{"status":"ok"}`
 
 ### Test
 
@@ -97,16 +103,17 @@ Client Request
 | DeepSeek   | Cloud  | `https://api.deepseek.com`    |
 | OpenAI     | Cloud  | `https://api.openai.com`      |
 
-## 📁 Configuration
+## 📁 Persistence & Bootstrap
 
-Configuration is stored in a platform-specific directory:
+FustAPI stores runtime data in a SQLite database. Bootstrap parameters can be set via CLI flags or environment variables.
 
-| Platform | Path |
-|----------|------|
-| macOS / Linux | `~/.fustapi/config.toml` |
-| Windows | `%APPDATA%\fustapi\config.toml` |
+| Parameter | CLI Flag | Env Var | Default |
+|-----------|----------|---------|---------|
+| Host | `--host` | `FUSTAPI_HOST` | `127.0.0.1` |
+| Port | `--port` | `FUSTAPI_PORT` | `8080` |
+| Data Dir | `--data-dir` | `FUSTAPI_DATA_DIR` | `~/.fustapi` |
 
-See [config.example.toml](config.example.toml) for a complete example.
+**Note**: `config.toml` is no longer used. All persistent state resides in `{data-dir}/fustapi.db`.
 
 ## 🔧 Development
 
@@ -135,7 +142,7 @@ make clean
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE) for details.
+Apache-2.0 — see [LICENSE](LICENSE) for details.
 
 ## 🤝 Contributing
 

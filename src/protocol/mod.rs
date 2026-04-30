@@ -102,22 +102,22 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str) -> String {
     let ts = current_timestamp();
     let mut lines = Vec::new();
 
-    if let Some(ref content) = chunk.content {
-        if !content.is_empty() {
-            let escaped = escape_json(content);
-            let data = serde_json::json!({
-                "id": "chatcmpl-gw",
-                "object": "chat.completion.chunk",
-                "created": ts,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": escaped},
-                    "finish_reason": null
-                }]
-            });
-            lines.push(format!("data: {}", data));
-        }
+    if let Some(ref content) = chunk.content
+        && !content.is_empty()
+    {
+        let escaped = escape_json(content);
+        let data = serde_json::json!({
+            "id": "chatcmpl-gw",
+            "object": "chat.completion.chunk",
+            "created": ts,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"content": escaped},
+                "finish_reason": null
+            }]
+        });
+        lines.push(format!("data: {}", data));
     }
 
     if chunk.done {

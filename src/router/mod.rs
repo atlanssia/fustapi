@@ -100,22 +100,25 @@ impl RealRouter {
     }
 
     /// Get the provider instance for a model name.
-    fn get_provider_for_model(&self, model: &str) -> Option<&Box<dyn Provider>> {
-        self.routes.get(model).and_then(|provider_names| {
-            provider_names
-                .first()
-                .and_then(|name| self.providers.get(name))
-        })
+    fn get_provider_for_model(&self, model: &str) -> Option<&dyn Provider> {
+        self.routes
+            .get(model)
+            .and_then(|provider_names| {
+                provider_names
+                    .first()
+                    .and_then(|name| self.providers.get(name))
+            })
+            .map(|v| &**v)
     }
 }
 
 #[async_trait]
 impl Router for RealRouter {
     fn resolve(&self, model: &str) -> Result<String, RouterError> {
-        if let Some(provider_names) = self.routes.get(model) {
-            if let Some(first) = provider_names.first() {
-                return Ok(first.clone());
-            }
+        if let Some(provider_names) = self.routes.get(model)
+            && let Some(first) = provider_names.first()
+        {
+            return Ok(first.clone());
         }
         Err(RouterError::ModelNotFound(model.to_string()))
     }
