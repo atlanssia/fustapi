@@ -29,6 +29,9 @@ pub struct ProviderConfig {
     pub endpoint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Optional upstream model name override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Provider type (e.g., "openai", "omlx", "lmstudio", "sglang", "deepseek").
     #[serde(default = "default_type")]
     pub r#type: String,
@@ -128,6 +131,7 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
             ProviderConfig {
                 endpoint: rec.base_url.clone(),
                 api_key: rec.api_key.clone(),
+                model: rec.upstream_model.clone(),
                 r#type: rec.r#type.clone(),
             },
         );
@@ -153,28 +157,33 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
         "omlx" => Box::new(crate::provider::omlx::OmlxProvider::new(
             crate::provider::omlx::OmlxConfig {
                 endpoint: cfg.endpoint.clone(),
+                model: cfg.model.clone(),
             },
         )),
         "lmstudio" => Box::new(crate::provider::lmstudio::LmStudioProvider::new(
             crate::provider::lmstudio::LmStudioConfig {
                 endpoint: cfg.endpoint.clone(),
+                model: cfg.model.clone(),
             },
         )),
         "sglang" => Box::new(crate::provider::sglang::SglProvider::new(
             crate::provider::sglang::SglConfig {
                 endpoint: cfg.endpoint.clone(),
+                model: cfg.model.clone(),
             },
         )),
         "deepseek" => Box::new(crate::provider::cloud::deepseek::DeepSeekProvider::new(
             crate::provider::cloud::deepseek::DeepSeekConfig {
                 endpoint: cfg.endpoint.clone(),
                 api_key: cfg.api_key.clone().unwrap_or_default(),
+                model: cfg.model.clone(),
             },
         )),
         "openai" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: cfg.endpoint.clone(),
                 api_key: cfg.api_key.clone().unwrap_or_default(),
+                model: cfg.model.clone(),
             },
         )),
         _ => Box::new(crate::provider::omlx::OmlxProvider::default_provider()),
@@ -201,6 +210,7 @@ pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError>
             r#type: cfg.r#type.clone(),
             base_url: cfg.endpoint.clone(),
             api_key: cfg.api_key.clone(),
+            upstream_model: cfg.model.clone(),
             is_local: true,
         };
         upsert_provider(&tx, &rec).map_err(ConfigError::DbError)?;
@@ -288,6 +298,7 @@ mod tests {
             ProviderConfig {
                 endpoint: "http://old".into(),
                 api_key: None,
+                model: None,
                 r#type: "omlx".into(),
             },
         );
@@ -302,6 +313,7 @@ mod tests {
             ProviderConfig {
                 endpoint: "http://new".into(),
                 api_key: None,
+                model: None,
                 r#type: "openai".into(),
             },
         );

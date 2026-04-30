@@ -40,6 +40,8 @@ pub struct ProviderInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     pub has_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
     #[serde(rename = "type")]
     pub provider_type: String,
 }
@@ -50,6 +52,8 @@ pub struct ProviderForm {
     pub endpoint: String,
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub upstream_model: Option<String>,
     #[serde(default = "default_type")]
     pub provider_type: String,
 }
@@ -116,9 +120,16 @@ fn provider_config_from_form(
         None => existing.and_then(|cfg| cfg.api_key.clone()),
     };
 
+    let model = match form.upstream_model {
+        Some(m) if m.is_empty() => None,
+        Some(m) => Some(m),
+        None => existing.and_then(|cfg| cfg.model.clone()),
+    };
+
     crate::config::ProviderConfig {
         endpoint: form.endpoint,
         api_key,
+        model,
         r#type: form.provider_type,
     }
 }
@@ -159,12 +170,12 @@ fn provider_info_from_config(
         endpoint: cfg.map(|c| c.endpoint.clone()).unwrap_or_default(),
         api_key: None,
         has_key: cfg.map(|c| c.api_key.is_some()).unwrap_or(false),
+        upstream_model: cfg.and_then(|c| c.model.clone()),
         provider_type: cfg
             .map(|c| c.r#type.clone())
             .unwrap_or_else(|| "openai".to_string()),
     }
 }
-
 // ── GET Handlers ────────────────────────────────────────────────────
 
 /// GET /api/providers — returns provider list with real config data.
@@ -526,12 +537,14 @@ mod tests {
                 endpoint: "http://localhost".into(),
                 has_key: true,
                 api_key: Some("sk-test".into()),
+                upstream_model: Some("gpt-4".into()),
                 provider_type: "omlx".into(),
             }],
         };
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"name\":\"test\""));
         assert!(json.contains("\"has_key\":true"));
+        assert!(json.contains("\"upstream_model\":\"gpt-4\""));
         assert!(json.contains("\"type\":\"omlx\""));
     }
 
@@ -540,6 +553,7 @@ mod tests {
         let cfg = crate::config::ProviderConfig {
             endpoint: "http://localhost".into(),
             api_key: Some("sk-secret".into()),
+            model: Some("gpt-4".into()),
             r#type: "openai".into(),
         };
 
@@ -548,6 +562,7 @@ mod tests {
 
         assert!(info.has_key);
         assert_eq!(info.api_key, None);
+        assert_eq!(info.upstream_model, Some("gpt-4".into()));
         assert!(!json.contains("sk-secret"));
         assert!(!json.contains("api_key"));
     }
@@ -557,12 +572,14 @@ mod tests {
         let existing = crate::config::ProviderConfig {
             endpoint: "http://old".into(),
             api_key: Some("sk-existing".into()),
+            model: Some("old-model".into()),
             r#type: "openai".into(),
         };
         let form = ProviderForm {
             name: "main".into(),
             endpoint: "http://new".into(),
             api_key: None,
+            upstream_model: None,
             provider_type: "openai".into(),
         };
 
@@ -570,6 +587,7 @@ mod tests {
 
         assert_eq!(config.endpoint, "http://new");
         assert_eq!(config.api_key.as_deref(), Some("sk-existing"));
+        assert_eq!(config.model.as_deref(), Some("old-model"));
     }
 
     #[test]
@@ -577,12 +595,14 @@ mod tests {
         let existing = crate::config::ProviderConfig {
             endpoint: "http://old".into(),
             api_key: Some("sk-existing".into()),
+            model: None,
             r#type: "openai".into(),
         };
         let form = ProviderForm {
             name: "main".into(),
             endpoint: "http://new".into(),
             api_key: Some(String::new()),
+            upstream_model: None,
             provider_type: "openai".into(),
         };
 
@@ -609,6 +629,7 @@ mod tests {
             name: " ".into(),
             endpoint: "http://localhost:8000".into(),
             api_key: None,
+            upstream_model: None,
             provider_type: "openai".into(),
         };
         assert_eq!(
@@ -620,6 +641,7 @@ mod tests {
             name: "main".into(),
             endpoint: "file:///tmp/provider".into(),
             api_key: None,
+            upstream_model: None,
             provider_type: "openai".into(),
         };
         assert_eq!(
@@ -631,6 +653,7 @@ mod tests {
             name: "main".into(),
             endpoint: "http://localhost:8000".into(),
             api_key: None,
+            upstream_model: None,
             provider_type: "unknown".into(),
         };
         assert_eq!(

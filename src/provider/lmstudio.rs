@@ -11,12 +11,14 @@ use crate::streaming::LLMStream;
 pub struct LmStudioConfig {
     /// The base URL of the LM Studio server.
     pub endpoint: String,
+    pub model: Option<String>,
 }
 
 impl Default for LmStudioConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:1234".to_string(),
+            endpoint: "http://localhost:1234/v1".to_string(),
+            model: None,
         }
     }
 }
@@ -36,6 +38,7 @@ impl LmStudioProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "lm-studio".to_string(),
+                model: config.model.clone(),
             },
         );
         Self {

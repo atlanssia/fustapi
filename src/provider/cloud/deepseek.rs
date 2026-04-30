@@ -13,13 +13,15 @@ use crate::streaming::LLMStream;
 pub struct DeepSeekConfig {
     pub endpoint: String,
     pub api_key: String,
+    pub model: Option<String>,
 }
 
 impl Default for DeepSeekConfig {
     fn default() -> Self {
         Self {
-            endpoint: "https://api.deepseek.com".to_string(),
+            endpoint: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
+            model: None,
         }
     }
 }
@@ -38,6 +40,7 @@ impl DeepSeekProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: config.api_key.clone(),
+                model: config.model.clone(),
             },
         );
         Self {

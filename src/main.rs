@@ -191,6 +191,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                 fustapi::config::ProviderConfig {
                     endpoint,
                     api_key,
+                    model: None,
                     r#type,
                 },
             );

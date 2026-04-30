@@ -11,12 +11,14 @@ use crate::streaming::LLMStream;
 pub struct SglConfig {
     /// The base URL of the SGLang server.
     pub endpoint: String,
+    pub model: Option<String>,
 }
 
 impl Default for SglConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:3000".to_string(),
+            endpoint: "http://localhost:3000/v1".to_string(),
+            model: None,
         }
     }
 }
@@ -36,6 +38,7 @@ impl SglProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "sglang".to_string(),
+                model: config.model.clone(),
             },
         );
         Self {

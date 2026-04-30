@@ -15,13 +15,15 @@ use crate::streaming::{LLMChunk, LLMStream};
 pub struct OpenAIConfig {
     pub endpoint: String,
     pub api_key: String,
+    pub model: Option<String>,
 }
 
 impl Default for OpenAIConfig {
     fn default() -> Self {
         Self {
-            endpoint: "https://api.openai.com".to_string(),
+            endpoint: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
+            model: None,
         }
     }
 }
@@ -93,8 +95,9 @@ impl OpenAIProvider {
 
             m
         }).collect::<Vec<_>>();
-
-        let mut body = serde_json::json!({ "model": &request.model, "messages": messages, "stream": request.stream });
+        
+        let model = self.config.model.as_ref().unwrap_or(&request.model);
+        let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
 
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
@@ -352,7 +355,7 @@ impl Provider for OpenAIProvider {
     async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
         let body = self.build_request_body(&request);
         let url = format!(
-            "{}/v1/chat/completions",
+            "{}/chat/completions",
             self.config.endpoint.trim_end_matches('/')
         );
 

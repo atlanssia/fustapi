@@ -657,7 +657,6 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
       </div>
       <div class="topbar-actions">
         <span id="gateway-pill" class="status-pill" aria-live="polite"><span class="dot"></span>Checking gateway</span>
-        <button class="btn primary" id="add-provider-top" type="button">Add provider</button>
       </div>
     </div>
   </header>
@@ -683,17 +682,17 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
            </div>
         </div>
         <div class="api-endpoints">
-          <div class="endpoint-card" onclick="copyEndpoint('/v1/chat/completions')" title="Copy endpoint">
+          <div class="endpoint-card" data-copy-path="/v1/chat/completions" title="Copy endpoint">
             <span class="method post">POST</span>
             <span class="path">/v1/chat/completions</span>
             <span class="protocol">OpenAI</span>
           </div>
-          <div class="endpoint-card" onclick="copyEndpoint('/v1/messages')" title="Copy endpoint">
+          <div class="endpoint-card" data-copy-path="/v1/messages" title="Copy endpoint">
             <span class="method post">POST</span>
             <span class="path">/v1/messages</span>
             <span class="protocol">Anthropic</span>
           </div>
-          <div class="endpoint-card" onclick="copyEndpoint('/v1/models')" title="Copy endpoint">
+          <div class="endpoint-card" data-copy-path="/v1/models" title="Copy endpoint">
             <span class="method get">GET</span>
             <span class="path">/v1/models</span>
             <span class="protocol">OpenAI</span>
@@ -821,6 +820,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
           <div class="form-field">
             <label for="provider-endpoint">Endpoint</label>
             <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url" required placeholder="http://localhost:8000/v1">
+            <p class="help">Full API base path (e.g. including /v1 if required).</p>
             <p class="error" id="provider-endpoint-error"></p>
           </div>
           <div class="form-field">
@@ -828,6 +828,11 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
             <input id="provider-api-key" name="api_key" type="password" autocomplete="off" placeholder="Leave blank to keep the saved key">
             <p class="help" id="provider-key-help">Saved keys are shown only as Configured or Not set.</p>
             <p class="error" id="provider-api-key-error"></p>
+          </div>
+          <div class="form-field">
+            <label for="provider-upstream-model">Upstream Model</label>
+            <input id="provider-upstream-model" name="upstream_model" autocomplete="off" placeholder="Optional: map to a specific upstream model">
+            <p class="help">If set, all requests through this provider will use this model name.</p>
           </div>
           <label class="check-row" id="provider-clear-key-row" hidden>
             <input type="checkbox" id="provider-clear-key" name="clear_api_key">
@@ -1111,7 +1116,10 @@ function renderProviders() {
       <td><strong>${escapeHtml(provider.name)}</strong></td>
       <td><span class="badge type">${escapeHtml(provider.type || "openai")}</span></td>
       <td class="endpoint">${escapeHtml(provider.endpoint)}</td>
-      <td>${provider.has_key ? "<span class=\"badge ok\">Configured</span>" : "<span class=\"badge warn\">Not set</span>"}</td>
+      <td>
+        ${provider.has_key ? "<span class=\"badge ok\">Key Set</span>" : "<span class=\"badge warn\">No key</span>"}
+        ${provider.upstream_model ? `<br><span class="help" style="font-size: 0.75rem">Model: ${escapeHtml(provider.upstream_model)}</span>` : ""}
+      </td>
       <td><div class="actions">
         <button class="btn small" type="button" data-provider-action="edit" data-provider-name="${escapeHtml(provider.name)}">Edit</button>
         <button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="${escapeHtml(provider.name)}">Delete</button>
@@ -1124,7 +1132,8 @@ function renderProviders() {
       <dl>
         <div><dt>Type</dt><dd>${escapeHtml(provider.type || "openai")}</dd></div>
         <div><dt>Endpoint</dt><dd>${escapeHtml(provider.endpoint)}</dd></div>
-        <div><dt>API key</dt><dd>${provider.has_key ? "Configured" : "Not set"}</dd></div>
+        <div><dt>API key</dt><dd>${provider.has_key ? "Set" : "Not set"}</dd></div>
+        ${provider.upstream_model ? `<div><dt>Upstream Model</dt><dd>${escapeHtml(provider.upstream_model)}</dd></div>` : ""}
       </dl>
       <div class="actions">
         <button class="btn small" type="button" data-provider-action="edit" data-provider-name="${escapeHtml(provider.name)}">Edit</button>
@@ -1154,6 +1163,7 @@ function openProviderModal(name = "") {
   byId("provider-name").value = provider?.name || "";
   byId("provider-type").value = provider?.type || "";
   byId("provider-endpoint").value = provider?.endpoint || "";
+  byId("provider-upstream-model").value = provider?.upstream_model || "";
   byId("provider-api-key").value = "";
   byId("provider-api-key").placeholder = provider?.has_key ? "Leave blank to keep configured key" : "Optional key";
   byId("provider-clear-key").checked = false;
@@ -1166,6 +1176,7 @@ function validateProviderForm() {
   const name = byId("provider-name").value.trim();
   const type = byId("provider-type").value;
   const endpoint = byId("provider-endpoint").value.trim();
+  const upstreamModel = byId("provider-upstream-model").value.trim();
   let valid = true;
   if (!name) {
     setFieldError("provider-name", "Enter a provider name.");
@@ -1187,7 +1198,7 @@ function validateProviderForm() {
     if (firstInvalid) firstInvalid.focus();
     return null;
   }
-  return { name, type, endpoint };
+  return { name, type, endpoint, upstreamModel };
 }
 
 async function submitProvider(event) {
@@ -1202,6 +1213,7 @@ async function submitProvider(event) {
     name: values.name,
     endpoint: values.endpoint,
     provider_type: values.type,
+    upstream_model: values.upstreamModel,
   };
   if (clearApiKey) {
     body.api_key = "";
@@ -1457,7 +1469,6 @@ async function fetchHealth() {
 }
 
 function setupEvents() {
-  byId("add-provider-top").addEventListener("click", () => openProviderModal());
   byId("add-provider-panel").addEventListener("click", () => openProviderModal());
   byId("refresh-providers").addEventListener("click", fetchProviders);
   byId("provider-form").addEventListener("submit", submitProvider);
@@ -1477,6 +1488,12 @@ function setupEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.modal) closeModal();
     trapModalFocus(event);
+  });
+  document.querySelectorAll("[data-copy-path]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const path = card.dataset.copyPath;
+      if (path) copyEndpoint(path);
+    });
   });
 }
 

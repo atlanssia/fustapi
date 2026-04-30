@@ -11,12 +11,14 @@ use crate::streaming::LLMStream;
 pub struct OmlxConfig {
     /// The base URL of the omlx server.
     pub endpoint: String,
+    pub model: Option<String>,
 }
 
 impl Default for OmlxConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:5000".to_string(), // default to 5000 from previous codebase
+            endpoint: "http://localhost:5000/v1".to_string(), // default to 5000 from previous codebase
+            model: None,
         }
     }
 }
@@ -36,6 +38,7 @@ impl OmlxProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "omlx".to_string(),
+                model: config.model.clone(),
             },
         );
         Self {

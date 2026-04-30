@@ -19,6 +19,8 @@ pub struct ProviderRecord {
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
     pub is_local: bool,
 }
 
@@ -29,20 +31,23 @@ pub struct RouteRecord {
     pub provider_ids: Vec<String>,
 }
 
-const SCHEMA_SQL: &str = r#"CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, type TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT, is_local BOOLEAN NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS routes (model TEXT PRIMARY KEY, provider_ids TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);"#;
+const SCHEMA_SQL: &str = r#"CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, type TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT, upstream_model TEXT, is_local BOOLEAN NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS routes (model TEXT PRIMARY KEY, provider_ids TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);"#;
 
 /// Initialize the database at the given path. Enables WAL mode.
 pub fn init_db(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch(SCHEMA_SQL)?;
+    // Simple migration: add upstream_model if missing
+    let _ = conn.execute("ALTER TABLE providers ADD COLUMN upstream_model TEXT", []);
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
 
 /// Load all providers from the database.
 pub fn load_providers(conn: &Connection) -> Result<Vec<ProviderRecord>> {
-    let mut stmt =
-        conn.prepare("SELECT id, type, base_url, api_key, is_local FROM providers ORDER BY id")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, type, base_url, api_key, is_local, upstream_model FROM providers ORDER BY id",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(ProviderRecord {
             id: row.get(0)?,
@@ -50,6 +55,7 @@ pub fn load_providers(conn: &Connection) -> Result<Vec<ProviderRecord>> {
             base_url: row.get(2)?,
             api_key: row.get(3)?,
             is_local: row.get(4)?,
+            upstream_model: row.get(5)?,
         })
     })?;
     let mut results = Vec::new();
@@ -79,7 +85,7 @@ pub fn load_routes(conn: &Connection) -> Result<Vec<RouteRecord>> {
 
 /// Upsert a single provider record.
 pub fn upsert_provider(conn: &Transaction, p: &ProviderRecord) -> Result<()> {
-    conn.execute("INSERT OR REPLACE INTO providers (id, type, base_url, api_key, is_local) VALUES (?1, ?2, ?3, ?4, ?5)", params![&p.id,&p.r#type,&p.base_url,p.api_key.as_deref(),p.is_local])?;
+    conn.execute("INSERT OR REPLACE INTO providers (id, type, base_url, api_key, is_local, upstream_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![&p.id,&p.r#type,&p.base_url,p.api_key.as_deref(),p.is_local, p.upstream_model.as_deref()])?;
     Ok(())
 }
 
@@ -117,22 +123,25 @@ pub fn seed_if_empty(conn: &mut Connection) -> Result<()> {
         ProviderRecord {
             id: "omlx".into(),
             r#type: "omlx".into(),
-            base_url: "http://localhost:5000".into(),
+            base_url: "http://localhost:5000/v1".into(),
             api_key: None,
+            upstream_model: None,
             is_local: true,
         },
         ProviderRecord {
             id: "lmstudio".into(),
             r#type: "lmstudio".into(),
-            base_url: "http://localhost:1234".into(),
+            base_url: "http://localhost:1234/v1".into(),
             api_key: None,
+            upstream_model: None,
             is_local: true,
         },
         ProviderRecord {
             id: "sglang".into(),
             r#type: "sglang".into(),
-            base_url: "http://localhost:30000".into(),
+            base_url: "http://localhost:30000/v1".into(),
             api_key: None,
+            upstream_model: None,
             is_local: true,
         },
     ];
@@ -189,6 +198,7 @@ mod tests {
             r#type: "omlx".into(),
             base_url: "http://localhost:5000".into(),
             api_key: Some("sk-test".into()),
+            upstream_model: Some("gpt-4-test".into()),
             is_local: true,
         };
         upsert_provider(&tx, &p).unwrap();
@@ -196,6 +206,7 @@ mod tests {
         let loaded = load_providers(&conn).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "test-provider");
+        assert_eq!(loaded[0].upstream_model.as_deref(), Some("gpt-4-test"));
     }
 
     #[test]
@@ -240,6 +251,7 @@ mod tests {
             r#type: "omlx".into(),
             base_url: "http://localhost:5000".into(),
             api_key: None,
+            upstream_model: None,
             is_local: true,
         };
         upsert_provider(&tx, &p).unwrap();
