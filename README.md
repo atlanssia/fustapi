@@ -23,6 +23,11 @@ FustAPI is a single-binary gateway that provides a unified entry point for AI ID
 
 FustAPI provides pre-compiled binaries for major platforms through [GitHub Releases](https://github.com/atlanssia/fustapi/releases).
 
+**macOS Users**: If you see an "Apple could not verify..." malware warning, remove the quarantine attribute:
+```bash
+xattr -d com.apple.quarantine fustapi
+```
+
 ```bash
 # Or build from source
 git clone https://github.com/atlanssia/fustapi.git

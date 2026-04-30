@@ -77,6 +77,9 @@ Download the release binary for your platform from the [GitHub Releases](https:/
 # Download and extract
 tar -xzf fustapi-1.0.0-x86_64-unknown-linux-gnu.tar.gz
 
+# macOS Users: If Gatekeeper blocks the binary ("Apple could not verify..."), run:
+xattr -d com.apple.quarantine fustapi
+
 # Verify the binary
 ./fustapi --version
 ```
@@ -362,6 +365,12 @@ WantedBy=multi-user.target
 ---
 
 ## Troubleshooting
+
+### macOS Gatekeeper Warning ("Apple could not verify...")
+When running a downloaded release binary on macOS (especially Apple Silicon), Gatekeeper may block the execution. To resolve this, remove the quarantine attribute:
+```bash
+xattr -d com.apple.quarantine /path/to/fustapi
+```
 
 ### DB Initialization Failures
 Ensure FustAPI has write permissions to the data directory (default `~/.fustapi`).
