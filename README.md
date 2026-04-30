@@ -61,6 +61,19 @@ fustapi serve --host 0.0.0.0 --port 9000 --data-dir /path/to/data
 - **Web UI**: Open `http://localhost:8080/ui` to manage providers and routes.
 - **Health Check**: `curl http://localhost:8080/health` → `{"status":"ok"}`
 
+### Monitoring & Logging
+
+FustAPI outputs structured logs to **standard output (stdout)**. You can control the verbosity using the `RUST_LOG` environment variable:
+
+```bash
+# Debug logging
+RUST_LOG=debug fustapi serve
+
+# Warning and Error only
+RUST_LOG=warn fustapi serve
+```
+
+
 ### Test
 
 ```bash

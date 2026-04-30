@@ -202,14 +202,42 @@ curl http://localhost:8080/health
 # Expected response: {"status":"ok"}
 ```
 
-### Server Logs
+### Server Logs & Monitoring
 
-FustAPI uses `tracing-subscriber` with `env-filter` for structured logging:
+FustAPI uses a structured logging system based on `tracing`. By default, all logs are streamed to **standard output (stdout)**.
+
+#### Log Levels
+
+You can control the verbosity using the `RUST_LOG` environment variable.
+
+| Level | Description |
+|-------|-------------|
+| `error` | Only critical failures |
+| `warn` | Potential issues and non-fatal errors |
+| `info` | (Default) Normal operational events (startup, incoming requests) |
+| `debug` | Detailed internal state (provider mapping, request routing) |
+| `trace` | Extremely granular data (including low-level HTTP traffic) |
+
+#### Usage Examples
 
 ```bash
-# Set log level via RUST_LOG environment variable
+# High verbosity for development/debugging
 RUST_LOG=debug fustapi serve
+
+# Production-standard logging
 RUST_LOG=info fustapi serve
+
+# Silence all but errors
+RUST_LOG=error fustapi serve
+```
+
+#### Persisting Logs to a File
+
+If you need to keep a permanent record of logs, use Shell redirection:
+
+```bash
+# Save both stdout and stderr to a file
+fustapi serve > fustapi.log 2>&1
 ```
 
 ---
@@ -343,8 +371,13 @@ Ensure FustAPI has write permissions to the data directory (default `~/.fustapi`
 - Verify the endpoint URL in the Providers configuration.
 - Check firewall settings for the configured port.
 
-### Logs
-Use the `RUST_LOG` environment variable for detailed output:
+### Accessing Logs
+Detailed operational logs are essential for diagnosing issues. 
+
+- **Stdout**: Normal runtime logs (info, debug).
+- **Stderr**: Critical bootstrap errors and unhandled server panics.
+
+Always run with `RUST_LOG=debug` when investigating connectivity or routing issues:
 ```bash
 RUST_LOG=debug fustapi serve
 ```
