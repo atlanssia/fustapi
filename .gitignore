@@ -22,8 +22,12 @@ target
 
 # GSD planning (local development artifacts)
 .planning/
+.agents/
+.superpowers/
 
+# Dev rules and phase summaries
+QWEN.md
+docs/specs/phase-*.md
 
 # Added by cargo
-
 /target
