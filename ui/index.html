@@ -678,7 +678,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
            </div>
            <div>
              <h3>API Endpoints</h3>
-             <p>Use these endpoints with OpenAI or Anthropic SDKs. Base URL: <code id="base-url-display" title="Click to copy">http://localhost:8000</code></p>
+             <p>Use these endpoints with OpenAI or Anthropic SDKs. Base URL: <code id="base-url-display" title="Click to copy">http://localhost:8000/v1</code></p>
            </div>
         </div>
         <div class="api-endpoints">
@@ -974,7 +974,7 @@ async function copyEndpoint(path) {
 }
 
 async function copyBaseUrl() {
-  const url = window.location.origin;
+  const url = window.location.origin + "/v1";
   try {
     await navigator.clipboard.writeText(url);
     showToast(`Copied base URL to clipboard`);
@@ -1500,7 +1500,7 @@ function setupEvents() {
 async function init() {
   const baseUrlDisplay = byId("base-url-display");
   if (baseUrlDisplay) {
-    baseUrlDisplay.textContent = window.location.origin;
+    baseUrlDisplay.textContent = window.location.origin + "/v1";
     baseUrlDisplay.addEventListener('click', copyBaseUrl);
   }
   setupTabs();
