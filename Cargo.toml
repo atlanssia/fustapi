@@ -3,6 +3,7 @@ name = "fustapi"
 version = "1.0.0"
 edition = "2024"
 description = "Local-first, high-performance LLM API aggregation gateway"
+license = "Apache-2.0"
 
 [dependencies]
 # Async runtime
@@ -36,7 +37,7 @@ thiserror = "2"
 dirs = "6"
 
 # HTTP client for provider adapters
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # In-memory config with atomic swaps (control plane → data plane)
 arc-swap = "1.7"
