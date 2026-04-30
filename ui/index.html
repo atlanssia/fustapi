@@ -493,6 +493,134 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+.api-reference-card {
+  margin-bottom: 1.5rem;
+  padding: 1.25rem;
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-muted) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  position: relative;
+  overflow: hidden;
+}
+.api-reference-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  opacity: 0.5;
+}
+.api-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.api-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--surface-strong);
+  font-size: 1.5rem;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+.api-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-family: var(--font-body);
+}
+.api-header p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.api-header code {
+  font-family: var(--font-heading);
+  background: var(--surface-strong);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.api-header code:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.api-endpoints {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+.endpoint-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  position: relative;
+  overflow: hidden;
+}
+.endpoint-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: 0 6px 15px rgba(34, 197, 94, 0.1);
+}
+.endpoint-card::after {
+  content: "Copy";
+  position: absolute;
+  right: 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--primary);
+  opacity: 0;
+  transform: translateX(10px);
+  transition: all 200ms ease;
+}
+.endpoint-card:hover::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+.endpoint-card:hover .protocol {
+  opacity: 0;
+}
+.endpoint-card .method {
+  font-family: var(--font-heading);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+.endpoint-card .method.post {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.15);
+}
+.endpoint-card .method.get {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+}
+.endpoint-card .path {
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.endpoint-card .protocol {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: opacity 200ms ease;
+}
 @media (max-width: 820px) {
   .topbar-inner, .panel-header { align-items: stretch; flex-direction: column; }
   .topbar-actions, .panel-header .btn { justify-content: stretch; }
@@ -544,6 +672,35 @@ input[aria-invalid="true"], select[aria-invalid="true"] {
     </nav>
 
     <main id="main" tabindex="-1">
+      <div class="api-reference-card">
+        <div class="api-header">
+           <div class="api-icon">
+             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+           </div>
+           <div>
+             <h3>API Endpoints</h3>
+             <p>Use these endpoints with OpenAI or Anthropic SDKs. Base URL: <code id="base-url-display" title="Click to copy">http://localhost:8000</code></p>
+           </div>
+        </div>
+        <div class="api-endpoints">
+          <div class="endpoint-card" onclick="copyEndpoint('/v1/chat/completions')" title="Copy endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/v1/chat/completions</span>
+            <span class="protocol">OpenAI</span>
+          </div>
+          <div class="endpoint-card" onclick="copyEndpoint('/v1/messages')" title="Copy endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/v1/messages</span>
+            <span class="protocol">Anthropic</span>
+          </div>
+          <div class="endpoint-card" onclick="copyEndpoint('/v1/models')" title="Copy endpoint">
+            <span class="method get">GET</span>
+            <span class="path">/v1/models</span>
+            <span class="protocol">OpenAI</span>
+          </div>
+        </div>
+      </div>
+
       <section id="providers-panel" class="panel active" role="tabpanel" tabindex="0" aria-labelledby="tab-providers">
         <div class="panel-header">
           <div class="panel-title">
@@ -799,6 +956,26 @@ function setStateText(id, text, hidden = false) {
   const el = byId(id);
   el.hidden = hidden;
   el.textContent = text;
+}
+
+async function copyEndpoint(path) {
+  const url = window.location.origin + path;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast(`Copied ${url} to clipboard`);
+  } catch (err) {
+    showToast('Failed to copy', 'error');
+  }
+}
+
+async function copyBaseUrl() {
+  const url = window.location.origin;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast(`Copied base URL to clipboard`);
+  } catch (err) {
+    showToast('Failed to copy', 'error');
+  }
 }
 
 function setStateHtml(id, html, hidden = false) {
@@ -1304,6 +1481,11 @@ function setupEvents() {
 }
 
 async function init() {
+  const baseUrlDisplay = byId("base-url-display");
+  if (baseUrlDisplay) {
+    baseUrlDisplay.textContent = window.location.origin;
+    baseUrlDisplay.addEventListener('click', copyBaseUrl);
+  }
   setupTabs();
   setupEvents();
   await Promise.all([fetchProviders(), fetchModels(), fetchHealth()]);
