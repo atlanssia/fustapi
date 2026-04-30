@@ -1,6 +1,6 @@
 # FustAPI User Manual
 
-> **Version:** 1.0.2
+> **Version:** 1.0.3
 > **Last Updated:** 2026-05-01
 
 ---
@@ -408,4 +408,4 @@ The release profile includes:
 
 ---
 
-*This manual covers FustAPI v1.0.2 features.*
+*This manual covers FustAPI v1.0.3 features.*
