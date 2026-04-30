@@ -88,8 +88,7 @@ pub struct MessageResponse {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn load_config(db_path: &std::path::Path) -> crate::config::AppConfig {
-    crate::config::load_from_db(db_path)
-        .unwrap_or_else(|_| crate::config::default_config())
+    crate::config::load_from_db(db_path).unwrap_or_else(|_| crate::config::default_config())
 }
 
 fn save_and_rebuild(
@@ -187,9 +186,7 @@ pub async fn providers_api_handler(
 }
 
 /// GET /api/models — returns model routing with real provider data.
-pub async fn models_api_handler(
-    Extension(db_path): Extension<Arc<PathBuf>>,
-) -> impl IntoResponse {
+pub async fn models_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) -> impl IntoResponse {
     let config = load_config(&db_path);
     let models = config
         .router

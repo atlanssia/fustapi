@@ -247,7 +247,10 @@ mod tests {
             port: 9090,
             data_dir: PathBuf::from("/tmp/fustapi-test"),
         };
-        assert_eq!(boot.db_path(), PathBuf::from("/tmp/fustapi-test/fustapi.db"));
+        assert_eq!(
+            boot.db_path(),
+            PathBuf::from("/tmp/fustapi-test/fustapi.db")
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ impl LmStudioProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "lm-studio".to_string(),
-            }
+            },
         );
         Self {
             config,

@@ -36,7 +36,10 @@ pub struct OpenAIProvider {
 
 impl OpenAIProvider {
     pub fn new(config: OpenAIConfig) -> Self {
-        Self { config, client: reqwest::Client::new() }
+        Self {
+            config,
+            client: reqwest::Client::new(),
+        }
     }
 
     /// Build the OpenAI-compatible request body from a UnifiedRequest.
@@ -64,67 +67,89 @@ impl OpenAIProvider {
                     parts.push(serde_json::json!({ "type": "image_url", "image_url": { "url": url } }));
                 }
 
-                if parts.len() > 1 || (!msg.content.is_empty() && !images.is_empty()) { 
-                    m["content"] = serde_json::json!(parts); 
-                } else if parts.len() == 1 && matches!(parts[0], serde_json::Value::Object(ref o) if o.get("type").and_then(|t| t.as_str()) == Some("text")) { 
-                    m["content"] = parts[0]["text"].clone(); 
-                } else if parts.len() == 1 && matches!(parts[0], serde_json::Value::Object(ref o) if o.get("type").and_then(|t| t.as_str()) == Some("image_url")) { 
-                    m["content"] = parts[0]["image_url"]["url"].clone(); 
-                } else if parts.is_empty() { 
-                    m["content"] = serde_json::json!(""); 
-                } else { 
-                    m["content"] = serde_json::json!(&msg.content); 
-                } 
-            } else { 
-                m["content"] = serde_json::json!(&msg.content); 
-            } 
+                if parts.len() > 1 || (!msg.content.is_empty() && !images.is_empty()) {
+                    m["content"] = serde_json::json!(parts);
+                } else if parts.len() == 1 && matches!(parts[0], serde_json::Value::Object(ref o) if o.get("type").and_then(|t| t.as_str()) == Some("text")) {
+                    m["content"] = parts[0]["text"].clone();
+                } else if parts.len() == 1 && matches!(parts[0], serde_json::Value::Object(ref o) if o.get("type").and_then(|t| t.as_str()) == Some("image_url")) {
+                    m["content"] = parts[0]["image_url"]["url"].clone();
+                } else if parts.is_empty() {
+                    m["content"] = serde_json::json!("");
+                } else {
+                    m["content"] = serde_json::json!(&msg.content);
+                }
+            } else {
+                m["content"] = serde_json::json!(&msg.content);
+            }
 
-            if let Some(tcs) = &msg.tool_calls { 
-                let calls = tcs.iter().enumerate().map(|(i, tc)| serde_json::json!({ 
-                    "id": format!("call_{}", i), 
-                    "type": "function", 
-                    "function": { "name": tc.name.clone(), "arguments": tc.arguments.to_string() } 
-                })).collect::<Vec<_>>(); 
-                m["tool_calls"] = serde_json::json!(calls); 
-            } 
+            if let Some(tcs) = &msg.tool_calls {
+                let calls = tcs.iter().enumerate().map(|(i, tc)| serde_json::json!({
+                    "id": format!("call_{}", i),
+                    "type": "function",
+                    "function": { "name": tc.name.clone(), "arguments": tc.arguments.to_string() }
+                })).collect::<Vec<_>>();
+                m["tool_calls"] = serde_json::json!(calls);
+            }
 
-            m 
-        }).collect::<Vec<_>>(); 
+            m
+        }).collect::<Vec<_>>();
 
-        let mut body = serde_json::json!({ "model": &request.model, "messages": messages, "stream": request.stream }); 
+        let mut body = serde_json::json!({ "model": &request.model, "messages": messages, "stream": request.stream });
 
-        if let Some(temp) = request.temperature { body["temperature"] = serde_json::json!(temp); } 
-        if let Some(max_t) = request.max_tokens { body["max_tokens"] = serde_json::json!(max_t); } 
+        if let Some(temp) = request.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
+        if let Some(max_t) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max_t);
+        }
 
-        if let Some(tools) = &request.tools { 
-            let tool_defs = tools.iter().map(|t| serde_json::json!({ 
-                "type": "function", "function": { "name": t.name.clone(), "description": t.description.clone(), "parameters": t.parameters.clone() } 
-            })).collect::<Vec<_>>(); 
-            body["tools"] = serde_json::json!(tool_defs); 
-        } 
+        if let Some(tools) = &request.tools {
+            let tool_defs = tools.iter().map(|t| serde_json::json!({
+                "type": "function", "function": { "name": t.name.clone(), "description": t.description.clone(), "parameters": t.parameters.clone() }
+            })).collect::<Vec<_>>();
+            body["tools"] = serde_json::json!(tool_defs);
+        }
 
-        body 
-    } 
+        body
+    }
 
-    /// Parse a non-streaming response into LLMChunks. 
-    pub fn parse_response(response: &OpenAIChatResponse) -> Vec<LLMChunk> { 
-        let mut chunks = Vec::new(); 
+    /// Parse a non-streaming response into LLMChunks.
+    pub fn parse_response(response: &OpenAIChatResponse) -> Vec<LLMChunk> {
+        let mut chunks = Vec::new();
 
-        if let Some(choice) = response.choices.first() { 
-            if let Some(content) = &choice.message.content { 
-                chunks.push(LLMChunk { content: Some(content.clone()), tool_call: None, done: false }); 
-            } 
+        if let Some(choice) = response.choices.first() {
+            if let Some(content) = &choice.message.content {
+                chunks.push(LLMChunk {
+                    content: Some(content.clone()),
+                    tool_call: None,
+                    done: false,
+                });
+            }
 
-            if let Some(tool_calls) = &choice.message.tool_calls { 
-                for (_i, tc) in tool_calls.iter().enumerate() { 
-                    chunks.push(LLMChunk { content: None , tool_call : Some(crate :: capability :: ToolCall{ name : tc.function.name.clone(), arguments : serde_json :: from_str(&tc.function.arguments).unwrap_or_default()}), done : false }); } } 
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                for (_i, tc) in tool_calls.iter().enumerate() {
+                    chunks.push(LLMChunk {
+                        content: None,
+                        tool_call: Some(crate::capability::ToolCall {
+                            name: tc.function.name.clone(),
+                            arguments: serde_json::from_str(&tc.function.arguments)
+                                .unwrap_or_default(),
+                        }),
+                        done: false,
+                    });
+                }
+            }
 
-            chunks.push(LLMChunk { content: None , tool_call : None , done : true }); } 
+            chunks.push(LLMChunk {
+                content: None,
+                tool_call: None,
+                done: true,
+            });
+        }
 
-        chunks 
-    } 
-
-} 
+        chunks
+    }
+}
 
 // ── Response types for non-streaming ──────────────────────────────────
 
@@ -179,59 +204,109 @@ pub struct OpenAIUsage {
     pub total_tokens: usize,
 }
 
-pub fn parse_openai_sse_stream(stream: impl futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static) -> LLMStream {
+pub fn parse_openai_sse_stream(
+    stream: impl futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static,
+) -> LLMStream {
     use futures::stream;
     let buffer = String::new();
     let tool_name: Option<String> = None;
     let tool_args = String::new();
 
-    let s = stream::unfold((stream, buffer, tool_name, tool_args), |(mut stream, mut buffer, mut tool_name, mut tool_args)| async move {
-        loop {
-            if let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim().to_string();
-                buffer.drain(..=pos);
-                
-                if line.starts_with("data:") && line.len() > 5 {
-                    let data = line[5..].trim();
-                    if data == "[DONE]" || data == " [DONE]" || data == "[DONE] " {
-                        if let Some(name) = tool_name.take() {
-                            let args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
-                            let tc = crate::capability::ToolCall { name, arguments: args };
-                            return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: Some(tc), done: true }), (stream, buffer, tool_name, tool_args)));
+    let s = stream::unfold(
+        (stream, buffer, tool_name, tool_args),
+        |(mut stream, mut buffer, mut tool_name, mut tool_args)| async move {
+            loop {
+                if let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].trim().to_string();
+                    buffer.drain(..=pos);
+
+                    if line.starts_with("data:") && line.len() > 5 {
+                        let data = line[5..].trim();
+                        if data == "[DONE]" || data == " [DONE]" || data == "[DONE] " {
+                            if let Some(name) = tool_name.take() {
+                                let args = serde_json::from_str(&tool_args)
+                                    .unwrap_or(serde_json::json!({}));
+                                let tc = crate::capability::ToolCall {
+                                    name,
+                                    arguments: args,
+                                };
+                                return Some((
+                                    Ok(crate::streaming::LLMChunk {
+                                        content: None,
+                                        tool_call: Some(tc),
+                                        done: true,
+                                    }),
+                                    (stream, buffer, tool_name, tool_args),
+                                ));
+                            }
+                            return Some((
+                                Ok(crate::streaming::LLMChunk {
+                                    content: None,
+                                    tool_call: None,
+                                    done: true,
+                                }),
+                                (stream, buffer, tool_name, tool_args),
+                            ));
                         }
-                        return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: None, done: true }), (stream, buffer, tool_name, tool_args)));
-                    }
-                    if !data.is_empty() {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(choices) = v.get("choices") {
-                                if let Some(choice) = choices.get(0) {
-                                    if let Some(delta) = choice.get("delta") {
-                                        let content_str = delta.get("content").or_else(|| delta.get("reasoning_content")).and_then(|c| c.as_str());
-                                        if let Some(content) = content_str {
-                                            if !content.is_empty() {
-                                                return Some((Ok(crate::streaming::LLMChunk { content: Some(content.to_string()), tool_call: None, done: false }), (stream, buffer, tool_name, tool_args)));
+                        if !data.is_empty() {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                                if let Some(choices) = v.get("choices") {
+                                    if let Some(choice) = choices.get(0) {
+                                        if let Some(delta) = choice.get("delta") {
+                                            let content_str = delta
+                                                .get("content")
+                                                .or_else(|| delta.get("reasoning_content"))
+                                                .and_then(|c| c.as_str());
+                                            if let Some(content) = content_str {
+                                                if !content.is_empty() {
+                                                    return Some((
+                                                        Ok(crate::streaming::LLMChunk {
+                                                            content: Some(content.to_string()),
+                                                            tool_call: None,
+                                                            done: false,
+                                                        }),
+                                                        (stream, buffer, tool_name, tool_args),
+                                                    ));
+                                                }
                                             }
-                                        }
-                                        if let Some(tool_calls) = delta.get("tool_calls") {
-                                            if let Some(tc) = tool_calls.get(0) {
-                                                if let Some(func) = tc.get("function") {
-                                                    let new_name = func.get("name").and_then(|n| n.as_str());
-                                                    let new_args = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
-                                                    
-                                                    if let Some(name) = new_name {
-                                                        let mut flush_tc = None;
-                                                        if let Some(old_name) = tool_name.take() {
-                                                            let parsed_args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
-                                                            flush_tc = Some(crate::capability::ToolCall { name: old_name, arguments: parsed_args });
+                                            if let Some(tool_calls) = delta.get("tool_calls") {
+                                                if let Some(tc) = tool_calls.get(0) {
+                                                    if let Some(func) = tc.get("function") {
+                                                        let new_name = func
+                                                            .get("name")
+                                                            .and_then(|n| n.as_str());
+                                                        let new_args = func
+                                                            .get("arguments")
+                                                            .and_then(|a| a.as_str())
+                                                            .unwrap_or("");
+
+                                                        if let Some(name) = new_name {
+                                                            let mut flush_tc = None;
+                                                            if let Some(old_name) = tool_name.take()
+                                                            {
+                                                                let parsed_args =
+                                                                    serde_json::from_str(
+                                                                        &tool_args,
+                                                                    )
+                                                                    .unwrap_or(
+                                                                        serde_json::json!({}),
+                                                                    );
+                                                                flush_tc = Some(
+                                                                    crate::capability::ToolCall {
+                                                                        name: old_name,
+                                                                        arguments: parsed_args,
+                                                                    },
+                                                                );
+                                                            }
+                                                            tool_name = Some(name.to_string());
+                                                            tool_args = new_args.to_string();
+
+                                                            if flush_tc.is_some() {
+                                                                return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: flush_tc, done: false }), (stream, buffer, tool_name, tool_args)));
+                                                            }
+                                                        } else {
+                                                            tool_args.push_str(new_args);
                                                         }
-                                                        tool_name = Some(name.to_string());
-                                                        tool_args = new_args.to_string();
-                                                        
-                                                        if flush_tc.is_some() {
-                                                            return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: flush_tc, done: false }), (stream, buffer, tool_name, tool_args)));
-                                                        }
-                                                    } else {
-                                                        tool_args.push_str(new_args);
                                                     }
                                                 }
                                             }
@@ -241,40 +316,59 @@ pub fn parse_openai_sse_stream(stream: impl futures::Stream<Item = reqwest::Resu
                             }
                         }
                     }
+                    continue;
                 }
-                continue;
-            }
 
-            match stream.next().await {
-                Some(Ok(bytes)) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    buffer.push_str(&text);
-                }
-                Some(Err(e)) => {
-                    return Some((Err(crate::streaming::StreamError::Provider(e.to_string())), (stream, buffer, tool_name, tool_args)));
-                }
-                None => {
-                    if let Some(name) = tool_name.take() {
-                        let args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
-                        let tc = crate::capability::ToolCall { name, arguments: args };
-                        return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: Some(tc), done: true }), (stream, buffer, tool_name, tool_args)));
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        buffer.push_str(&text);
                     }
-                    return None;
+                    Some(Err(e)) => {
+                        return Some((
+                            Err(crate::streaming::StreamError::Provider(e.to_string())),
+                            (stream, buffer, tool_name, tool_args),
+                        ));
+                    }
+                    None => {
+                        if let Some(name) = tool_name.take() {
+                            let args =
+                                serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
+                            let tc = crate::capability::ToolCall {
+                                name,
+                                arguments: args,
+                            };
+                            return Some((
+                                Ok(crate::streaming::LLMChunk {
+                                    content: None,
+                                    tool_call: Some(tc),
+                                    done: true,
+                                }),
+                                (stream, buffer, tool_name, tool_args),
+                            ));
+                        }
+                        return None;
+                    }
                 }
             }
-        }
-    });
+        },
+    );
     Box::pin(s) as LLMStream
 }
-
 
 #[async_trait]
 impl Provider for OpenAIProvider {
     async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
         let body = self.build_request_body(&request);
-        let url = format!("{}/v1/chat/completions", self.config.endpoint.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.config.endpoint.trim_end_matches('/')
+        );
 
-        let mut builder = self.client.post(&url).header("Content-Type", "application/json");
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json");
 
         if !self.config.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -283,25 +377,40 @@ impl Provider for OpenAIProvider {
         builder = builder.json(&body);
 
         if request.stream {
-            let resp = builder.send().await.map_err(|e| ProviderError::Connection(e.to_string()))?;
+            let resp = builder
+                .send()
+                .await
+                .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err_text = resp.text().await.unwrap_or_default();
-                return Err(ProviderError::Request(format!("provider error {}: {}", status, err_text)));
+                return Err(ProviderError::Request(format!(
+                    "provider error {}: {}",
+                    status, err_text
+                )));
             }
 
             Ok(parse_openai_sse_stream(resp.bytes_stream()))
         } else {
-            let resp_body = builder.send().await.map_err(|e| ProviderError::Connection(e.to_string()))?;
+            let resp_body = builder
+                .send()
+                .await
+                .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
             if !resp_body.status().is_success() {
                 let status = resp_body.status();
                 let err_text = resp_body.text().await.unwrap_or_default();
-                return Err(ProviderError::Request(format!("provider error {}: {}", status, err_text)));
+                return Err(ProviderError::Request(format!(
+                    "provider error {}: {}",
+                    status, err_text
+                )));
             }
 
-            let resp_body = resp_body.json::<OpenAIChatResponse>().await.map_err(|e| ProviderError::Internal(e.to_string()))?;
+            let resp_body = resp_body
+                .json::<OpenAIChatResponse>()
+                .await
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
 
             let chunks = Self::parse_response(&resp_body);
 
@@ -311,9 +420,15 @@ impl Provider for OpenAIProvider {
         }
     }
 
-    fn supports_tools(&self) -> bool { true }
+    fn supports_tools(&self) -> bool {
+        true
+    }
 
-    fn supports_images(&self) -> bool { true }
+    fn supports_images(&self) -> bool {
+        true
+    }
 
-    fn name(&self) -> &str { "openai" }
+    fn name(&self) -> &str {
+        "openai"
+    }
 }

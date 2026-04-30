@@ -36,7 +36,7 @@ impl OmlxProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "omlx".to_string(),
-            }
+            },
         );
         Self {
             config,

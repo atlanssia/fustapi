@@ -38,7 +38,7 @@ impl DeepSeekProvider {
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: config.api_key.clone(),
-            }
+            },
         );
         Self {
             config,

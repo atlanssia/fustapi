@@ -81,20 +81,16 @@ enum RoutesCommand {
     },
 }
 
-
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let data_dir = cli
-        .data_dir
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("could not determine home directory")
-                .join(".fustapi")
-        });
+    let data_dir = cli.data_dir.unwrap_or_else(|| {
+        dirs::home_dir()
+            .expect("could not determine home directory")
+            .join(".fustapi")
+    });
 
     match cli.command {
         Commands::Serve { host, port } => {
@@ -177,11 +173,13 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
             endpoint,
             api_key,
         } => {
-            let mut config = fustapi::config::load_from_db(&db_path).unwrap_or_else(|_| {
-                fustapi::config::default_config()
-            });
+            let mut config = fustapi::config::load_from_db(&db_path)
+                .unwrap_or_else(|_| fustapi::config::default_config());
             if config.providers.contains_key(&name) {
-                eprintln!("Provider '{}' already exists. Use the Web UI to update.", name);
+                eprintln!(
+                    "Provider '{}' already exists. Use the Web UI to update.",
+                    name
+                );
                 std::process::exit(1);
             }
             config.providers.insert(
@@ -227,9 +225,8 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
                 eprintln!("At least one provider is required.");
                 std::process::exit(1);
             }
-            let mut config = fustapi::config::load_from_db(&db_path).unwrap_or_else(|_| {
-                fustapi::config::default_config()
-            });
+            let mut config = fustapi::config::load_from_db(&db_path)
+                .unwrap_or_else(|_| fustapi::config::default_config());
             config.router.insert(model.clone(), providers);
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {
                 eprintln!("Failed to save: {e}");
