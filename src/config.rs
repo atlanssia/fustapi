@@ -285,8 +285,15 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
 /// Save current in-memory config back to SQLite database.
 pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError> {
     use db::{init_db, upsert_provider, upsert_route};
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(ConfigError::IoError)?;
+    }
     let mut conn = init_db(db_path).map_err(ConfigError::DbError)?;
     let tx = conn.transaction().map_err(ConfigError::DbError)?;
+    tx.execute("DELETE FROM routes", [])
+        .map_err(ConfigError::DbError)?;
+    tx.execute("DELETE FROM providers", [])
+        .map_err(ConfigError::DbError)?;
     for (id, cfg) in &config.providers {
         let rec = db::ProviderRecord {
             id: id.clone(),
@@ -417,6 +424,50 @@ mod tests {
         let cfg = load_from_db(&db_path).expect("load_from_db failed");
         assert!(!cfg.providers.is_empty());
         assert!(!cfg.router.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_to_db_replaces_stale_rows() {
+        let dir = std::env::temp_dir().join("fustapi_test_replace_stale_rows");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("test.db");
+
+        let mut first = default_config();
+        first.providers.insert(
+            "old-provider".into(),
+            ProviderConfig {
+                endpoint: "http://old".into(),
+                api_key: None,
+                r#type: "omlx".into(),
+            },
+        );
+        first
+            .router
+            .insert("old-model".into(), vec!["old-provider".into()]);
+        save_to_db(&first, &db_path).expect("first save should work");
+
+        let mut second = default_config();
+        second.providers.insert(
+            "new-provider".into(),
+            ProviderConfig {
+                endpoint: "http://new".into(),
+                api_key: None,
+                r#type: "openai".into(),
+            },
+        );
+        second
+            .router
+            .insert("new-model".into(), vec!["new-provider".into()]);
+        save_to_db(&second, &db_path).expect("second save should work");
+
+        let loaded = load_from_db(&db_path).expect("load should work");
+        assert!(loaded.providers.contains_key("new-provider"));
+        assert!(!loaded.providers.contains_key("old-provider"));
+        assert!(loaded.router.contains_key("new-model"));
+        assert!(!loaded.router.contains_key("old-model"));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

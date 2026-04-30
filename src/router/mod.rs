@@ -8,6 +8,8 @@ use crate::config;
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::{LLMStream, StreamError};
 
+pub type RouterStore = std::sync::Arc<arc_swap::ArcSwap<RealRouter>>;
+
 /// Error type for router operations.
 #[derive(Debug)]
 pub enum RouterError {
@@ -39,7 +41,9 @@ impl From<ProviderError> for RouterError {
             ProviderError::Request(msg) => RouterError::ProviderError(msg),
             ProviderError::Internal(msg) => RouterError::Internal(msg),
             ProviderError::Stream(msg) => RouterError::ProviderError(msg),
-            ProviderError::Capability(_) | ProviderError::Api(_) => RouterError::Internal("provider error".to_string()),
+            ProviderError::Capability(_) | ProviderError::Api(_) => {
+                RouterError::Internal("provider error".to_string())
+            }
         }
     }
 }
@@ -98,12 +102,56 @@ impl RealRouter {
     /// Get the provider instance for a model name.
     fn get_provider_for_model(&self, model: &str) -> Option<&Box<dyn Provider>> {
         self.routes.get(model).and_then(|provider_names| {
-            provider_names.first().and_then(|name| self.providers.get(name))
+            provider_names
+                .first()
+                .and_then(|name| self.providers.get(name))
         })
     }
 }
 
-#[async_trait] impl Router for RealRouter { fn resolve(&self, model: &str) -> Result<String, RouterError> { if let Some(provider_names) = self.routes.get(model) { if let Some(first) = provider_names.first() { return Ok(first.clone()); } } Err(RouterError::ModelNotFound(model.to_string())) } fn list_models(&self) -> Vec<String> { self.routes.keys().cloned().collect() } fn list_providers(&self) -> Vec<String> { self.providers.keys().cloned().collect() } async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> { if let Some(provider) = self.get_provider_for_model(&request.model) { let stream = provider.chat_stream(request).await?; use tokio_stream::StreamExt; let s = stream.map(|chunk_result| match chunk_result { Ok(chunk) => Ok(chunk), Err(e) => Err(StreamError::Provider(e.to_string())) }); return Ok(Box::new(s) as LLMStream); } Err(RouterError::ModelNotFound(request.model)) } }
+#[async_trait]
+impl Router for RealRouter {
+    fn resolve(&self, model: &str) -> Result<String, RouterError> {
+        if let Some(provider_names) = self.routes.get(model) {
+            if let Some(first) = provider_names.first() {
+                return Ok(first.clone());
+            }
+        }
+        Err(RouterError::ModelNotFound(model.to_string()))
+    }
+    fn list_models(&self) -> Vec<String> {
+        self.routes.keys().cloned().collect()
+    }
+    fn list_providers(&self) -> Vec<String> {
+        self.providers.keys().cloned().collect()
+    }
+    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> {
+        if let Some(provider) = self.get_provider_for_model(&request.model) {
+            let stream = provider.chat_stream(request).await?;
+            use tokio_stream::StreamExt;
+            let s = stream.map(|chunk_result| match chunk_result {
+                Ok(chunk) => Ok(chunk),
+                Err(e) => Err(StreamError::Provider(e.to_string())),
+            });
+            return Ok(Box::pin(s) as LLMStream);
+        }
+        Err(RouterError::ModelNotFound(request.model))
+    }
+}
 
 /// Blanket impl for Arc<RealRouter>
-#[async_trait] impl Router for std::sync::Arc<RealRouter> { fn resolve(&self, model: &str) -> Result<String, RouterError> { (**self).resolve(model) } fn list_models(&self) -> Vec<String> { (**self).list_models() } fn list_providers(&self) -> Vec<String> { (**self).list_providers() } async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> { (**self).chat_stream(request).await } }
+#[async_trait]
+impl Router for std::sync::Arc<RealRouter> {
+    fn resolve(&self, model: &str) -> Result<String, RouterError> {
+        (**self).resolve(model)
+    }
+    fn list_models(&self) -> Vec<String> {
+        (**self).list_models()
+    }
+    fn list_providers(&self) -> Vec<String> {
+        (**self).list_providers()
+    }
+    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> {
+        (**self).chat_stream(request).await
+    }
+}

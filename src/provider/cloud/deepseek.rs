@@ -6,7 +6,6 @@ use async_trait::async_trait;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::LLMStream;
-use futures::stream;
 
 /// DeepSeek provider configuration.
 #[allow(dead_code)]
@@ -30,27 +29,28 @@ impl Default for DeepSeekConfig {
 #[derive(Debug, Clone)]
 pub struct DeepSeekProvider {
     config: DeepSeekConfig,
-    client: reqwest::Client,
+    openai_backend: crate::provider::cloud::openai::OpenAIProvider,
 }
 
 impl DeepSeekProvider {
     pub fn new(config: DeepSeekConfig) -> Self {
+        let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
+                endpoint: config.endpoint.clone(),
+                api_key: config.api_key.clone(),
+            }
+        );
         Self {
             config,
-            client: reqwest::Client::new(),
+            openai_backend,
         }
     }
 }
 
 #[async_trait]
 impl Provider for DeepSeekProvider {
-    async fn chat_stream(&self, _request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
-        let s = stream::iter(vec![Ok(crate::streaming::LLMChunk {
-            content: Some("deepseek response".to_string()),
-            tool_call: None,
-            done: false,
-        })]);
-        Ok(Box::new(s) as LLMStream)
+    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
+        self.openai_backend.chat_stream(request).await
     }
     fn supports_tools(&self) -> bool {
         true

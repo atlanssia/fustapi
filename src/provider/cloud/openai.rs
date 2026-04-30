@@ -40,7 +40,7 @@ impl OpenAIProvider {
     }
 
     /// Build the OpenAI-compatible request body from a UnifiedRequest.
-    fn build_request_body(&self, request: &UnifiedRequest) -> serde_json::Value {
+    pub fn build_request_body(&self, request: &UnifiedRequest) -> serde_json::Value {
         let messages = request.messages.iter().map(|msg| {
             let mut m = serde_json::json!({ "role": msg.role });
 
@@ -107,7 +107,7 @@ impl OpenAIProvider {
     } 
 
     /// Parse a non-streaming response into LLMChunks. 
-    fn parse_response(response: &OpenAIChatResponse) -> Vec<LLMChunk> { 
+    pub fn parse_response(response: &OpenAIChatResponse) -> Vec<LLMChunk> { 
         let mut chunks = Vec::new(); 
 
         if let Some(choice) = response.choices.first() { 
@@ -131,53 +131,142 @@ impl OpenAIProvider {
 // Fields are deserialized from JSON but not all are read after parsing.
 #[allow(dead_code)]
 #[derive(Deserialize)]
-struct OpenAIChatResponse {
-    id: String,
-    object: String,
-    created: u64,
-    model: String,
-    choices: Vec<OpenAIChoice>,
-    usage: Option<OpenAIUsage>,
+pub struct OpenAIChatResponse {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<OpenAIChoice>,
+    pub usage: Option<OpenAIUsage>,
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
-struct OpenAIChoice {
-    index: usize,
-    message: OpenAIMessageOut,
-    finish_reason: Option<String>,
+pub struct OpenAIChoice {
+    pub index: usize,
+    pub message: OpenAIMessageOut,
+    pub finish_reason: Option<String>,
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
-struct OpenAIMessageOut {
-    role: String,
-    content: Option<String>,
-    tool_calls: Option<Vec<OpenAIToolCall>>,
+pub struct OpenAIMessageOut {
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<OpenAIToolCall>>,
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
-struct OpenAIToolCall {
-    id: String,
+pub struct OpenAIToolCall {
+    pub id: String,
     #[serde(rename = "type")]
-    kind: String,
-    function: OpenAIFunctionCall,
+    pub kind: String,
+    pub function: OpenAIFunctionCall,
 }
 
 #[derive(Deserialize)]
-struct OpenAIFunctionCall {
-    name: String,
-    arguments: String,
+pub struct OpenAIFunctionCall {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
-struct OpenAIUsage {
-    prompt_tokens: usize,
-    completion_tokens: usize,
-    total_tokens: usize,
+pub struct OpenAIUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub total_tokens: usize,
 }
+
+pub fn parse_openai_sse_stream(stream: impl futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static) -> LLMStream {
+    use futures::stream;
+    let buffer = String::new();
+    let tool_name: Option<String> = None;
+    let tool_args = String::new();
+
+    let s = stream::unfold((stream, buffer, tool_name, tool_args), |(mut stream, mut buffer, mut tool_name, mut tool_args)| async move {
+        loop {
+            if let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim().to_string();
+                buffer.drain(..=pos);
+                
+                if line.starts_with("data:") && line.len() > 5 {
+                    let data = line[5..].trim();
+                    if data == "[DONE]" || data == " [DONE]" || data == "[DONE] " {
+                        if let Some(name) = tool_name.take() {
+                            let args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
+                            let tc = crate::capability::ToolCall { name, arguments: args };
+                            return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: Some(tc), done: true }), (stream, buffer, tool_name, tool_args)));
+                        }
+                        return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: None, done: true }), (stream, buffer, tool_name, tool_args)));
+                    }
+                    if !data.is_empty() {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(choices) = v.get("choices") {
+                                if let Some(choice) = choices.get(0) {
+                                    if let Some(delta) = choice.get("delta") {
+                                        let content_str = delta.get("content").or_else(|| delta.get("reasoning_content")).and_then(|c| c.as_str());
+                                        if let Some(content) = content_str {
+                                            if !content.is_empty() {
+                                                return Some((Ok(crate::streaming::LLMChunk { content: Some(content.to_string()), tool_call: None, done: false }), (stream, buffer, tool_name, tool_args)));
+                                            }
+                                        }
+                                        if let Some(tool_calls) = delta.get("tool_calls") {
+                                            if let Some(tc) = tool_calls.get(0) {
+                                                if let Some(func) = tc.get("function") {
+                                                    let new_name = func.get("name").and_then(|n| n.as_str());
+                                                    let new_args = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
+                                                    
+                                                    if let Some(name) = new_name {
+                                                        let mut flush_tc = None;
+                                                        if let Some(old_name) = tool_name.take() {
+                                                            let parsed_args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
+                                                            flush_tc = Some(crate::capability::ToolCall { name: old_name, arguments: parsed_args });
+                                                        }
+                                                        tool_name = Some(name.to_string());
+                                                        tool_args = new_args.to_string();
+                                                        
+                                                        if flush_tc.is_some() {
+                                                            return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: flush_tc, done: false }), (stream, buffer, tool_name, tool_args)));
+                                                        }
+                                                    } else {
+                                                        tool_args.push_str(new_args);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            match stream.next().await {
+                Some(Ok(bytes)) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    buffer.push_str(&text);
+                }
+                Some(Err(e)) => {
+                    return Some((Err(crate::streaming::StreamError::Provider(e.to_string())), (stream, buffer, tool_name, tool_args)));
+                }
+                None => {
+                    if let Some(name) = tool_name.take() {
+                        let args = serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
+                        let tc = crate::capability::ToolCall { name, arguments: args };
+                        return Some((Ok(crate::streaming::LLMChunk { content: None, tool_call: Some(tc), done: true }), (stream, buffer, tool_name, tool_args)));
+                    }
+                    return None;
+                }
+            }
+        }
+    });
+    Box::pin(s) as LLMStream
+}
+
 
 #[async_trait]
 impl Provider for OpenAIProvider {
@@ -202,67 +291,7 @@ impl Provider for OpenAIProvider {
                 return Err(ProviderError::Request(format!("provider error {}: {}", status, err_text)));
             }
 
-            let stream = resp.bytes_stream();
-            let s = stream.map(move |chunk_result| match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let lines = text.split('\n');
-
-                    for line in lines {
-                        if line.starts_with("data:") && line.len() > 5 {
-                            let data = line[5..].trim();
-
-                            if data == "[DONE]" || data == " [DONE]" || data == "[DONE] " {
-                                return Ok(LLMChunk { content: None, tool_call: None, done: true });
-                            }
-
-                            if !data.is_empty() {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                                    if let Some(choices) = v.get("choices") {
-                                        if let Some(choice) = choices.get(0) {
-                                            if let Some(delta) = choice.get("delta") {
-                                                // Extract content from either "content" (standard OpenAI)
-                                                // or "reasoning_content" (used by some models like Qwen)
-                                                let content_str = delta.get("content")
-                                                    .or_else(|| delta.get("reasoning_content"))
-                                                    .and_then(|c| c.as_str());
-
-                                                if let Some(content) = content_str {
-                                                    if !content.is_empty() {
-                                                        return Ok(LLMChunk { content: Some(content.to_string()), tool_call: None, done: false });
-                                                    }
-                                                }
-
-                                                if let Some(tool_calls) = delta.get("tool_calls") {
-                                                    if let Some(tc) = tool_calls.get(0) {
-                                                        if let Some(func) = tc.get("function") {
-                                                            if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                                                if !name.is_empty() {
-                                                                    let args = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
-                                                                    return Ok(LLMChunk { content: None, tool_call: Some(crate::capability::ToolCall { name: name.to_string(), arguments: serde_json::from_str(args).unwrap_or_default() }), done: false });
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Empty delta or unrecognized event — continue streaming, don't terminate
-                                return Ok(LLMChunk { content: None, tool_call: None, done: false });
-                            }
-                        }
-                    }
-
-                    // More bytes may be coming — don't terminate the stream yet
-                    Ok(LLMChunk { content: None, tool_call: None, done: false })
-                }
-                Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
-            });
-
-            Ok(Box::new(s) as LLMStream)
+            Ok(parse_openai_sse_stream(resp.bytes_stream()))
         } else {
             let resp_body = builder.send().await.map_err(|e| ProviderError::Connection(e.to_string()))?;
 
@@ -278,7 +307,7 @@ impl Provider for OpenAIProvider {
 
             let s = futures::stream::iter(chunks.into_iter().map(Ok));
 
-            Ok(Box::new(s) as LLMStream)
+            Ok(Box::pin(s) as LLMStream)
         }
     }
 

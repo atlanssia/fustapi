@@ -24,7 +24,7 @@ pub struct LLMChunk {
 
 /// Type alias for the standard LLM stream.
 /// Every provider adapter returns this type.
-pub type LLMStream = Box<dyn Stream<Item = Result<LLMChunk, StreamError>> + Send + Unpin>;
+pub type LLMStream = std::pin::Pin<Box<dyn Stream<Item = Result<LLMChunk, StreamError>> + Send>>;
 
 /// Errors that can occur during streaming.
 #[derive(Debug, thiserror::Error)]

@@ -381,6 +381,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "axum",
+ "bytes",
  "clap",
  "dirs",
  "futures",

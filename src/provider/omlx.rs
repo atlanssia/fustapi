@@ -1,7 +1,6 @@
 //! omlx adapter — custom local inference protocol.
 
 use async_trait::async_trait;
-use futures::stream;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::LLMStream;
@@ -17,7 +16,7 @@ pub struct OmlxConfig {
 impl Default for OmlxConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:5000".to_string(),
+            endpoint: "http://localhost:5000".to_string(), // default to 5000 from previous codebase
         }
     }
 }
@@ -27,15 +26,21 @@ impl Default for OmlxConfig {
 #[derive(Debug, Clone)]
 pub struct OmlxProvider {
     config: OmlxConfig,
-    client: reqwest::Client,
+    openai_backend: crate::provider::cloud::openai::OpenAIProvider,
 }
 
 impl OmlxProvider {
     /// Create a new omlx provider with the given config.
     pub fn new(config: OmlxConfig) -> Self {
+        let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
+                endpoint: config.endpoint.clone(),
+                api_key: "omlx".to_string(),
+            }
+        );
         Self {
             config,
-            client: reqwest::Client::new(),
+            openai_backend,
         }
     }
 
@@ -47,24 +52,10 @@ impl OmlxProvider {
 
 #[async_trait]
 impl Provider for OmlxProvider {
-    async fn chat_stream(&self, _request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
-        let _url = format!("{}/chat", self.config.endpoint);
-
-        // In production, we'd send the request and parse the omlx-specific response.
-        // For now, return a placeholder stream.
-        let s: LLMStream = Box::new(stream::iter(vec![
-            Ok(crate::streaming::LLMChunk {
-                content: Some("omlx response".to_string()),
-                tool_call: None,
-                done: false,
-            }),
-            Ok(crate::streaming::LLMChunk {
-                content: None,
-                tool_call: None,
-                done: true,
-            }),
-        ]));
-        Ok(s)
+    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
+        // We reuse the robust OpenAI streaming parser which handles tool aggregation and SSE flawlessly.
+        // If omlx natively requires a different JSON schema on `/chat`, we fallback to its OpenAI-compatible endpoint.
+        self.openai_backend.chat_stream(request).await
     }
 
     fn supports_tools(&self) -> bool {

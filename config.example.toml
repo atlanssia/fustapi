@@ -1,0 +1,71 @@
+# FustAPI Configuration Example
+#
+# This file is a template for FustAPI's configuration.
+# Copy it to your config directory:
+#   macOS/Linux:  ~/.fustapi/config.toml
+#   Windows:      %APPDATA%\fustapi\config.toml
+#
+# Or run: fustapi config init
+#
+# Security: protect file permissions
+#   chmod 600 ~/.fustapi/config.toml
+
+# ─────────────────────────────────────────────
+# Server Settings
+# ─────────────────────────────────────────────
+[server]
+# Bind address (127.0.0.1 for local only, 0.0.0.0 for all interfaces)
+host = "127.0.0.1"
+
+# Port number (1-65535)
+port = 8080
+
+# ─────────────────────────────────────────────
+# Router Mapping
+#
+# Maps model names to provider backends in priority order.
+# - Model names are matched by exact string match
+# - Provider lists are ordered by priority (first = preferred)
+# - If the primary provider fails, FustAPI falls through to the next
+# ─────────────────────────────────────────────
+[router]
+# Local providers (priority order)
+"gpt-4" = ["omlx", "lmstudio"]
+"claude-3" = ["sglang"]
+
+# Cloud fallback chains
+"deepseek-chat" = ["deepseek", "openai"]
+
+# ─────────────────────────────────────────────
+# Provider Configuration
+#
+# Each provider section defines connection details:
+#   endpoint  (required) — Provider API endpoint URL
+#   api_key   (optional) — API key for cloud providers
+# ─────────────────────────────────────────────
+
+# ── Local Providers ──
+
+[providers.omlx]
+# omlx — High-performance local inference
+endpoint = "http://localhost:11434"
+
+[providers.lmstudio]
+# LM Studio — OpenAI-compatible local backend
+endpoint = "http://localhost:1234"
+
+[providers.sglang]
+# SGLang — High-performance local streaming
+endpoint = "http://localhost:30000"
+
+# ── Cloud Providers (Fallback) ──
+
+[providers.deepseek]
+# DeepSeek API — requires API key
+endpoint = "https://api.deepseek.com"
+api_key = "sk-your-deepseek-api-key-here"
+
+[providers.openai]
+# OpenAI API — requires API key
+endpoint = "https://api.openai.com"
+api_key = "sk-your-openai-api-key-here"
