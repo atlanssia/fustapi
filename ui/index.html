@@ -1,1117 +1,1387 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FustAPI Control Plane</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-
-:root {
-  color-scheme: dark;
-  --bg: #020617;
-  --surface: #0F172A;
-  --surface-muted: #1A1E2F;
-  --surface-strong: #1E293B;
-  --border: #334155;
-  --border-strong: #475569;
-  --text: #F8FAFC;
-  --muted: #94a3b8;
-  --primary: #22C55E;
-  --primary-strong: #16a34a;
-  --primary-soft: rgba(34, 197, 94, 0.15);
-  --success: #22C55E;
-  --success-soft: rgba(34, 197, 94, 0.15);
-  --warning: #eab308;
-  --warning-soft: rgba(234, 179, 8, 0.15);
-  --danger: #EF4444;
-  --danger-soft: rgba(239, 68, 68, 0.15);
-  --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
-  --radius: 8px;
-  --font-heading: 'Fira Code', monospace;
-  --font-body: 'Fira Sans', sans-serif;
-}
-
-* { box-sizing: border-box; }
-html { min-width: 320px; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.5 var(--font-body);
-}
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading);
-}
-body.modal-open { overflow: hidden; }
-button, input, select {
-  font: inherit;
-  cursor: pointer;
-}
-input[type="text"], input[type="password"], input[type="url"], input[type="number"], input[type="email"] {
-  cursor: text;
-}
-button {
-  min-height: 44px;
-  border: 0;
-  cursor: pointer;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.skip-link {
-  position: absolute;
-  left: 1rem;
-  top: -4rem;
-  z-index: 1000;
-  padding: 0.65rem 0.9rem;
-  background: var(--text);
-  color: #fff;
-  border-radius: 6px;
-}
-.skip-link:focus { top: 1rem; }
-.shell {
-  min-height: 100dvh;
-  display: grid;
-  grid-template-rows: auto 1fr;
-}
-.topbar {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 1rem clamp(1rem, 3vw, 2rem);
-}
-.topbar-inner {
-  max-width: 1180px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-.brand h1 {
-  margin: 0;
-  font-size: clamp(1.25rem, 2.2vw, 1.65rem);
-  line-height: 1.2;
-  letter-spacing: 0;
-}
-.brand p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 0.93rem;
-}
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-.status-pill, .badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 32px;
-  padding: 0.28rem 0.65rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  background: var(--surface);
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-.status-pill.ok, .badge.ok { color: var(--success); background: var(--success-soft); border-color: var(--success); }
-.status-pill.err, .badge.err { color: var(--danger); background: var(--danger-soft); border-color: var(--danger); }
-.badge.warn { color: var(--warning); background: var(--warning-soft); border-color: var(--warning); }
-.badge.type { color: var(--primary); background: var(--primary-soft); border-color: var(--primary); }
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: currentColor;
-  flex: 0 0 auto;
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  border-radius: 7px;
-  padding: 0.55rem 0.8rem;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  color: var(--text);
-  font-weight: 700;
-  text-decoration: none;
-  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
-}
-.btn:hover { background: var(--surface-muted); }
-.btn:active { transform: translateY(1px); }
-.btn.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-.btn.primary:hover { background: var(--primary-strong); }
-.btn.danger {
-  background: var(--danger-soft);
-  border-color: var(--danger);
-  color: var(--danger);
-}
-.btn.ghost {
-  border-color: transparent;
-  background: transparent;
-  color: var(--muted);
-}
-.btn.small {
-  min-height: 36px;
-  padding: 0.35rem 0.55rem;
-  font-size: 0.86rem;
-}
-.layout {
-  width: min(1180px, 100%);
-  margin: 0 auto;
-  padding: 1rem clamp(1rem, 3vw, 2rem) 2rem;
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  gap: 1rem;
-}
-.sidebar {
-  position: sticky;
-  top: 1rem;
-  align-self: start;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.55rem;
-}
-.tabs {
-  display: grid;
-  gap: 0.25rem;
-}
-.tab {
-  width: 100%;
-  justify-content: flex-start;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--muted);
-}
-.tab[aria-selected="true"] {
-  background: var(--primary-soft);
-  border-color: var(--primary);
-  color: var(--primary);
-}
-main {
-  min-width: 0;
-}
-.panel { display: none; }
-.panel.active { display: block; }
-.panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-.panel-title h2 {
-  margin: 0;
-  font-size: 1.35rem;
-  letter-spacing: 0;
-}
-.panel-title p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-}
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.8rem;
-  margin-bottom: 1rem;
-}
-.metric, .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.metric {
-  padding: 0.9rem;
-}
-.metric span {
-  color: var(--muted);
-  display: block;
-  font-size: 0.85rem;
-}
-.metric strong {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 1.85rem;
-  line-height: 1.15;
-}
-.card {
-  overflow: hidden;
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1rem;
-  border-bottom: 1px solid var(--border);
-}
-.card-head h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-.state {
-  padding: 2rem 1rem;
-  color: var(--muted);
-  text-align: center;
-}
-.state strong {
-  display: block;
-  color: var(--text);
-  margin-bottom: 0.25rem;
-}
-.table-wrap {
-  overflow-x: auto;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-caption {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-}
-th, td {
-  text-align: left;
-  padding: 0.8rem 1rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-th {
-  color: var(--muted);
-  background: var(--surface-muted);
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-td {
-  font-size: 0.92rem;
-}
-tr:last-child td { border-bottom: 0; }
-.endpoint {
-  max-width: 340px;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-}
-.actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.45rem;
-  flex-wrap: wrap;
-}
-.mobile-list { display: none; }
-.record {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border);
-}
-.record:last-child { border-bottom: 0; }
-.record h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-.record dl {
-  display: grid;
-  gap: 0.3rem;
-  margin: 0.7rem 0;
-}
-.record dl > div {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 0.5rem;
-}
-.record dt {
-  color: var(--muted);
-  font-weight: 700;
-}
-.record dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: rgba(0, 0, 0, 0.75);
-}
-.modal-overlay.active { display: flex; }
-.modal {
-  width: min(560px, 100%);
-  max-height: min(780px, calc(100dvh - 2rem));
-  overflow: auto;
-  background: var(--surface);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
-}
-.modal.compact { width: min(460px, 100%); }
-.modal-header, .modal-footer {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
-.modal-footer {
-  border-top: 1px solid var(--border);
-  border-bottom: 0;
-  justify-content: flex-end;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.modal-header h2 {
-  margin: 0;
-  font-size: 1.15rem;
-}
-.modal-header p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-}
-.modal-body {
-  padding: 1rem;
-}
-.form-grid {
-  display: grid;
-  gap: 0.9rem;
-}
-.form-field {
-  display: grid;
-  gap: 0.35rem;
-}
-.form-field label {
-  font-weight: 720;
-}
-.help, .error {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.86rem;
-}
-.error {
-  color: var(--danger);
-}
-input, select {
-  width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  padding: 0.55rem 0.65rem;
-  background: var(--surface-muted);
-  color: var(--text);
-}
-input[aria-invalid="true"], select[aria-invalid="true"] {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-.provider-picker {
-  display: grid;
-  gap: 0.55rem;
-  max-height: 220px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.65rem;
-  background: var(--surface-muted);
-}
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  min-height: 44px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 0.4rem 0.55rem;
-}
-.check-row input {
-  width: 20px;
-  min-height: 20px;
-  height: 20px;
-}
-.order-list {
-  display: grid;
-  gap: 0.45rem;
-  margin-top: 0.5rem;
-}
-.order-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.45rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-.toast-region {
-  position: fixed;
-  right: 1rem;
-  bottom: 1.5rem;
-  z-index: 200;
-  display: grid;
-  gap: 0.5rem;
-  width: min(360px, calc(100vw - 2rem));
-}
-.toast {
-  background: var(--surface-strong);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 0.8rem 0.9rem;
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
-}
-.toast.success { background: var(--success-soft); color: var(--success); border-color: var(--success); }
-.toast.error { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
-.toast.warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning); }
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-.api-reference-card {
-  margin-bottom: 1.5rem;
-  padding: 1.25rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  position: relative;
-  overflow: hidden;
-}
-.api-header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-.api-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: var(--surface-strong);
-  font-size: 1.5rem;
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-}
-.api-header h3 {
-  margin: 0;
-  font-size: 1.15rem;
-  font-family: var(--font-body);
-}
-.api-header p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-.api-header code {
-  font-family: var(--font-heading);
-  background: var(--surface-strong);
-  padding: 0.15rem 0.35rem;
-  border-radius: 4px;
-  color: var(--text);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.api-header code:hover {
-  border-color: var(--primary);
-  background: var(--primary-soft);
-}
-.api-endpoints {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 0.75rem;
-}
-.endpoint-card {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.75rem 1rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 200ms ease;
-  position: relative;
-  overflow: hidden;
-}
-.endpoint-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--primary);
-  box-shadow: 0 6px 15px rgba(34, 197, 94, 0.1);
-}
-.endpoint-card::after {
-  content: "Copy";
-  position: absolute;
-  right: 0.85rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--primary);
-  opacity: 0;
-  transform: translateX(10px);
-  transition: all 200ms ease;
-}
-.endpoint-card:hover::after {
-  opacity: 1;
-  transform: translateX(0);
-}
-.endpoint-card:hover .protocol {
-  opacity: 0;
-}
-.endpoint-card .method {
-  font-family: var(--font-heading);
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.2rem 0.4rem;
-  border-radius: 4px;
-}
-.endpoint-card .method.post {
-  color: #34d399;
-  background: rgba(52, 211, 153, 0.15);
-}
-.endpoint-card .method.get {
-  color: #60a5fa;
-  background: rgba(96, 165, 250, 0.15);
-}
-.endpoint-card .path {
-  font-family: var(--font-heading);
-  font-size: 0.85rem;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.endpoint-card .protocol {
-  margin-left: auto;
-  font-size: 0.65rem;
-  color: var(--muted);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  transition: opacity 200ms ease;
-  background: var(--bg);
-  padding: 0.2rem 0.5rem;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-}
-@media (max-width: 820px) {
-  .topbar-inner, .panel-header { align-items: stretch; flex-direction: column; }
-  .topbar-actions, .panel-header .btn { justify-content: stretch; }
-  .layout { grid-template-columns: 1fr; }
-  .sidebar { position: static; }
-  .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .tab { justify-content: center; }
-  .metrics { grid-template-columns: 1fr; }
-}
-@media (max-width: 640px) {
-  .desktop-table { display: none; }
-  .mobile-list { display: block; }
-  .record .actions { justify-content: flex-start; }
-  .modal-overlay { align-items: flex-end; padding: 0; }
-  .modal { max-height: 92dvh; border-radius: 8px 8px 0 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 1ms !important;
-    scroll-behavior: auto !important;
-    transition-duration: 1ms !important;
-  }
-}
-</style>
-</head>
-<body>
-<a class="skip-link" href="#main">Skip to main content</a>
-<div class="shell">
-  <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <h1>FustAPI Control Plane</h1>
-        <p>Manage local-first providers, priority routes, and gateway health.</p>
-      </div>
-      <div class="topbar-actions">
-        <span id="gateway-pill" class="status-pill" aria-live="polite"><span class="dot"></span>Checking gateway</span>
-      </div>
-    </div>
-  </header>
-
-  <div class="layout">
-    <nav class="sidebar" aria-label="Control plane sections">
-      <div class="tabs" role="tablist" aria-label="Control plane sections">
-        <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="true" aria-controls="providers-panel" data-tab="providers" tabindex="0">Providers</button>
-        <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false" aria-controls="routes-panel" data-tab="routes" tabindex="-1">Routes</button>
-        <button class="btn tab" type="button" role="tab" id="tab-health" aria-selected="false" aria-controls="health-panel" data-tab="health" tabindex="-1">Health</button>
-      </div>
-    </nav>
-
-    <main id="main" tabindex="-1">
-      <div class="api-reference-card">
-        <div class="api-header">
-           <div class="api-icon">
-             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-           </div>
-           <div>
-             <h3>API Endpoints</h3>
-             <p>Use these endpoints with OpenAI or Anthropic SDKs. Base URL: <code id="base-url-display" title="Click to copy">http://localhost:8000/v1</code></p>
-           </div>
-        </div>
-        <div class="api-endpoints">
-          <div class="endpoint-card" data-copy-path="/v1/chat/completions" title="Copy endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/v1/chat/completions</span>
-            <span class="protocol">OpenAI</span>
-          </div>
-          <div class="endpoint-card" data-copy-path="/v1/messages" title="Copy endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/v1/messages</span>
-            <span class="protocol">Anthropic</span>
-          </div>
-          <div class="endpoint-card" data-copy-path="/v1/models" title="Copy endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/v1/models</span>
-            <span class="protocol">OpenAI</span>
-          </div>
-        </div>
-      </div>
-
-      <section id="providers-panel" class="panel active" role="tabpanel" tabindex="0" aria-labelledby="tab-providers">
-        <div class="panel-header">
-          <div class="panel-title">
-            <h2>Providers</h2>
-            <p>Configure local and cloud backends. API keys are never shown in full.</p>
-          </div>
-          <button class="btn primary" type="button" id="add-provider-panel">Add provider</button>
-        </div>
-        <div class="metrics" aria-label="Provider summary">
-          <div class="metric"><span>Total providers</span><strong id="metric-providers">0</strong></div>
-          <div class="metric"><span>With API key</span><strong id="metric-keys">0</strong></div>
-          <div class="metric"><span>Local providers</span><strong id="metric-local">0</strong></div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h3>Configured providers</h3>
-            <button class="btn small" type="button" id="refresh-providers">Refresh</button>
-          </div>
-          <div id="providers-state" class="state" role="status" aria-live="polite">Loading providers</div>
-          <div id="providers-content" hidden>
-            <div class="table-wrap desktop-table">
-              <table>
-                <caption>Configured FustAPI providers</caption>
-                <thead>
-                  <tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Endpoint</th><th scope="col">API key</th><th scope="col">Actions</th></tr>
-                </thead>
-                <tbody id="providers-tbody"></tbody>
-              </table>
-            </div>
-            <div id="providers-mobile" class="mobile-list" aria-label="Configured providers"></div>
-          </div>
-        </div>
-      </section>
-
-      <section id="routes-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-routes" hidden aria-hidden="true">
-        <div class="panel-header">
-          <div class="panel-title">
-            <h2>Routes</h2>
-            <p>Map model names to ordered provider fallback chains.</p>
-          </div>
-          <button class="btn primary" type="button" id="add-route-panel">Add route</button>
-        </div>
-        <div class="metrics" aria-label="Route summary">
-          <div class="metric"><span>Model routes</span><strong id="metric-routes">0</strong></div>
-          <div class="metric"><span>Routed providers</span><strong id="metric-route-providers">0</strong></div>
-          <div class="metric"><span>Fallback routes</span><strong id="metric-fallbacks">0</strong></div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h3>Model routing</h3>
-            <button class="btn small" type="button" id="refresh-routes">Refresh</button>
-          </div>
-          <div id="routes-state" class="state" role="status" aria-live="polite">Loading routes</div>
-          <div id="routes-content" hidden>
-            <div class="table-wrap desktop-table">
-              <table>
-                <caption>Configured model routes</caption>
-                <thead>
-                  <tr><th scope="col">Model</th><th scope="col">Provider priority</th><th scope="col">Actions</th></tr>
-                </thead>
-                <tbody id="routes-tbody"></tbody>
-              </table>
-            </div>
-            <div id="routes-mobile" class="mobile-list" aria-label="Configured routes"></div>
-          </div>
-        </div>
-      </section>
-
-      <section id="health-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-health" hidden aria-hidden="true">
-        <div class="panel-header">
-          <div class="panel-title">
-            <h2>Health</h2>
-            <p>Gateway status only. Provider health requires a dedicated backend API.</p>
-          </div>
-          <button class="btn" type="button" id="refresh-health">Check health</button>
-        </div>
-        <div class="card">
-          <div class="card-head"><h3>Gateway</h3></div>
-          <div id="health-state" class="state" role="status" aria-live="polite">Health has not been checked yet.</div>
-        </div>
-      </section>
-    </main>
-  </div>
-</div>
-
-<div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-
-<div class="modal-overlay" id="provider-modal" aria-hidden="true">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title" aria-describedby="provider-modal-desc">
-    <form id="provider-form" novalidate>
-      <div class="modal-header">
-        <div>
-          <h2 id="provider-modal-title">Add provider</h2>
-          <p id="provider-modal-desc">Use a stable name. Routes reference provider names.</p>
-        </div>
-        <button class="btn ghost small" type="button" data-close-modal aria-label="Close provider dialog">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-grid">
-          <input type="hidden" id="provider-original-name" name="original_name">
-          <div class="form-field">
-            <label for="provider-name">Name</label>
-            <input id="provider-name" name="name" autocomplete="off" required>
-            <p class="error" id="provider-name-error"></p>
-          </div>
-          <div class="form-field">
-            <label for="provider-type">Type</label>
-            <select id="provider-type" name="provider_type" required>
-              <option value="">Select a type</option>
-              <option value="omlx">omlx</option>
-              <option value="lmstudio">LM Studio</option>
-              <option value="sglang">SGLang</option>
-              <option value="openai">OpenAI</option>
-              <option value="deepseek">DeepSeek</option>
-            </select>
-            <p class="error" id="provider-type-error"></p>
-          </div>
-          <div class="form-field">
-            <label for="provider-endpoint">Endpoint</label>
-            <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url" required placeholder="http://localhost:8000/v1">
-            <p class="help">Full API base path (e.g. including /v1 if required).</p>
-            <p class="error" id="provider-endpoint-error"></p>
-          </div>
-          <div class="form-field">
-            <label for="provider-api-key">API key</label>
-            <input id="provider-api-key" name="api_key" type="password" autocomplete="off" placeholder="Leave blank to keep the saved key">
-            <p class="help" id="provider-key-help">Saved keys are shown only as Configured or Not set.</p>
-            <p class="error" id="provider-api-key-error"></p>
-          </div>
-          <div class="form-field">
-            <label for="provider-upstream-model">Upstream Model</label>
-            <input id="provider-upstream-model" name="upstream_model" autocomplete="off" placeholder="Optional: map to a specific upstream model">
-            <p class="help">If set, all requests through this provider will use this model name.</p>
-          </div>
-          <label class="check-row" id="provider-clear-key-row" hidden>
-            <input type="checkbox" id="provider-clear-key" name="clear_api_key">
-            <span>Clear the saved API key</span>
-          </label>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" type="button" data-close-modal>Cancel</button>
-        <button class="btn primary" type="submit" id="provider-submit">Save provider</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div class="modal-overlay" id="route-modal" aria-hidden="true">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="route-modal-title" aria-describedby="route-modal-desc">
-    <form id="route-form" novalidate>
-      <div class="modal-header">
-        <div>
-          <h2 id="route-modal-title">Add route</h2>
-          <p id="route-modal-desc">Provider order is the fallback priority.</p>
-        </div>
-        <button class="btn ghost small" type="button" data-close-modal aria-label="Close route dialog">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-grid">
-          <input type="hidden" id="route-original-model" name="original_model">
-          <div class="form-field">
-            <label for="route-model">Model</label>
-            <input id="route-model" name="model" autocomplete="off" required placeholder="qwen2.5-coder">
-            <p class="error" id="route-model-error"></p>
-          </div>
-          <div class="form-field">
-            <label>Providers</label>
-            <div class="provider-picker" id="route-provider-picker"></div>
-            <p class="help">Select at least one provider. Use up and down to set priority.</p>
-            <p class="error" id="route-providers-error"></p>
-            <div class="order-list" id="route-order-list" aria-live="polite"></div>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" type="button" data-close-modal>Cancel</button>
-        <button class="btn primary" type="submit" id="route-submit">Save route</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div class="modal-overlay" id="confirm-modal" aria-hidden="true">
-  <div class="modal compact" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-desc">
-    <div class="modal-header">
-      <div>
-        <h2 id="confirm-title">Confirm action</h2>
-        <p id="confirm-desc">This action cannot be undone from the control plane.</p>
-      </div>
-      <button class="btn ghost small" type="button" data-close-modal aria-label="Close confirmation dialog">Close</button>
-    </div>
-    <div class="modal-body">
-      <p id="confirm-message"></p>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" type="button" data-close-modal>Cancel</button>
-      <button class="btn danger" type="button" id="confirm-action">Delete</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const state = {
-  providers: [],
-  models: [],
-  activeTab: "providers",
-  modal: null,
-  lastFocus: null,
-  routeProviders: [],
-  confirmAction: null,
-};
-
-const localProviderTypes = new Set(["omlx", "lmstudio", "sglang"]);
-const cloudProviderTypes = new Set(["openai", "deepseek"]);
-
-function byId(id) {
-  return document.getElementById(id);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;",
-  }[char]));
-}
-
-async function api(path, options = {}) {
-  const headers = { "Accept": "application/json", ...(options.headers || {}) };
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, { ...options, headers });
-  let payload = null;
-  const text = await response.text();
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch (_) {
-      payload = { message: text };
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FustAPI Control Plane</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #020617;
+      --surface: #0F172A;
+      --surface-muted: #1A1E2F;
+      --surface-strong: #1E293B;
+      --border: #334155;
+      --border-strong: #475569;
+      --text: #F8FAFC;
+      --muted: #94a3b8;
+      --primary: #22C55E;
+      --primary-strong: #16a34a;
+      --primary-soft: rgba(34, 197, 94, 0.15);
+      --success: #22C55E;
+      --success-soft: rgba(34, 197, 94, 0.15);
+      --warning: #eab308;
+      --warning-soft: rgba(234, 179, 8, 0.15);
+      --danger: #EF4444;
+      --danger-soft: rgba(239, 68, 68, 0.15);
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+      --radius: 8px;
+      --font-heading: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Liberation Mono', monospace;
+      --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
     }
-  }
-  if (!response.ok) {
-    throw new Error(payload?.message || `Request failed with status ${response.status}`);
-  }
-  return payload || {};
-}
 
-function showToast(message, type = "success") {
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  byId("toast-region").appendChild(toast);
-  window.setTimeout(() => toast.remove(), 4200);
-}
+    * {
+      box-sizing: border-box;
+    }
 
-function setStateText(id, text, hidden = false) {
-  const el = byId(id);
-  el.hidden = hidden;
-  el.textContent = text;
-}
+    html {
+      min-width: 320px;
+    }
 
-async function copyEndpoint(path) {
-  const url = window.location.origin + path;
-  try {
-    await navigator.clipboard.writeText(url);
-    showToast(`Copied ${url} to clipboard`);
-  } catch (err) {
-    showToast('Failed to copy', 'error');
-  }
-}
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 var(--font-body);
+    }
 
-async function copyBaseUrl() {
-  const url = window.location.origin + "/v1";
-  try {
-    await navigator.clipboard.writeText(url);
-    showToast(`Copied base URL to clipboard`);
-  } catch (err) {
-    showToast('Failed to copy', 'error');
-  }
-}
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      font-family: var(--font-heading);
+    }
 
-function setStateHtml(id, html, hidden = false) {
-  const el = byId(id);
-  el.hidden = hidden;
-  el.innerHTML = html;
-}
+    body.modal-open {
+      overflow: hidden;
+    }
 
-function setSubmitting(button, isSubmitting, label) {
-  button.disabled = isSubmitting;
-  if (isSubmitting) {
-    button.dataset.originalText = button.textContent;
-    button.textContent = label;
-  } else if (button.dataset.originalText) {
-    button.textContent = button.dataset.originalText;
-    delete button.dataset.originalText;
-  }
-}
+    button,
+    input,
+    select {
+      font: inherit;
+      cursor: pointer;
+    }
 
-function activateTab(tabName, updateHash = true) {
-  state.activeTab = tabName;
-  document.querySelectorAll("[role='tab']").forEach((tab) => {
-    const selected = tab.dataset.tab === tabName;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-  });
-  document.querySelectorAll("[role='tabpanel']").forEach((panel) => {
-    const active = panel.id === `${tabName}-panel`;
-    panel.classList.toggle("active", active);
-    panel.hidden = !active;
-    panel.setAttribute("aria-hidden", String(!active));
-  });
-  if (updateHash) history.replaceState(null, "", `#${tabName}`);
-  if (tabName === "health") fetchHealth();
-}
+    input[type="text"],
+    input[type="password"],
+    input[type="url"],
+    input[type="number"],
+    input[type="email"] {
+      cursor: text;
+    }
 
-function setupTabs() {
-  const tabs = [...document.querySelectorAll("[role='tab']")];
-  tabs.forEach((tab, index) => {
-    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
-    tab.addEventListener("keydown", (event) => {
-      if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      let nextIndex = index;
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
-      if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
-      if (event.key === "Home") nextIndex = 0;
-      if (event.key === "End") nextIndex = tabs.length - 1;
-      tabs[nextIndex].focus();
-      activateTab(tabs[nextIndex].dataset.tab);
-    });
-  });
-  const initial = location.hash.replace("#", "");
-  if (["providers", "routes", "health"].includes(initial)) activateTab(initial, false);
-}
+    button {
+      min-height: 44px;
+      border: 0;
+      cursor: pointer;
+    }
 
-function openModal(id) {
-  state.lastFocus = document.activeElement;
-  const overlay = byId(id);
-  state.modal = overlay;
-  overlay.classList.add("active");
-  overlay.setAttribute("aria-hidden", "false");
-  document.body.classList.add("modal-open");
-  const focusTarget = overlay.querySelector("input, select, button");
-  if (focusTarget) focusTarget.focus();
-}
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
 
-function closeModal() {
-  if (!state.modal) return;
-  state.modal.classList.remove("active");
-  state.modal.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("modal-open");
-  if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
-  state.modal = null;
-}
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
 
-function trapModalFocus(event) {
-  if (!state.modal || event.key !== "Tab") return;
-  const focusable = [...state.modal.querySelectorAll("button, input, select, [href], [tabindex]:not([tabindex='-1'])")]
-    .filter((el) => !el.disabled && el.offsetParent !== null);
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      z-index: 1000;
+      padding: 0.65rem 0.9rem;
+      background: var(--text);
+      color: #fff;
+      border-radius: 6px;
+    }
 
-function clearErrors(formId) {
-  const form = byId(formId);
-  form.querySelectorAll("[aria-invalid='true']").forEach((field) => field.removeAttribute("aria-invalid"));
-  form.querySelectorAll(".error").forEach((error) => { error.textContent = ""; });
-}
+    .skip-link:focus {
+      top: 1rem;
+    }
 
-function setFieldError(fieldId, message) {
-  const field = byId(fieldId);
-  const error = byId(`${fieldId}-error`);
-  field.setAttribute("aria-invalid", "true");
-  if (error) error.textContent = message;
-}
+    .shell {
+      min-height: 100dvh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
 
-async function fetchProviders() {
-  setStateText("providers-state", "Loading providers");
-  byId("providers-content").hidden = true;
-  try {
-    const data = await api("/api/providers");
-    state.providers = Array.isArray(data.providers) ? data.providers : [];
-    renderProviders();
-    renderRouteProviderPicker();
-  } catch (error) {
-    setStateHtml("providers-state", `<strong>Providers could not be loaded.</strong>${escapeHtml(error.message)}`);
-  }
-}
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem clamp(1rem, 3vw, 2rem);
+    }
 
-function renderProviders() {
-  const total = state.providers.length;
-  byId("metric-providers").textContent = total;
-  byId("metric-keys").textContent = state.providers.filter((p) => p.has_key).length;
-  byId("metric-local").textContent = state.providers.filter((p) => localProviderTypes.has(p.type)).length;
-  if (!total) {
-    byId("providers-content").hidden = true;
-    setStateHtml("providers-state", "<strong>No providers yet.</strong>Add a provider to make models routable.");
-    return;
-  }
-  setStateText("providers-state", "", true);
-  byId("providers-content").hidden = false;
-  byId("providers-tbody").innerHTML = state.providers.map((provider) => `
+    .topbar-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(1.25rem, 2.2vw, 1.65rem);
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 0.2rem 0 0;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .status-pill,
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      min-height: 32px;
+      padding: 0.28rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 0.82rem;
+      font-weight: 650;
+    }
+
+    .status-pill.ok,
+    .badge.ok {
+      color: var(--success);
+      background: var(--success-soft);
+      border-color: var(--success);
+    }
+
+    .status-pill.err,
+    .badge.err {
+      color: var(--danger);
+      background: var(--danger-soft);
+      border-color: var(--danger);
+    }
+
+    .badge.warn {
+      color: var(--warning);
+      background: var(--warning-soft);
+      border-color: var(--warning);
+    }
+
+    .badge.type {
+      color: var(--primary);
+      background: var(--primary-soft);
+      border-color: var(--primary);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+      flex: 0 0 auto;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      border-radius: 7px;
+      padding: 0.55rem 0.8rem;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
+      font-weight: 700;
+      text-decoration: none;
+      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
+    }
+
+    .btn:hover {
+      background: var(--surface-muted);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+
+    .btn.primary:hover {
+      background: var(--primary-strong);
+    }
+
+    .btn.danger {
+      background: var(--danger-soft);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .btn.ghost {
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .btn.small {
+      min-height: 36px;
+      padding: 0.35rem 0.55rem;
+      font-size: 0.86rem;
+    }
+
+    .layout {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 1rem clamp(1rem, 3vw, 2rem) 2rem;
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 1rem;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.55rem;
+    }
+
+    .tabs {
+      display: grid;
+      gap: 0.25rem;
+    }
+
+    .tab {
+      width: 100%;
+      justify-content: flex-start;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+    }
+
+    .tab[aria-selected="true"] {
+      background: var(--primary-soft);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    .panel {
+      display: none;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .panel-title h2 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0;
+    }
+
+    .panel-title p {
+      margin: 0.2rem 0 0;
+      color: var(--muted);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .metric,
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .metric {
+      padding: 0.9rem;
+    }
+
+    .metric span {
+      color: var(--muted);
+      display: block;
+      font-size: 0.85rem;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 0.2rem;
+      font-size: 1.85rem;
+      line-height: 1.15;
+    }
+
+    .card {
+      overflow: hidden;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-head h3 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .state {
+      padding: 2rem 1rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .state strong {
+      display: block;
+      color: var(--text);
+      margin-bottom: 0.25rem;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    caption {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 0.8rem 1rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      background: var(--surface-muted);
+      font-size: 0.82rem;
+      font-weight: 750;
+    }
+
+    td {
+      font-size: 0.92rem;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .endpoint {
+      max-width: 340px;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+    }
+
+    .mobile-list {
+      display: none;
+    }
+
+    .record {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .record:last-child {
+      border-bottom: 0;
+    }
+
+    .record h3 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .record dl {
+      display: grid;
+      gap: 0.3rem;
+      margin: 0.7rem 0;
+    }
+
+    .record dl>div {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 0.5rem;
+    }
+
+    .record dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .record dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: rgba(0, 0, 0, 0.75);
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal {
+      width: min(560px, 100%);
+      max-height: min(780px, calc(100dvh - 2rem));
+      overflow: auto;
+      background: var(--surface);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+    }
+
+    .modal.compact {
+      width: min(460px, 100%);
+    }
+
+    .modal-header,
+    .modal-footer {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .modal-footer {
+      border-top: 1px solid var(--border);
+      border-bottom: 0;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.15rem;
+    }
+
+    .modal-header p {
+      margin: 0.2rem 0 0;
+      color: var(--muted);
+    }
+
+    .modal-body {
+      padding: 1rem;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 0.9rem;
+    }
+
+    .form-field {
+      display: grid;
+      gap: 0.35rem;
+    }
+
+    .form-field label {
+      font-weight: 720;
+    }
+
+    .help,
+    .error {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      padding: 0.55rem 0.65rem;
+      background: var(--surface-muted);
+      color: var(--text);
+    }
+
+    input[aria-invalid="true"],
+    select[aria-invalid="true"] {
+      border-color: var(--danger);
+      background: var(--danger-soft);
+    }
+
+    .provider-picker {
+      display: grid;
+      gap: 0.55rem;
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem;
+      background: var(--surface-muted);
+    }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-height: 44px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.4rem 0.55rem;
+    }
+
+    .check-row input {
+      width: 20px;
+      min-height: 20px;
+      height: 20px;
+    }
+
+    .order-list {
+      display: grid;
+      gap: 0.45rem;
+      margin-top: 0.5rem;
+    }
+
+    .order-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+
+    .toast-region {
+      position: fixed;
+      right: 1rem;
+      bottom: 1.5rem;
+      z-index: 200;
+      display: grid;
+      gap: 0.5rem;
+      width: min(360px, calc(100vw - 2rem));
+    }
+
+    .toast {
+      background: var(--surface-strong);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.8rem 0.9rem;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+    }
+
+    .toast.success {
+      background: var(--success-soft);
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    .toast.error {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+
+    .toast.warning {
+      background: var(--warning-soft);
+      color: var(--warning);
+      border-color: var(--warning);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    .api-reference-card {
+      margin-bottom: 1.5rem;
+      padding: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .api-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .api-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: var(--surface-strong);
+      font-size: 1.5rem;
+      border: 1px solid var(--border-strong);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    .api-header h3 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-family: var(--font-body);
+    }
+
+    .api-header p {
+      margin: 0.2rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .api-header code {
+      font-family: var(--font-heading);
+      background: var(--surface-strong);
+      padding: 0.15rem 0.35rem;
+      border-radius: 4px;
+      color: var(--text);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+
+    .api-header code:hover {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .api-endpoints {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .endpoint-card {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.75rem 1rem;
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 200ms ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .endpoint-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--primary);
+      box-shadow: 0 6px 15px rgba(34, 197, 94, 0.1);
+    }
+
+    .endpoint-card::after {
+      content: "Copy";
+      position: absolute;
+      right: 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--primary);
+      opacity: 0;
+      transform: translateX(10px);
+      transition: all 200ms ease;
+    }
+
+    .endpoint-card:hover::after {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .endpoint-card:hover .protocol {
+      opacity: 0;
+    }
+
+    .endpoint-card .method {
+      font-family: var(--font-heading);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    .endpoint-card .method.post {
+      color: #34d399;
+      background: rgba(52, 211, 153, 0.15);
+    }
+
+    .endpoint-card .method.get {
+      color: #60a5fa;
+      background: rgba(96, 165, 250, 0.15);
+    }
+
+    .endpoint-card .path {
+      font-family: var(--font-heading);
+      font-size: 0.85rem;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .endpoint-card .protocol {
+      margin-left: auto;
+      font-size: 0.65rem;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      transition: opacity 200ms ease;
+      background: var(--bg);
+      padding: 0.2rem 0.5rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+
+    @media (max-width: 820px) {
+
+      .topbar-inner,
+      .panel-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .topbar-actions,
+      .panel-header .btn {
+        justify-content: stretch;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+      }
+
+      .tabs {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .tab {
+        justify-content: center;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .desktop-table {
+        display: none;
+      }
+
+      .mobile-list {
+        display: block;
+      }
+
+      .record .actions {
+        justify-content: flex-start;
+      }
+
+      .modal-overlay {
+        align-items: flex-end;
+        padding: 0;
+      }
+
+      .modal {
+        max-height: 92dvh;
+        border-radius: 8px 8px 0 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+
+      *,
+      *::before,
+      *::after {
+        animation-duration: 1ms !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <h1>FustAPI Control Plane</h1>
+          <p>Manage local-first providers, priority routes, and gateway health.</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="gateway-pill" class="status-pill" aria-live="polite"><span class="dot"></span>Checking
+            gateway</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Control plane sections">
+        <div class="tabs" role="tablist" aria-label="Control plane sections">
+          <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="true"
+            aria-controls="providers-panel" data-tab="providers" tabindex="0">Providers</button>
+          <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false"
+            aria-controls="routes-panel" data-tab="routes" tabindex="-1">Routes</button>
+          <button class="btn tab" type="button" role="tab" id="tab-health" aria-selected="false"
+            aria-controls="health-panel" data-tab="health" tabindex="-1">Health</button>
+        </div>
+      </nav>
+
+      <main id="main" tabindex="-1">
+        <div class="api-reference-card">
+          <div class="api-header">
+            <div class="api-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+              </svg>
+            </div>
+            <div>
+              <h3>API Endpoints</h3>
+              <p>Use these endpoints with OpenAI or Anthropic SDKs. Base URL: <code id="base-url-display"
+                  title="Click to copy">http://localhost:8000/v1</code></p>
+            </div>
+          </div>
+          <div class="api-endpoints">
+            <div class="endpoint-card" data-copy-path="/v1/chat/completions" title="Copy endpoint">
+              <span class="method post">POST</span>
+              <span class="path">/v1/chat/completions</span>
+              <span class="protocol">OpenAI</span>
+            </div>
+            <div class="endpoint-card" data-copy-path="/v1/messages" title="Copy endpoint">
+              <span class="method post">POST</span>
+              <span class="path">/v1/messages</span>
+              <span class="protocol">Anthropic</span>
+            </div>
+            <div class="endpoint-card" data-copy-path="/v1/models" title="Copy endpoint">
+              <span class="method get">GET</span>
+              <span class="path">/v1/models</span>
+              <span class="protocol">OpenAI</span>
+            </div>
+          </div>
+        </div>
+
+        <section id="providers-panel" class="panel active" role="tabpanel" tabindex="0" aria-labelledby="tab-providers">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Providers</h2>
+              <p>Configure local and cloud backends. API keys are never shown in full.</p>
+            </div>
+            <button class="btn primary" type="button" id="add-provider-panel">Add provider</button>
+          </div>
+          <div class="metrics" aria-label="Provider summary">
+            <div class="metric"><span>Total providers</span><strong id="metric-providers">0</strong></div>
+            <div class="metric"><span>With API key</span><strong id="metric-keys">0</strong></div>
+            <div class="metric"><span>Local providers</span><strong id="metric-local">0</strong></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Configured providers</h3>
+              <button class="btn small" type="button" id="refresh-providers">Refresh</button>
+            </div>
+            <div id="providers-state" class="state" role="status" aria-live="polite">Loading providers</div>
+            <div id="providers-content" hidden>
+              <div class="table-wrap desktop-table">
+                <table>
+                  <caption>Configured FustAPI providers</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Type</th>
+                      <th scope="col">Endpoint</th>
+                      <th scope="col">API key</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="providers-tbody"></tbody>
+                </table>
+              </div>
+              <div id="providers-mobile" class="mobile-list" aria-label="Configured providers"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="routes-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-routes" hidden
+          aria-hidden="true">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Routes</h2>
+              <p>Map model names to ordered provider fallback chains.</p>
+            </div>
+            <button class="btn primary" type="button" id="add-route-panel">Add route</button>
+          </div>
+          <div class="metrics" aria-label="Route summary">
+            <div class="metric"><span>Model routes</span><strong id="metric-routes">0</strong></div>
+            <div class="metric"><span>Routed providers</span><strong id="metric-route-providers">0</strong></div>
+            <div class="metric"><span>Fallback routes</span><strong id="metric-fallbacks">0</strong></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Model routing</h3>
+              <button class="btn small" type="button" id="refresh-routes">Refresh</button>
+            </div>
+            <div id="routes-state" class="state" role="status" aria-live="polite">Loading routes</div>
+            <div id="routes-content" hidden>
+              <div class="table-wrap desktop-table">
+                <table>
+                  <caption>Configured model routes</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Model</th>
+                      <th scope="col">Provider priority</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="routes-tbody"></tbody>
+                </table>
+              </div>
+              <div id="routes-mobile" class="mobile-list" aria-label="Configured routes"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="health-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-health" hidden
+          aria-hidden="true">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Health</h2>
+              <p>Gateway status only. Provider health requires a dedicated backend API.</p>
+            </div>
+            <button class="btn" type="button" id="refresh-health">Check health</button>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Gateway</h3>
+            </div>
+            <div id="health-state" class="state" role="status" aria-live="polite">Health has not been checked yet.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <div class="modal-overlay" id="provider-modal" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title"
+      aria-describedby="provider-modal-desc">
+      <form id="provider-form" novalidate>
+        <div class="modal-header">
+          <div>
+            <h2 id="provider-modal-title">Add provider</h2>
+            <p id="provider-modal-desc">Use a stable name. Routes reference provider names.</p>
+          </div>
+          <button class="btn ghost small" type="button" data-close-modal
+            aria-label="Close provider dialog">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <input type="hidden" id="provider-original-name" name="original_name">
+            <div class="form-field">
+              <label for="provider-name">Name</label>
+              <input id="provider-name" name="name" autocomplete="off" required>
+              <p class="error" id="provider-name-error"></p>
+            </div>
+            <div class="form-field">
+              <label for="provider-type">Type</label>
+              <select id="provider-type" name="provider_type" required>
+                <option value="">Select a type</option>
+                <option value="omlx">omlx</option>
+                <option value="lmstudio">LM Studio</option>
+                <option value="sglang">SGLang</option>
+                <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+              <p class="error" id="provider-type-error"></p>
+            </div>
+            <div class="form-field">
+              <label for="provider-endpoint">Endpoint</label>
+              <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url" required
+                placeholder="http://localhost:8000/v1">
+              <p class="help">Full API base path (e.g. including /v1 if required).</p>
+              <p class="error" id="provider-endpoint-error"></p>
+            </div>
+            <div class="form-field">
+              <label for="provider-api-key">API key</label>
+              <input id="provider-api-key" name="api_key" type="password" autocomplete="off"
+                placeholder="Leave blank to keep the saved key">
+              <p class="help" id="provider-key-help">Saved keys are shown only as Configured or Not set.</p>
+              <p class="error" id="provider-api-key-error"></p>
+            </div>
+            <div class="form-field">
+              <label for="provider-upstream-model">Upstream Model</label>
+              <input id="provider-upstream-model" name="upstream_model" autocomplete="off"
+                placeholder="Optional: map to a specific upstream model">
+              <p class="help">If set, all requests through this provider will use this model name.</p>
+            </div>
+            <label class="check-row" id="provider-clear-key-row" hidden>
+              <input type="checkbox" id="provider-clear-key" name="clear_api_key">
+              <span>Clear the saved API key</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" type="button" data-close-modal>Cancel</button>
+          <button class="btn primary" type="submit" id="provider-submit">Save provider</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="route-modal" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="route-modal-title"
+      aria-describedby="route-modal-desc">
+      <form id="route-form" novalidate>
+        <div class="modal-header">
+          <div>
+            <h2 id="route-modal-title">Add route</h2>
+            <p id="route-modal-desc">Provider order is the fallback priority.</p>
+          </div>
+          <button class="btn ghost small" type="button" data-close-modal aria-label="Close route dialog">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <input type="hidden" id="route-original-model" name="original_model">
+            <div class="form-field">
+              <label for="route-model">Model</label>
+              <input id="route-model" name="model" autocomplete="off" required placeholder="qwen2.5-coder">
+              <p class="error" id="route-model-error"></p>
+            </div>
+            <div class="form-field">
+              <label>Providers</label>
+              <div class="provider-picker" id="route-provider-picker"></div>
+              <p class="help">Select at least one provider. Use up and down to set priority.</p>
+              <p class="error" id="route-providers-error"></p>
+              <div class="order-list" id="route-order-list" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" type="button" data-close-modal>Cancel</button>
+          <button class="btn primary" type="submit" id="route-submit">Save route</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="confirm-modal" aria-hidden="true">
+    <div class="modal compact" role="dialog" aria-modal="true" aria-labelledby="confirm-title"
+      aria-describedby="confirm-desc">
+      <div class="modal-header">
+        <div>
+          <h2 id="confirm-title">Confirm action</h2>
+          <p id="confirm-desc">This action cannot be undone from the control plane.</p>
+        </div>
+        <button class="btn ghost small" type="button" data-close-modal
+          aria-label="Close confirmation dialog">Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-message"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" data-close-modal>Cancel</button>
+        <button class="btn danger" type="button" id="confirm-action">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      providers: [],
+      models: [],
+      activeTab: "providers",
+      modal: null,
+      lastFocus: null,
+      routeProviders: [],
+      confirmAction: null,
+    };
+
+    const localProviderTypes = new Set(["omlx", "lmstudio", "sglang"]);
+    const cloudProviderTypes = new Set(["openai", "deepseek"]);
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;",
+      }[char]));
+    }
+
+    async function api(path, options = {}) {
+      const headers = { "Accept": "application/json", ...(options.headers || {}) };
+      if (options.body !== undefined) headers["Content-Type"] = "application/json";
+      const response = await fetch(path, { ...options, headers });
+      let payload = null;
+      const text = await response.text();
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch (_) {
+          payload = { message: text };
+        }
+      }
+      if (!response.ok) {
+        throw new Error(payload?.message || `Request failed with status ${response.status}`);
+      }
+      return payload || {};
+    }
+
+    function showToast(message, type = "success") {
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      byId("toast-region").appendChild(toast);
+      window.setTimeout(() => toast.remove(), 4200);
+    }
+
+    function setStateText(id, text, hidden = false) {
+      const el = byId(id);
+      el.hidden = hidden;
+      el.textContent = text;
+    }
+
+    async function copyEndpoint(path) {
+      const url = window.location.origin + path;
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast(`Copied ${url} to clipboard`);
+      } catch (err) {
+        showToast('Failed to copy', 'error');
+      }
+    }
+
+    async function copyBaseUrl() {
+      const url = window.location.origin + "/v1";
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast(`Copied base URL to clipboard`);
+      } catch (err) {
+        showToast('Failed to copy', 'error');
+      }
+    }
+
+    function setStateHtml(id, html, hidden = false) {
+      const el = byId(id);
+      el.hidden = hidden;
+      el.innerHTML = html;
+    }
+
+    function setSubmitting(button, isSubmitting, label) {
+      button.disabled = isSubmitting;
+      if (isSubmitting) {
+        button.dataset.originalText = button.textContent;
+        button.textContent = label;
+      } else if (button.dataset.originalText) {
+        button.textContent = button.dataset.originalText;
+        delete button.dataset.originalText;
+      }
+    }
+
+    function activateTab(tabName, updateHash = true) {
+      state.activeTab = tabName;
+      document.querySelectorAll("[role='tab']").forEach((tab) => {
+        const selected = tab.dataset.tab === tabName;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll("[role='tabpanel']").forEach((panel) => {
+        const active = panel.id === `${tabName}-panel`;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+        panel.setAttribute("aria-hidden", String(!active));
+      });
+      if (updateHash) history.replaceState(null, "", `#${tabName}`);
+      if (tabName === "health") fetchHealth();
+    }
+
+    function setupTabs() {
+      const tabs = [...document.querySelectorAll("[role='tab']")];
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+        tab.addEventListener("keydown", (event) => {
+          if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          let nextIndex = index;
+          if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
+          if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
+          if (event.key === "Home") nextIndex = 0;
+          if (event.key === "End") nextIndex = tabs.length - 1;
+          tabs[nextIndex].focus();
+          activateTab(tabs[nextIndex].dataset.tab);
+        });
+      });
+      const initial = location.hash.replace("#", "");
+      if (["providers", "routes", "health"].includes(initial)) activateTab(initial, false);
+    }
+
+    function openModal(id) {
+      state.lastFocus = document.activeElement;
+      const overlay = byId(id);
+      state.modal = overlay;
+      overlay.classList.add("active");
+      overlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("modal-open");
+      const focusTarget = overlay.querySelector("input, select, button");
+      if (focusTarget) focusTarget.focus();
+    }
+
+    function closeModal() {
+      if (!state.modal) return;
+      state.modal.classList.remove("active");
+      state.modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("modal-open");
+      if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
+      state.modal = null;
+    }
+
+    function trapModalFocus(event) {
+      if (!state.modal || event.key !== "Tab") return;
+      const focusable = [...state.modal.querySelectorAll("button, input, select, [href], [tabindex]:not([tabindex='-1'])")]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function clearErrors(formId) {
+      const form = byId(formId);
+      form.querySelectorAll("[aria-invalid='true']").forEach((field) => field.removeAttribute("aria-invalid"));
+      form.querySelectorAll(".error").forEach((error) => { error.textContent = ""; });
+    }
+
+    function setFieldError(fieldId, message) {
+      const field = byId(fieldId);
+      const error = byId(`${fieldId}-error`);
+      field.setAttribute("aria-invalid", "true");
+      if (error) error.textContent = message;
+    }
+
+    async function fetchProviders() {
+      setStateText("providers-state", "Loading providers");
+      byId("providers-content").hidden = true;
+      try {
+        const data = await api("/api/providers");
+        state.providers = Array.isArray(data.providers) ? data.providers : [];
+        renderProviders();
+        renderRouteProviderPicker();
+      } catch (error) {
+        setStateHtml("providers-state", `<strong>Providers could not be loaded.</strong>${escapeHtml(error.message)}`);
+      }
+    }
+
+    function renderProviders() {
+      const total = state.providers.length;
+      byId("metric-providers").textContent = total;
+      byId("metric-keys").textContent = state.providers.filter((p) => p.has_key).length;
+      byId("metric-local").textContent = state.providers.filter((p) => localProviderTypes.has(p.type)).length;
+      if (!total) {
+        byId("providers-content").hidden = true;
+        setStateHtml("providers-state", "<strong>No providers yet.</strong>Add a provider to make models routable.");
+        return;
+      }
+      setStateText("providers-state", "", true);
+      byId("providers-content").hidden = false;
+      byId("providers-tbody").innerHTML = state.providers.map((provider) => `
     <tr>
       <td><strong>${escapeHtml(provider.name)}</strong></td>
       <td><span class="badge type">${escapeHtml(provider.type || "openai")}</span></td>
@@ -1126,7 +1396,7 @@ function renderProviders() {
       </div></td>
     </tr>
   `).join("");
-  byId("providers-mobile").innerHTML = state.providers.map((provider) => `
+      byId("providers-mobile").innerHTML = state.providers.map((provider) => `
     <article class="record">
       <h3>${escapeHtml(provider.name)}</h3>
       <dl>
@@ -1141,156 +1411,156 @@ function renderProviders() {
       </div>
     </article>
   `).join("");
-  bindProviderActions();
-}
-
-function bindProviderActions() {
-  document.querySelectorAll("[data-provider-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const name = button.dataset.providerName || "";
-      if (button.dataset.providerAction === "edit") openProviderModal(name);
-      if (button.dataset.providerAction === "delete") confirmDeleteProvider(name);
-    });
-  });
-}
-
-function openProviderModal(name = "") {
-  clearErrors("provider-form");
-  const provider = state.providers.find((item) => item.name === name);
-  byId("provider-modal-title").textContent = provider ? "Edit provider" : "Add provider";
-  byId("provider-submit").textContent = provider ? "Update provider" : "Create provider";
-  byId("provider-original-name").value = provider?.name || "";
-  byId("provider-name").value = provider?.name || "";
-  byId("provider-type").value = provider?.type || "";
-  byId("provider-endpoint").value = provider?.endpoint || "";
-  byId("provider-upstream-model").value = provider?.upstream_model || "";
-  byId("provider-api-key").value = "";
-  byId("provider-api-key").placeholder = provider?.has_key ? "Leave blank to keep configured key" : "Optional key";
-  byId("provider-clear-key").checked = false;
-  byId("provider-clear-key-row").hidden = !provider?.has_key;
-  openModal("provider-modal");
-}
-
-function validateProviderForm() {
-  clearErrors("provider-form");
-  const name = byId("provider-name").value.trim();
-  const type = byId("provider-type").value;
-  const endpoint = byId("provider-endpoint").value.trim();
-  const upstreamModel = byId("provider-upstream-model").value.trim();
-  let valid = true;
-  if (!name) {
-    setFieldError("provider-name", "Enter a provider name.");
-    valid = false;
-  }
-  if (!type) {
-    setFieldError("provider-type", "Select a provider type.");
-    valid = false;
-  }
-  try {
-    const url = new URL(endpoint);
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid protocol");
-  } catch (_) {
-    setFieldError("provider-endpoint", "Enter a valid http or https endpoint.");
-    valid = false;
-  }
-  if (!valid) {
-    const firstInvalid = byId("provider-form").querySelector("[aria-invalid='true']");
-    if (firstInvalid) firstInvalid.focus();
-    return null;
-  }
-  return { name, type, endpoint, upstreamModel };
-}
-
-async function submitProvider(event) {
-  event.preventDefault();
-  const values = validateProviderForm();
-  if (!values) return;
-  const originalName = byId("provider-original-name").value;
-  const existing = state.providers.find((item) => item.name === originalName);
-  const apiKeyInput = byId("provider-api-key").value;
-  const clearApiKey = byId("provider-clear-key").checked;
-  const body = {
-    name: values.name,
-    endpoint: values.endpoint,
-    provider_type: values.type,
-    upstream_model: values.upstreamModel,
-  };
-  if (clearApiKey) {
-    body.api_key = "";
-  } else if (apiKeyInput) {
-    body.api_key = apiKeyInput;
-  }
-  const button = byId("provider-submit");
-  setSubmitting(button, true, "Saving");
-  try {
-    if (originalName) {
-      await api(`/api/providers/${encodeURIComponent(originalName)}`, { method: "PUT", body: JSON.stringify(body) });
-      showToast(`Provider ${values.name} updated`);
-    } else {
-      await api("/api/providers", { method: "POST", body: JSON.stringify(body) });
-      showToast(`Provider ${values.name} created`);
+      bindProviderActions();
     }
-    closeModal();
-    await fetchProviders();
-    await fetchModels();
-  } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setSubmitting(button, false);
-  }
-}
 
-function confirmDeleteProvider(name) {
-  byId("confirm-title").textContent = "Delete provider";
-  byId("confirm-message").textContent = `Delete provider "${name}"? Routes using it may be cleaned up by the backend.`;
-  byId("confirm-action").textContent = "Delete provider";
-  state.confirmAction = () => deleteProvider(name);
-  openModal("confirm-modal");
-}
+    function bindProviderActions() {
+      document.querySelectorAll("[data-provider-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const name = button.dataset.providerName || "";
+          if (button.dataset.providerAction === "edit") openProviderModal(name);
+          if (button.dataset.providerAction === "delete") confirmDeleteProvider(name);
+        });
+      });
+    }
 
-async function deleteProvider(name) {
-  const button = byId("confirm-action");
-  setSubmitting(button, true, "Deleting");
-  try {
-    await api(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" });
-    showToast(`Provider ${name} deleted`);
-    closeModal();
-    await fetchProviders();
-    await fetchModels();
-  } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setSubmitting(button, false);
-  }
-}
+    function openProviderModal(name = "") {
+      clearErrors("provider-form");
+      const provider = state.providers.find((item) => item.name === name);
+      byId("provider-modal-title").textContent = provider ? "Edit provider" : "Add provider";
+      byId("provider-submit").textContent = provider ? "Update provider" : "Create provider";
+      byId("provider-original-name").value = provider?.name || "";
+      byId("provider-name").value = provider?.name || "";
+      byId("provider-type").value = provider?.type || "";
+      byId("provider-endpoint").value = provider?.endpoint || "";
+      byId("provider-upstream-model").value = provider?.upstream_model || "";
+      byId("provider-api-key").value = "";
+      byId("provider-api-key").placeholder = provider?.has_key ? "Leave blank to keep configured key" : "Optional key";
+      byId("provider-clear-key").checked = false;
+      byId("provider-clear-key-row").hidden = !provider?.has_key;
+      openModal("provider-modal");
+    }
 
-async function fetchModels() {
-  setStateText("routes-state", "Loading routes");
-  byId("routes-content").hidden = true;
-  try {
-    const data = await api("/api/models");
-    state.models = Array.isArray(data.models) ? data.models : [];
-    renderModels();
-  } catch (error) {
-    setStateHtml("routes-state", `<strong>Routes could not be loaded.</strong>${escapeHtml(error.message)}`);
-  }
-}
+    function validateProviderForm() {
+      clearErrors("provider-form");
+      const name = byId("provider-name").value.trim();
+      const type = byId("provider-type").value;
+      const endpoint = byId("provider-endpoint").value.trim();
+      const upstreamModel = byId("provider-upstream-model").value.trim();
+      let valid = true;
+      if (!name) {
+        setFieldError("provider-name", "Enter a provider name.");
+        valid = false;
+      }
+      if (!type) {
+        setFieldError("provider-type", "Select a provider type.");
+        valid = false;
+      }
+      try {
+        const url = new URL(endpoint);
+        if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid protocol");
+      } catch (_) {
+        setFieldError("provider-endpoint", "Enter a valid http or https endpoint.");
+        valid = false;
+      }
+      if (!valid) {
+        const firstInvalid = byId("provider-form").querySelector("[aria-invalid='true']");
+        if (firstInvalid) firstInvalid.focus();
+        return null;
+      }
+      return { name, type, endpoint, upstreamModel };
+    }
 
-function renderModels() {
-  const total = state.models.length;
-  const providerCount = state.models.reduce((sum, route) => sum + route.providers.length, 0);
-  const fallbackCount = state.models.filter((route) => route.providers.length > 1).length;
-  byId("metric-routes").textContent = total;
-  byId("metric-route-providers").textContent = providerCount;
-  byId("metric-fallbacks").textContent = fallbackCount;
-  if (!total) {
-    byId("routes-content").hidden = true;
-    setStateHtml("routes-state", "<strong>No routes yet.</strong>Add a route to expose a model name.");
-    return;
-  }
-  setStateText("routes-state", "", true);
-  byId("routes-content").hidden = false;
-  byId("routes-tbody").innerHTML = state.models.map((route) => `
+    async function submitProvider(event) {
+      event.preventDefault();
+      const values = validateProviderForm();
+      if (!values) return;
+      const originalName = byId("provider-original-name").value;
+      const existing = state.providers.find((item) => item.name === originalName);
+      const apiKeyInput = byId("provider-api-key").value;
+      const clearApiKey = byId("provider-clear-key").checked;
+      const body = {
+        name: values.name,
+        endpoint: values.endpoint,
+        provider_type: values.type,
+        upstream_model: values.upstreamModel,
+      };
+      if (clearApiKey) {
+        body.api_key = "";
+      } else if (apiKeyInput) {
+        body.api_key = apiKeyInput;
+      }
+      const button = byId("provider-submit");
+      setSubmitting(button, true, "Saving");
+      try {
+        if (originalName) {
+          await api(`/api/providers/${encodeURIComponent(originalName)}`, { method: "PUT", body: JSON.stringify(body) });
+          showToast(`Provider ${values.name} updated`);
+        } else {
+          await api("/api/providers", { method: "POST", body: JSON.stringify(body) });
+          showToast(`Provider ${values.name} created`);
+        }
+        closeModal();
+        await fetchProviders();
+        await fetchModels();
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setSubmitting(button, false);
+      }
+    }
+
+    function confirmDeleteProvider(name) {
+      byId("confirm-title").textContent = "Delete provider";
+      byId("confirm-message").textContent = `Delete provider "${name}"? Routes using it may be cleaned up by the backend.`;
+      byId("confirm-action").textContent = "Delete provider";
+      state.confirmAction = () => deleteProvider(name);
+      openModal("confirm-modal");
+    }
+
+    async function deleteProvider(name) {
+      const button = byId("confirm-action");
+      setSubmitting(button, true, "Deleting");
+      try {
+        await api(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" });
+        showToast(`Provider ${name} deleted`);
+        closeModal();
+        await fetchProviders();
+        await fetchModels();
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setSubmitting(button, false);
+      }
+    }
+
+    async function fetchModels() {
+      setStateText("routes-state", "Loading routes");
+      byId("routes-content").hidden = true;
+      try {
+        const data = await api("/api/models");
+        state.models = Array.isArray(data.models) ? data.models : [];
+        renderModels();
+      } catch (error) {
+        setStateHtml("routes-state", `<strong>Routes could not be loaded.</strong>${escapeHtml(error.message)}`);
+      }
+    }
+
+    function renderModels() {
+      const total = state.models.length;
+      const providerCount = state.models.reduce((sum, route) => sum + route.providers.length, 0);
+      const fallbackCount = state.models.filter((route) => route.providers.length > 1).length;
+      byId("metric-routes").textContent = total;
+      byId("metric-route-providers").textContent = providerCount;
+      byId("metric-fallbacks").textContent = fallbackCount;
+      if (!total) {
+        byId("routes-content").hidden = true;
+        setStateHtml("routes-state", "<strong>No routes yet.</strong>Add a route to expose a model name.");
+        return;
+      }
+      setStateText("routes-state", "", true);
+      byId("routes-content").hidden = false;
+      byId("routes-tbody").innerHTML = state.models.map((route) => `
     <tr>
       <td><strong>${escapeHtml(route.id)}</strong></td>
       <td>${route.providers.map((p, index) => `<span class="badge type">${index + 1}. ${escapeHtml(p)}</span>`).join(" ")}</td>
@@ -1300,7 +1570,7 @@ function renderModels() {
       </div></td>
     </tr>
   `).join("");
-  byId("routes-mobile").innerHTML = state.models.map((route) => `
+      byId("routes-mobile").innerHTML = state.models.map((route) => `
     <article class="record">
       <h3>${escapeHtml(route.id)}</h3>
       <dl><div><dt>Priority</dt><dd>${route.providers.map((p, index) => `${index + 1}. ${escapeHtml(p)}`).join("<br>")}</dd></div></dl>
@@ -1310,205 +1580,206 @@ function renderModels() {
       </div>
     </article>
   `).join("");
-  bindRouteActions();
-}
+      bindRouteActions();
+    }
 
-function bindRouteActions() {
-  document.querySelectorAll("[data-route-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const model = button.dataset.routeId || "";
-      if (button.dataset.routeAction === "edit") openRouteModal(model);
-      if (button.dataset.routeAction === "delete") confirmDeleteRoute(model);
-    });
-  });
-}
+    function bindRouteActions() {
+      document.querySelectorAll("[data-route-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const model = button.dataset.routeId || "";
+          if (button.dataset.routeAction === "edit") openRouteModal(model);
+          if (button.dataset.routeAction === "delete") confirmDeleteRoute(model);
+        });
+      });
+    }
 
-function renderRouteProviderPicker() {
-  const picker = byId("route-provider-picker");
-  if (!picker) return;
-  if (!state.providers.length) {
-    picker.innerHTML = "<p class=\"help\">Add a provider before creating routes.</p>";
-    return;
-  }
-  picker.innerHTML = state.providers.map((provider) => `
+    function renderRouteProviderPicker() {
+      const picker = byId("route-provider-picker");
+      if (!picker) return;
+      if (!state.providers.length) {
+        picker.innerHTML = "<p class=\"help\">Add a provider before creating routes.</p>";
+        return;
+      }
+      picker.innerHTML = state.providers.map((provider) => `
     <label class="check-row">
       <input type="checkbox" value="${escapeHtml(provider.name)}" ${state.routeProviders.includes(provider.name) ? "checked" : ""}>
       <span>${escapeHtml(provider.name)} <span class="badge type">${escapeHtml(provider.type || "openai")}</span></span>
     </label>
   `).join("");
-  picker.querySelectorAll("input[type='checkbox']").forEach((input) => {
-    input.addEventListener("change", () => {
-      if (input.checked && !state.routeProviders.includes(input.value)) state.routeProviders.push(input.value);
-      if (!input.checked) state.routeProviders = state.routeProviders.filter((name) => name !== input.value);
+      picker.querySelectorAll("input[type='checkbox']").forEach((input) => {
+        input.addEventListener("change", () => {
+          if (input.checked && !state.routeProviders.includes(input.value)) state.routeProviders.push(input.value);
+          if (!input.checked) state.routeProviders = state.routeProviders.filter((name) => name !== input.value);
+          renderRouteOrderList();
+        });
+      });
       renderRouteOrderList();
-    });
-  });
-  renderRouteOrderList();
-}
+    }
 
-function renderRouteOrderList() {
-  const list = byId("route-order-list");
-  if (!list) return;
-  if (!state.routeProviders.length) {
-    list.innerHTML = "";
-    return;
-  }
-  list.innerHTML = state.routeProviders.map((name, index) => `
+    function renderRouteOrderList() {
+      const list = byId("route-order-list");
+      if (!list) return;
+      if (!state.routeProviders.length) {
+        list.innerHTML = "";
+        return;
+      }
+      list.innerHTML = state.routeProviders.map((name, index) => `
     <div class="order-item">
       <strong>${index + 1}. ${escapeHtml(name)}</strong>
       <button class="btn small" type="button" ${index === 0 ? "disabled" : ""} data-route-provider-index="${index}" data-route-provider-direction="-1">Up</button>
       <button class="btn small" type="button" ${index === state.routeProviders.length - 1 ? "disabled" : ""} data-route-provider-index="${index}" data-route-provider-direction="1">Down</button>
     </div>
   `).join("");
-  list.querySelectorAll("[data-route-provider-index]").forEach((button) => {
-    button.addEventListener("click", () => {
-      moveRouteProvider(Number(button.dataset.routeProviderIndex), Number(button.dataset.routeProviderDirection));
-    });
-  });
-}
+      list.querySelectorAll("[data-route-provider-index]").forEach((button) => {
+        button.addEventListener("click", () => {
+          moveRouteProvider(Number(button.dataset.routeProviderIndex), Number(button.dataset.routeProviderDirection));
+        });
+      });
+    }
 
-function moveRouteProvider(index, direction) {
-  const next = index + direction;
-  if (next < 0 || next >= state.routeProviders.length) return;
-  const copy = [...state.routeProviders];
-  [copy[index], copy[next]] = [copy[next], copy[index]];
-  state.routeProviders = copy;
-  renderRouteOrderList();
-}
+    function moveRouteProvider(index, direction) {
+      const next = index + direction;
+      if (next < 0 || next >= state.routeProviders.length) return;
+      const copy = [...state.routeProviders];
+      [copy[index], copy[next]] = [copy[next], copy[index]];
+      state.routeProviders = copy;
+      renderRouteOrderList();
+    }
 
-function openRouteModal(modelId = "") {
-  clearErrors("route-form");
-  const route = state.models.find((item) => item.id === modelId);
-  state.routeProviders = route ? [...route.providers] : [];
-  byId("route-modal-title").textContent = route ? "Edit route" : "Add route";
-  byId("route-submit").textContent = route ? "Update route" : "Create route";
-  byId("route-original-model").value = route?.id || "";
-  byId("route-model").value = route?.id || "";
-  byId("route-model").readOnly = Boolean(route);
-  renderRouteProviderPicker();
-  openModal("route-modal");
-}
+    function openRouteModal(modelId = "") {
+      clearErrors("route-form");
+      const route = state.models.find((item) => item.id === modelId);
+      state.routeProviders = route ? [...route.providers] : [];
+      byId("route-modal-title").textContent = route ? "Edit route" : "Add route";
+      byId("route-submit").textContent = route ? "Update route" : "Create route";
+      byId("route-original-model").value = route?.id || "";
+      byId("route-model").value = route?.id || "";
+      byId("route-model").readOnly = Boolean(route);
+      renderRouteProviderPicker();
+      openModal("route-modal");
+    }
 
-function validateRouteForm() {
-  clearErrors("route-form");
-  const model = byId("route-model").value.trim();
-  let valid = true;
-  if (!model) {
-    setFieldError("route-model", "Enter a model name.");
-    valid = false;
-  }
-  if (!state.routeProviders.length) {
-    byId("route-providers-error").textContent = "Select at least one provider.";
-    valid = false;
-  }
-  if (!valid) {
-    const firstInvalid = byId("route-form").querySelector("[aria-invalid='true']");
-    if (firstInvalid) firstInvalid.focus();
-    return null;
-  }
-  return { model, providers: [...state.routeProviders] };
-}
+    function validateRouteForm() {
+      clearErrors("route-form");
+      const model = byId("route-model").value.trim();
+      let valid = true;
+      if (!model) {
+        setFieldError("route-model", "Enter a model name.");
+        valid = false;
+      }
+      if (!state.routeProviders.length) {
+        byId("route-providers-error").textContent = "Select at least one provider.";
+        valid = false;
+      }
+      if (!valid) {
+        const firstInvalid = byId("route-form").querySelector("[aria-invalid='true']");
+        if (firstInvalid) firstInvalid.focus();
+        return null;
+      }
+      return { model, providers: [...state.routeProviders] };
+    }
 
-async function submitRoute(event) {
-  event.preventDefault();
-  const values = validateRouteForm();
-  if (!values) return;
-  const button = byId("route-submit");
-  setSubmitting(button, true, "Saving");
-  try {
-    await api("/api/routes", { method: "POST", body: JSON.stringify(values) });
-    showToast(`Route ${values.model} saved`);
-    closeModal();
-    await fetchModels();
-  } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setSubmitting(button, false);
-  }
-}
+    async function submitRoute(event) {
+      event.preventDefault();
+      const values = validateRouteForm();
+      if (!values) return;
+      const button = byId("route-submit");
+      setSubmitting(button, true, "Saving");
+      try {
+        await api("/api/routes", { method: "POST", body: JSON.stringify(values) });
+        showToast(`Route ${values.model} saved`);
+        closeModal();
+        await fetchModels();
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setSubmitting(button, false);
+      }
+    }
 
-function confirmDeleteRoute(model) {
-  byId("confirm-title").textContent = "Delete route";
-  byId("confirm-message").textContent = `Delete route "${model}"? Requests for this model will no longer resolve.`;
-  byId("confirm-action").textContent = "Delete route";
-  state.confirmAction = () => deleteRoute(model);
-  openModal("confirm-modal");
-}
+    function confirmDeleteRoute(model) {
+      byId("confirm-title").textContent = "Delete route";
+      byId("confirm-message").textContent = `Delete route "${model}"? Requests for this model will no longer resolve.`;
+      byId("confirm-action").textContent = "Delete route";
+      state.confirmAction = () => deleteRoute(model);
+      openModal("confirm-modal");
+    }
 
-async function deleteRoute(model) {
-  const button = byId("confirm-action");
-  setSubmitting(button, true, "Deleting");
-  try {
-    await api(`/api/routes/${encodeURIComponent(model)}`, { method: "DELETE" });
-    showToast(`Route ${model} deleted`);
-    closeModal();
-    await fetchModels();
-  } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setSubmitting(button, false);
-  }
-}
+    async function deleteRoute(model) {
+      const button = byId("confirm-action");
+      setSubmitting(button, true, "Deleting");
+      try {
+        await api(`/api/routes/${encodeURIComponent(model)}`, { method: "DELETE" });
+        showToast(`Route ${model} deleted`);
+        closeModal();
+        await fetchModels();
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setSubmitting(button, false);
+      }
+    }
 
-async function fetchHealth() {
-  setStateText("health-state", "Checking gateway health");
-  const pill = byId("gateway-pill");
-  pill.className = "status-pill";
-  pill.innerHTML = "<span class=\"dot\"></span>Checking gateway";
-  try {
-    const data = await api("/health");
-    const status = data.status === "ok" ? "ok" : "unknown";
-    setStateHtml("health-state", `<strong>Gateway status: ${escapeHtml(status)}</strong>The health endpoint responded successfully.`);
-    pill.className = "status-pill ok";
-    pill.innerHTML = "<span class=\"dot\"></span>Gateway OK";
-  } catch (error) {
-    setStateHtml("health-state", `<strong>Gateway health check failed.</strong>${escapeHtml(error.message)}`);
-    pill.className = "status-pill err";
-    pill.innerHTML = "<span class=\"dot\"></span>Gateway error";
-  }
-}
+    async function fetchHealth() {
+      setStateText("health-state", "Checking gateway health");
+      const pill = byId("gateway-pill");
+      pill.className = "status-pill";
+      pill.innerHTML = "<span class=\"dot\"></span>Checking gateway";
+      try {
+        const data = await api("/health");
+        const status = data.status === "ok" ? "ok" : "unknown";
+        setStateHtml("health-state", `<strong>Gateway status: ${escapeHtml(status)}</strong>The health endpoint responded successfully.`);
+        pill.className = "status-pill ok";
+        pill.innerHTML = "<span class=\"dot\"></span>Gateway OK";
+      } catch (error) {
+        setStateHtml("health-state", `<strong>Gateway health check failed.</strong>${escapeHtml(error.message)}`);
+        pill.className = "status-pill err";
+        pill.innerHTML = "<span class=\"dot\"></span>Gateway error";
+      }
+    }
 
-function setupEvents() {
-  byId("add-provider-panel").addEventListener("click", () => openProviderModal());
-  byId("refresh-providers").addEventListener("click", fetchProviders);
-  byId("provider-form").addEventListener("submit", submitProvider);
-  byId("add-route-panel").addEventListener("click", () => openRouteModal());
-  byId("refresh-routes").addEventListener("click", fetchModels);
-  byId("route-form").addEventListener("submit", submitRoute);
-  byId("refresh-health").addEventListener("click", fetchHealth);
-  byId("confirm-action").addEventListener("click", () => {
-    if (typeof state.confirmAction === "function") state.confirmAction();
-  });
-  document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
-  document.querySelectorAll(".modal-overlay").forEach((overlay) => {
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) closeModal();
-    });
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.modal) closeModal();
-    trapModalFocus(event);
-  });
-  document.querySelectorAll("[data-copy-path]").forEach((card) => {
-    card.addEventListener("click", () => {
-      const path = card.dataset.copyPath;
-      if (path) copyEndpoint(path);
-    });
-  });
-}
+    function setupEvents() {
+      byId("add-provider-panel").addEventListener("click", () => openProviderModal());
+      byId("refresh-providers").addEventListener("click", fetchProviders);
+      byId("provider-form").addEventListener("submit", submitProvider);
+      byId("add-route-panel").addEventListener("click", () => openRouteModal());
+      byId("refresh-routes").addEventListener("click", fetchModels);
+      byId("route-form").addEventListener("submit", submitRoute);
+      byId("refresh-health").addEventListener("click", fetchHealth);
+      byId("confirm-action").addEventListener("click", () => {
+        if (typeof state.confirmAction === "function") state.confirmAction();
+      });
+      document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
+      document.querySelectorAll(".modal-overlay").forEach((overlay) => {
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) closeModal();
+        });
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && state.modal) closeModal();
+        trapModalFocus(event);
+      });
+      document.querySelectorAll("[data-copy-path]").forEach((card) => {
+        card.addEventListener("click", () => {
+          const path = card.dataset.copyPath;
+          if (path) copyEndpoint(path);
+        });
+      });
+    }
 
-async function init() {
-  const baseUrlDisplay = byId("base-url-display");
-  if (baseUrlDisplay) {
-    baseUrlDisplay.textContent = window.location.origin + "/v1";
-    baseUrlDisplay.addEventListener('click', copyBaseUrl);
-  }
-  setupTabs();
-  setupEvents();
-  await Promise.all([fetchProviders(), fetchModels(), fetchHealth()]);
-}
+    async function init() {
+      const baseUrlDisplay = byId("base-url-display");
+      if (baseUrlDisplay) {
+        baseUrlDisplay.textContent = window.location.origin + "/v1";
+        baseUrlDisplay.addEventListener('click', copyBaseUrl);
+      }
+      setupTabs();
+      setupEvents();
+      await Promise.all([fetchProviders(), fetchModels(), fetchHealth()]);
+    }
 
-init();
-</script>
+    init();
+  </script>
 </body>
+
 </html>

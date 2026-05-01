@@ -53,7 +53,7 @@ pub struct BootstrapConfig {
 }
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
-pub const DEFAULT_PORT: u16 = 6000;
+pub const DEFAULT_PORT: u16 = 8800;
 
 impl Default for BootstrapConfig {
     fn default() -> Self {
@@ -247,8 +247,8 @@ mod tests {
     #[test]
     fn test_bootstrap_default() {
         let boot = BootstrapConfig::default();
-        assert_eq!(boot.host, "127.0.0.1");
-        assert_eq!(boot.port, 6000);
+        assert_eq!(boot.host, DEFAULT_HOST);
+        assert_eq!(boot.port, DEFAULT_PORT);
         assert!(boot.db_path().ends_with("fustapi.db"));
     }
 

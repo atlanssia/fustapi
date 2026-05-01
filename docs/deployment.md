@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/atlanssia/fustapi/main/install.sh |
 make build && ./target/release/fustapi serve
 
 # Access the Web UI
-open http://localhost:6000/ui
+open http://localhost:8800/ui
 ```
 
 ---
@@ -73,7 +73,7 @@ After=network.target
 Type=simple
 User=fustapi
 Group=fustapi
-ExecStart=/usr/local/bin/fustapi serve --host 127.0.0.1 --port 6000
+ExecStart=/usr/local/bin/fustapi serve --host 127.0.0.1 --port 8800
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
@@ -114,16 +114,16 @@ COPY --from=builder /app/target/release/fustapi /usr/local/bin/fustapi
 RUN useradd -r fustapi
 USER fustapi
 WORKDIR /home/fustapi
-EXPOSE 6000
+EXPOSE 8800
 ENTRYPOINT ["fustapi"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "6000"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8800"]
 ```
 
 ### Build and run
 
 ```bash
 docker build -t fustapi:latest .
-docker run -d --name fustapi -p 6000:6000 \
+docker run -d --name fustapi -p 8800:8800 \
   -v fustapi-data:/home/fustapi/.fustapi fustapi:latest
 ```
 
@@ -134,7 +134,7 @@ docker run -d --name fustapi -p 6000:6000 \
 services:
   fustapi:
     build: .
-    ports: ["6000:6000"]
+    ports: ["8800:8800"]
     volumes: [fustapi-data:/home/fustapi/.fustapi]
     restart: unless-stopped
     environment: [RUST_LOG=info]
@@ -159,7 +159,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:6000;
+        proxy_pass http://127.0.0.1:8800;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -178,7 +178,7 @@ server {
 
 ```text
 api.example.com {
-    reverse_proxy 127.0.0.1:6000 {
+    reverse_proxy 127.0.0.1:8800 {
         flush_interval -1    # flush immediately for streaming
     }
 }
@@ -196,5 +196,5 @@ Caddy auto-provisions TLS via Let's Encrypt.
 - [ ] Reverse proxy configured with TLS termination
 - [ ] `proxy_buffering off` in reverse proxy (required for streaming)
 - [ ] Service auto-restart enabled (systemd `Restart=always` or Docker `restart: unless-stopped`)
-- [ ] Health check monitored: `curl http://localhost:6000/health` → `{"status":"ok"}`
+- [ ] Health check monitored: `curl http://localhost:8800/health` → `{"status":"ok"}`
 - [ ] Backup strategy for `~/.fustapi/fustapi.db`

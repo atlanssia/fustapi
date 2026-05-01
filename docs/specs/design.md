@@ -362,7 +362,7 @@ Bootstrap parameters can be set via CLI flags or environment variables:
 | Parameter | CLI Flag | Env Var | Default |
 |-----------|----------|---------|---------|
 | Host | `--host` | `FUSTAPI_HOST` | `127.0.0.1` |
-| Port | `--port` | `FUSTAPI_PORT` | `6000` |
+| Port | `--port` | `FUSTAPI_PORT` | `8800` |
 | Data Dir | `--data-dir` | `FUSTAPI_DATA_DIR` | `~/.fustapi` |
 
 ---
