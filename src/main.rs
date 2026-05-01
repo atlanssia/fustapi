@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 
 /// Local-first, high-performance LLM API aggregation gateway.
 #[derive(Parser)]
-#[command(name = "fustapi", about = "Local-first LLM API gateway")]
+#[command(name = "fustapi", version, about = "Local-first LLM API gateway")]
 struct Cli {
     /// Data directory for SQLite storage.
     #[arg(long, global = true, env = "FUSTAPI_DATA_DIR")]

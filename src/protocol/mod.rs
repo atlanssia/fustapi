@@ -89,7 +89,7 @@ async fn forward_streaming(
             let mut block_index = 0;
             let model_name_start = model_name.to_string();
 
-            let mut body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
+            let body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
                 Ok(chunk) => {
                     let text = match protocol {
                         Protocol::OpenAI => create_sse_chunk(&chunk, &model_name),

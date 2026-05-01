@@ -35,6 +35,11 @@ const SCHEMA_SQL: &str = r#"CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMAR
 
 /// Initialize the database at the given path. Enables WAL mode.
 pub fn init_db(db_path: &Path) -> Result<Connection> {
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
     let conn = Connection::open(db_path)?;
     conn.execute_batch(SCHEMA_SQL)?;
     // Simple migration: add upstream_model if missing

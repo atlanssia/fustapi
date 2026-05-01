@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.5] - 2026-05-01
+
+### Added
+- **Version Flag** — Added `--version` to the CLI for easy version checking.
+
+### Fixed
+- **Database Initialization** — Automatically create the parent directory for the SQLite database if it doesn't exist, preventing "unable to open database file" errors on fresh installs.
+- **Compiler Warnings** — Cleaned up unused imports and unnecessary mutability in `src/protocol/mod.rs`.
+
 ## [1.0.4] - 2026-05-01
 
 ### Added
