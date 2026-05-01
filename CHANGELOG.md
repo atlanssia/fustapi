@@ -4,10 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.4] - 2026-05-01
 
-### Known Issues
-- Anthropic protocol dispatch (`/v1/messages`) returns a mock response — real parsing/serialization code exists but is not wired into the dispatch path
+### Added
+- **Security-First Installer** — Deterministic `install.sh` with strict target mapping, SHA256 verification, and manifest validation.
+- **Anthropic Protocol Parity** — Full support for `/v1/messages` including streaming events (`message_start`, `content_block_start`, etc.) and native tool-use translation.
+- **One-Click Install** — Simplified installation via `curl | sh` documented in README and Deployment Guide.
+
+### Changed
+- **Tool Emulation** — Fixed tool call interception in streaming paths to correctly collapse text chunks into structured tool calls.
+- **SSE Streaming** — Reordered event serialization to ensure tool calls are emitted before the stop signal.
+- **Capability Layer** — Hardened image input handling and protocol-specific response formatting.
+
+### Fixed
+- **Anthropic Dispatch** — Wired real parsing and serialization into the `/v1/messages` path, replacing the previous mock implementation.
+- **Streaming Reliability** — Resolved `StreamExt` trait ambiguities and ensured proper cleanup of SSE streams.
 
 ---
 

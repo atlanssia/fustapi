@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
-use crate::streaming::LLMStream;
 
 /// omlx provider configuration.
 #[allow(dead_code)]
@@ -55,18 +54,25 @@ impl OmlxProvider {
 
 #[async_trait]
 impl Provider for OmlxProvider {
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, ProviderError> {
         // We reuse the robust OpenAI streaming parser which handles tool aggregation and SSE flawlessly.
         // If omlx natively requires a different JSON schema on `/chat`, we fallback to its OpenAI-compatible endpoint.
-        self.openai_backend.chat_stream(request).await
+        self.openai_backend
+            .chat_stream(request, allow_passthrough)
+            .await
     }
 
-    fn supports_tools(&self) -> bool {
-        true
-    }
-
-    fn supports_images(&self) -> bool {
-        true
+    fn capabilities(&self) -> crate::provider::ProviderCapabilities {
+        crate::provider::ProviderCapabilities {
+            // Assuming native for now, could be Emulated based on design logic
+            tool_calling: crate::provider::ToolCallingSupport::Emulated,
+            image_input: true,
+            streaming: true,
+        }
     }
 
     fn name(&self) -> &str {

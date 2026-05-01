@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
-use crate::streaming::LLMStream;
 
 /// SGLang provider configuration.
 #[allow(dead_code)]
@@ -55,16 +54,23 @@ impl SglProvider {
 
 #[async_trait]
 impl Provider for SglProvider {
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
-        self.openai_backend.chat_stream(request).await
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, ProviderError> {
+        // SGLang provides a fast OpenAI-compatible endpoint.
+        self.openai_backend
+            .chat_stream(request, allow_passthrough)
+            .await
     }
 
-    fn supports_tools(&self) -> bool {
-        true
-    }
-
-    fn supports_images(&self) -> bool {
-        true
+    fn capabilities(&self) -> crate::provider::ProviderCapabilities {
+        crate::provider::ProviderCapabilities {
+            tool_calling: crate::provider::ToolCallingSupport::Native,
+            image_input: true,
+            streaming: true,
+        }
     }
 
     fn name(&self) -> &str {

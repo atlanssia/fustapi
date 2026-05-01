@@ -26,11 +26,11 @@ enum Commands {
     /// Start the gateway server.
     Serve {
         /// Host to bind to.
-        #[arg(long, env = "FUSTAPI_HOST", default_value = "127.0.0.1")]
+        #[arg(long, env = "FUSTAPI_HOST", default_value = fustapi::config::DEFAULT_HOST)]
         host: String,
 
         /// Port to listen on.
-        #[arg(long, env = "FUSTAPI_PORT", default_value = "8080")]
+        #[arg(long, env = "FUSTAPI_PORT", default_value_t = fustapi::config::DEFAULT_PORT)]
         port: u16,
     },
 

@@ -41,16 +41,31 @@ pub enum AnthropicMessage {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Default)]
 pub struct AnthropicContentBlock {
     #[serde(rename = "type")]
-    kind: String,
+    pub kind: String,
     #[serde(default)]
-    text: Option<String>,
+    pub text: Option<String>,
     #[serde(default)]
-    input: Option<Value>,
+    pub id: Option<String>, // For tool_use
     #[serde(default)]
-    source: Option<AnthropicImageSource>,
+    pub name: Option<String>, // For tool_use
+    #[serde(default)]
+    pub input: Option<Value>, // For tool_use
+    #[serde(default)]
+    pub tool_use_id: Option<String>, // For tool_result
+    #[serde(default)]
+    pub content: Option<AnthropicToolResultContent>, // For tool_result
+    #[serde(default)]
+    pub source: Option<AnthropicImageSource>, // For image
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(untagged)]
+pub enum AnthropicToolResultContent {
+    Simple(String),
+    MultiPart(Vec<AnthropicContentBlock>),
 }
 
 #[allow(dead_code)]
@@ -217,54 +232,63 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
             )));
         }
     };
+
+    let mut text_parts = Vec::new();
+    let mut images = Vec::new();
+    let mut tool_calls = Vec::new();
+
     let blocks = msg.content_blocks();
-    match (!blocks.is_empty()).then_some(&blocks) {
-        Some(blocks) => {
-            let mut text_parts = Vec::new();
-            let mut images = Vec::new();
-            for part in blocks {
-                match part.kind.as_str() {
-                    "text" => text_parts.push(part.text.clone().unwrap_or_default()),
-                    "image" => {
-                        if let Some(src) = &part.source
-                            && let Some(data) = &src.data
-                        {
-                            let mime = src
-                                .media_type
-                                .clone()
-                                .unwrap_or_else(|| "image/png".to_string());
-                            images.push(ImageInput {
-                                source: ImageSource::Base64 { data: data.clone() },
-                                mime_type: mime,
-                            });
-                        }
-                    }
-                    _ => {} // Ignore unknown block types (e.g., tool_use in continuation)
+    for part in blocks {
+        match part.kind.as_str() {
+            "text" => {
+                if let Some(t) = part.text {
+                    text_parts.push(t);
                 }
             }
-            let content = if text_parts.is_empty() && images.is_empty() {
-                String::new()
-            } else {
-                text_parts.join("\n")
-            };
-            Ok(Message {
-                role,
-                content,
-                images: if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                },
-                tool_calls: None,
-            })
+            "tool_use" => {
+                tool_calls.push(ToolCall {
+                    name: part.name.clone().unwrap_or_default(),
+                    arguments: part.input.clone().unwrap_or(Value::Object(serde_json::Map::new())),
+                });
+            }
+            "tool_result" => {
+                if let Some(content) = part.content {
+                    match content {
+                        AnthropicToolResultContent::Simple(s) => text_parts.push(s),
+                        AnthropicToolResultContent::MultiPart(subblocks) => {
+                            for sub in subblocks {
+                                if let Some(t) = sub.text {
+                                    text_parts.push(t);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "image" => {
+                if let Some(src) = part.source
+                    && let Some(data) = src.data
+                {
+                    let mime = src
+                        .media_type
+                        .unwrap_or_else(|| "image/png".to_string());
+                    images.push(ImageInput {
+                        source: ImageSource::Base64 { data },
+                        mime_type: mime,
+                    });
+                }
+            }
+            _ => {}
         }
-        None => Ok(Message {
-            role,
-            content: String::new(),
-            images: None,
-            tool_calls: None,
-        }),
     }
+
+    let content = text_parts.join("\n");
+    Ok(Message {
+        role,
+        content,
+        images: if images.is_empty() { None } else { Some(images) },
+        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+    })
 }
 
 #[allow(dead_code)]
@@ -305,8 +329,7 @@ impl AnthropicMessageExt for AnthropicMessage {
                 vec![AnthropicContentBlock {
                     kind: "text".to_string(),
                     text: Some(content.clone()),
-                    input: None,
-                    source: None,
+                    ..Default::default()
                 }]
             }
             AnthropicMessage::MultiPart { content, .. } => content.to_vec(),
@@ -376,25 +399,8 @@ pub fn serialize_response(
 
 /// Serialize an LLMChunk to Anthropic SSE event format string.
 pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: &usize) -> String {
-    if chunk.done {
-        // message_delta event with stop_reason
-        let event = AnthropicStreamEvent {
-            event_type: "message_delta".to_string(),
-            message: None,
-            index: None,
-            delta: Some(AnthropicStreamDelta {
-                delta_type: "stop_reason".to_string(),
-                text: None,
-                partial_json: None,
-                stop_reason: Some("stop".to_string()),
-            }),
-            content_block: None,
-        };
-        return format!(
-            "event: message_delta\n\ndata: {}\n\n",
-            serde_json::to_string(&event).unwrap_or_default()
-        );
-    }
+    let mut s = String::new();
+
     if let Some(text) = &chunk.content {
         let delta = AnthropicStreamEvent {
             event_type: "content_block_delta".to_string(),
@@ -408,13 +414,13 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             }),
             content_block: None,
         };
-        return format!(
+        s.push_str(&format!(
             "event: content_block_delta\n\ndata: {}\n\n",
             serde_json::to_string(&delta).unwrap_or_default()
-        );
+        ));
     }
+
     if let Some(tc) = &chunk.tool_call {
-        // content_block_start + content_block_delta for tool calls
         let start = AnthropicStreamEvent {
             event_type: "content_block_start".to_string(),
             message: None,
@@ -440,13 +446,59 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             }),
             content_block: None,
         };
-        return format!(
+        s.push_str(&format!(
             "event: content_block_start\n\ndata: {}\n\nevent: content_block_delta\n\ndata: {}\n\n",
             serde_json::to_string(&start).unwrap_or_default(),
             serde_json::to_string(&delta).unwrap_or_default()
-        );
+        ));
     }
-    String::new()
+
+    if chunk.done {
+        let event = AnthropicStreamEvent {
+            event_type: "message_delta".to_string(),
+            message: None,
+            index: None,
+            delta: Some(AnthropicStreamDelta {
+                delta_type: "stop_reason".to_string(),
+                text: None,
+                partial_json: None,
+                stop_reason: Some("stop".to_string()),
+            }),
+            content_block: None,
+        };
+        s.push_str(&format!(
+            "event: message_delta\n\ndata: {}\n\n",
+            serde_json::to_string(&event).unwrap_or_default()
+        ));
+    }
+
+    s
+}
+
+pub fn serialize_message_start(id: &str, model: &str) -> String {
+    let event = AnthropicStreamEvent {
+        event_type: "message_start".to_string(),
+        message: Some(AnthropicStreamMessage {
+            id: id.to_string(),
+            obj: "message".to_string(),
+            role: "assistant".to_string(),
+            content: Vec::new(),
+            model: model.to_string(),
+            stop_reason: None,
+            stop_sequence: None,
+        }),
+        index: None,
+        delta: None,
+        content_block: None,
+    };
+    format!(
+        "event: message_start\n\ndata: {}\n\n",
+        serde_json::to_string(&event).unwrap_or_default()
+    )
+}
+
+pub fn serialize_message_stop() -> String {
+    format!("event: message_stop\n\ndata: {{\"type\":\"message_stop\"}}\n\n")
 }
 
 #[cfg(test)]

@@ -15,12 +15,18 @@ Production-ready deployment options for FustAPI.
 
 ## Quick Start
 
+### One-click (macOS / Linux)
+```bash
+curl -fsSL https://raw.githubusercontent.com/atlanssia/fustapi/main/install.sh | sh
+```
+
+### From Source
 ```bash
 # Build and run locally
 make build && ./target/release/fustapi serve
 
 # Access the Web UI
-open http://localhost:8080/ui
+open http://localhost:6000/ui
 ```
 
 ---
@@ -67,7 +73,7 @@ After=network.target
 Type=simple
 User=fustapi
 Group=fustapi
-ExecStart=/usr/local/bin/fustapi serve --host 127.0.0.1 --port 8080
+ExecStart=/usr/local/bin/fustapi serve --host 127.0.0.1 --port 6000
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
@@ -108,16 +114,16 @@ COPY --from=builder /app/target/release/fustapi /usr/local/bin/fustapi
 RUN useradd -r fustapi
 USER fustapi
 WORKDIR /home/fustapi
-EXPOSE 8080
+EXPOSE 6000
 ENTRYPOINT ["fustapi"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "6000"]
 ```
 
 ### Build and run
 
 ```bash
 docker build -t fustapi:latest .
-docker run -d --name fustapi -p 8080:8080 \
+docker run -d --name fustapi -p 6000:6000 \
   -v fustapi-data:/home/fustapi/.fustapi fustapi:latest
 ```
 
@@ -128,7 +134,7 @@ docker run -d --name fustapi -p 8080:8080 \
 services:
   fustapi:
     build: .
-    ports: ["8080:8080"]
+    ports: ["6000:6000"]
     volumes: [fustapi-data:/home/fustapi/.fustapi]
     restart: unless-stopped
     environment: [RUST_LOG=info]
@@ -153,7 +159,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:6000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -172,7 +178,7 @@ server {
 
 ```text
 api.example.com {
-    reverse_proxy 127.0.0.1:8080 {
+    reverse_proxy 127.0.0.1:6000 {
         flush_interval -1    # flush immediately for streaming
     }
 }
@@ -190,5 +196,5 @@ Caddy auto-provisions TLS via Let's Encrypt.
 - [ ] Reverse proxy configured with TLS termination
 - [ ] `proxy_buffering off` in reverse proxy (required for streaming)
 - [ ] Service auto-restart enabled (systemd `Restart=always` or Docker `restart: unless-stopped`)
-- [ ] Health check monitored: `curl http://localhost:8080/health` → `{"status":"ok"}`
+- [ ] Health check monitored: `curl http://localhost:6000/health` → `{"status":"ok"}`
 - [ ] Backup strategy for `~/.fustapi/fustapi.db`

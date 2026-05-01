@@ -1,6 +1,6 @@
 [package]
 name = "fustapi"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2024"
 description = "Local-first, high-performance LLM API aggregation gateway"
 license = "Apache-2.0"
@@ -45,6 +45,7 @@ arc-swap = "1.7"
 # SQLite for control plane storage (providers, routes, metrics)
 rusqlite = { version = "0.37", features = ["bundled"] }
 bytes = "1.11.1"
+tokio-util = "0.7.18"
 
 [profile.release]
 strip = true

@@ -6,7 +6,6 @@ use async_trait::async_trait;
 
 use crate::config;
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
-use crate::streaming::{LLMStream, StreamError};
 
 pub type RouterStore = std::sync::Arc<arc_swap::ArcSwap<RealRouter>>;
 
@@ -61,7 +60,11 @@ pub trait Router: Send + Sync {
     fn list_providers(&self) -> Vec<String>;
 
     /// Stream a chat completion through the selected provider.
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError>;
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, RouterError>;
 }
 
 /// Real router that uses configured providers.
@@ -128,17 +131,76 @@ impl Router for RealRouter {
     fn list_providers(&self) -> Vec<String> {
         self.providers.keys().cloned().collect()
     }
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> {
-        if let Some(provider) = self.get_provider_for_model(&request.model) {
-            let stream = provider.chat_stream(request).await?;
-            use tokio_stream::StreamExt;
-            let s = stream.map(|chunk_result| match chunk_result {
-                Ok(chunk) => Ok(chunk),
-                Err(e) => Err(StreamError::Provider(e.to_string())),
-            });
-            return Ok(Box::pin(s) as LLMStream);
+    async fn chat_stream(
+        &self,
+        mut request: UnifiedRequest,
+        mut allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, RouterError> {
+        let model_name = request.model.clone();
+        if let Some(provider) = self.get_provider_for_model(&model_name) {
+            let caps = provider.capabilities();
+            let needs_emulation = caps.tool_calling
+                == crate::provider::ToolCallingSupport::Emulated
+                && request.tools.as_ref().map_or(false, |t| !t.is_empty());
+
+            if needs_emulation {
+                let tools = request.tools.take().unwrap();
+
+                let mut system_msg_idx = None;
+                for (i, msg) in request.messages.iter().enumerate() {
+                    if msg.role == crate::provider::Role::System {
+                        system_msg_idx = Some(i);
+                        break;
+                    }
+                }
+
+                if let Some(idx) = system_msg_idx {
+                    request.messages[idx].content = crate::capability::tool::inject_tool_schemas(
+                        &request.messages[idx].content,
+                        &tools,
+                    );
+                } else {
+                    request.messages.insert(
+                        0,
+                        crate::provider::Message {
+                            role: crate::provider::Role::System,
+                            content: crate::capability::tool::inject_tool_schemas(
+                                "You are a helpful AI assistant.",
+                                &tools,
+                            ),
+                            images: None,
+                            tool_calls: None,
+                        },
+                    );
+                }
+
+                allow_passthrough = false;
+            }
+
+            let stream_mode = provider.chat_stream(request, allow_passthrough).await?;
+
+            match stream_mode {
+                crate::streaming::StreamMode::Normalized(stream) => {
+                    use tokio_stream::StreamExt;
+                    let s = stream.map(|chunk_result| match chunk_result {
+                        Ok(chunk) => Ok(chunk),
+                        Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
+                    });
+
+                    if needs_emulation {
+                        let emulated =
+                            crate::capability::tool::ToolEmulationStream::new(Box::pin(s));
+                        return Ok(crate::streaming::StreamMode::Normalized(Box::pin(emulated)));
+                    }
+
+                    return Ok(crate::streaming::StreamMode::Normalized(Box::pin(s)));
+                }
+                crate::streaming::StreamMode::Passthrough(byte_stream) => {
+                    return Ok(crate::streaming::StreamMode::Passthrough(byte_stream));
+                }
+            }
         }
-        Err(RouterError::ModelNotFound(request.model))
+        Err(RouterError::ModelNotFound(model_name))
     }
 }
 
@@ -154,7 +216,11 @@ impl Router for std::sync::Arc<RealRouter> {
     fn list_providers(&self) -> Vec<String> {
         (**self).list_providers()
     }
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, RouterError> {
-        (**self).chat_stream(request).await
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, RouterError> {
+        (**self).chat_stream(request, allow_passthrough).await
     }
 }

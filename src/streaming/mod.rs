@@ -23,8 +23,19 @@ pub struct LLMChunk {
 }
 
 /// Type alias for the standard LLM stream.
-/// Every provider adapter returns this type.
 pub type LLMStream = std::pin::Pin<Box<dyn Stream<Item = Result<LLMChunk, StreamError>> + Send>>;
+
+/// A raw byte stream for passthrough.
+pub type ByteStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<bytes::Bytes, StreamError>> + Send>>;
+
+/// Dual-mode stream output from the gateway.
+pub enum StreamMode {
+    /// Normalized stream using the LLMChunk pipeline (supports capability transformations).
+    Normalized(LLMStream),
+    /// Zero-parse passthrough stream of raw bytes directly from the provider.
+    Passthrough(ByteStream),
+}
 
 /// Errors that can occur during streaming.
 #[derive(Debug, thiserror::Error)]

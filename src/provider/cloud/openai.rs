@@ -95,9 +95,10 @@ impl OpenAIProvider {
 
             m
         }).collect::<Vec<_>>();
-        
+
         let model = self.config.model.as_ref().unwrap_or(&request.model);
-        let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
+        let mut body =
+            serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
 
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
@@ -352,7 +353,11 @@ pub fn parse_openai_sse_stream(
 
 #[async_trait]
 impl Provider for OpenAIProvider {
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError> {
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<crate::streaming::StreamMode, ProviderError> {
         let body = self.build_request_body(&request);
         let url = format!(
             "{}/chat/completions",
@@ -385,7 +390,18 @@ impl Provider for OpenAIProvider {
                 )));
             }
 
-            Ok(parse_openai_sse_stream(resp.bytes_stream()))
+            if allow_passthrough {
+                let byte_stream = futures::StreamExt::map(resp.bytes_stream(), |res| {
+                    res.map_err(|e| crate::streaming::StreamError::Connection(e.to_string()))
+                });
+                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
+                    byte_stream,
+                )))
+            } else {
+                Ok(crate::streaming::StreamMode::Normalized(
+                    parse_openai_sse_stream(resp.bytes_stream()),
+                ))
+            }
         } else {
             let resp_body = builder
                 .send()
@@ -410,16 +426,18 @@ impl Provider for OpenAIProvider {
 
             let s = futures::stream::iter(chunks.into_iter().map(Ok));
 
-            Ok(Box::pin(s) as LLMStream)
+            Ok(crate::streaming::StreamMode::Normalized(
+                Box::pin(s) as LLMStream
+            ))
         }
     }
 
-    fn supports_tools(&self) -> bool {
-        true
-    }
-
-    fn supports_images(&self) -> bool {
-        true
+    fn capabilities(&self) -> crate::provider::ProviderCapabilities {
+        crate::provider::ProviderCapabilities {
+            tool_calling: crate::provider::ToolCallingSupport::Native,
+            image_input: true,
+            streaming: true,
+        }
     }
 
     fn name(&self) -> &str {

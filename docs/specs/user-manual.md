@@ -120,7 +120,7 @@ These settings define how the server starts and where it finds its data. They ca
 | Parameter | CLI Flag | Env Var | Default |
 |-----------|----------|---------|---------|
 | Host | `--host` | `FUSTAPI_HOST` | `127.0.0.1` |
-| Port | `--port` | `FUSTAPI_PORT` | `8080` |
+| Port | `--port` | `FUSTAPI_PORT` | `6000` |
 | Data Dir | `--data-dir` | `FUSTAPI_DATA_DIR` | `~/.fustapi` |
 | Log Level | `-v` / `-vv` | `RUST_LOG` | `info` |
 
@@ -168,7 +168,7 @@ fustapi routes add gpt-4 --providers my-omlx,ds
 ### Managing via Web UI
 
 1. Start the server: `fustapi serve`
-2. Open `http://localhost:8080/ui` in your browser.
+2. Open `http://localhost:6000/ui` in your browser.
 3. Use the **Providers** and **Models** tabs to add, edit, or remove configurations.
 
 ### Security Notes
@@ -186,7 +186,7 @@ chmod 700 ~/.fustapi
 ### Start the Server
 
 ```bash
-# Default settings (127.0.0.1:8080)
+# Default settings (127.0.0.1:6000)
 fustapi serve
 
 # Custom host and port
@@ -201,7 +201,7 @@ fustapi serve --data-dir /var/lib/fustapi
 Verify the server is running:
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:6000/health
 # Expected response: {"status":"ok"}
 ```
 
@@ -252,7 +252,7 @@ The Web UI is a single-page application embedded in the binary and served at `/u
 ### Accessing the Web UI
 
 ```bash
-open http://localhost:8080/ui
+open http://localhost:6000/ui
 ```
 
 ### Features
@@ -270,7 +270,7 @@ open http://localhost:8080/ui
 Start the gateway server.
 
 - `--host HOST`: Bind address (default: `127.0.0.1`)
-- `--port PORT`: Port number (default: `8080`)
+- `--port PORT`: Port number (default: `6000`)
 - `--data-dir DIR`: Directory for SQLite database (default: `~/.fustapi`)
 
 ### `fustapi providers`
@@ -352,7 +352,7 @@ After=network.target
 [Service]
 Type=simple
 User=fustapi
-ExecStart=/usr/local/bin/fustapi serve --host 0.0.0.0 --port 8080
+ExecStart=/usr/local/bin/fustapi serve --host 0.0.0.0 --port 6000
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info

@@ -4,9 +4,25 @@
 //! unified types like `UnifiedRequest`, `Message`, and error types.
 
 use crate::capability::{ImageInput, ToolCall, ToolDefinition};
-use crate::streaming::LLMStream;
+use crate::streaming::StreamMode;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+/// Level of tool calling support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallingSupport {
+    Native,
+    Emulated,
+    Unsupported,
+}
+
+/// Provider capabilities representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    pub tool_calling: ToolCallingSupport,
+    pub image_input: bool,
+    pub streaming: bool,
+}
 
 /// Provider-agnostic chat message.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -61,13 +77,14 @@ pub struct UnifiedRequest {
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Stream a chat completion request to this provider.
-    async fn chat_stream(&self, request: UnifiedRequest) -> Result<LLMStream, ProviderError>;
+    async fn chat_stream(
+        &self,
+        request: UnifiedRequest,
+        allow_passthrough: bool,
+    ) -> Result<StreamMode, ProviderError>;
 
-    /// Whether this provider natively supports tool calling.
-    fn supports_tools(&self) -> bool;
-
-    /// Whether this provider supports image inputs.
-    fn supports_images(&self) -> bool;
+    /// Get the provider's capabilities.
+    fn capabilities(&self) -> ProviderCapabilities;
 
     /// Human-readable provider name (e.g., "omlx", "lmstudio").
     fn name(&self) -> &str;

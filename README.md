@@ -21,7 +21,12 @@ FustAPI is a single-binary gateway that provides a unified entry point for AI ID
 
 ### Install
 
-FustAPI provides pre-compiled binaries for major platforms through [GitHub Releases](https://github.com/atlanssia/fustapi/releases).
+**One-click (macOS / Linux):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/atlanssia/fustapi/main/install.sh | sh
+```
+
+Alternatively, download pre-compiled binaries for major platforms through [GitHub Releases](https://github.com/atlanssia/fustapi/releases).
 
 **macOS Users**: If you see an "Apple could not verify..." malware warning, remove the quarantine attribute:
 ```bash
@@ -56,15 +61,15 @@ fustapi routes add gpt-4 --providers my-omlx
 ### Run
 
 ```bash
-# Start the server (defaults to 127.0.0.1:8080)
+# Start the server (defaults to 127.0.0.1:6000)
 fustapi serve
 
 # Optional: customize address and data directory
 fustapi serve --host 0.0.0.0 --port 9000 --data-dir /path/to/data
 ```
 
-- **Web UI**: Open `http://localhost:8080/ui` to manage providers and routes.
-- **Health Check**: `curl http://localhost:8080/health` → `{"status":"ok"}`
+- **Web UI**: Open `http://localhost:6000/ui` to manage providers and routes.
+- **Health Check**: `curl http://localhost:6000/health` → `{"status":"ok"}`
 
 ### Monitoring & Logging
 
@@ -83,12 +88,12 @@ RUST_LOG=warn fustapi serve
 
 ```bash
 # OpenAI-compatible endpoint
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://localhost:6000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}'
 
 # Anthropic-compatible endpoint
-curl -X POST http://localhost:8080/v1/messages \
+curl -X POST http://localhost:6000/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{"model":"claude-3","messages":[{"role":"user","content":"Hello"}],"max_tokens":1024}'
 ```
@@ -128,7 +133,7 @@ FustAPI stores runtime data in a SQLite database. Bootstrap parameters can be se
 | Parameter | CLI Flag | Env Var | Default |
 |-----------|----------|---------|---------|
 | Host | `--host` | `FUSTAPI_HOST` | `127.0.0.1` |
-| Port | `--port` | `FUSTAPI_PORT` | `8080` |
+| Port | `--port` | `FUSTAPI_PORT` | `6000` |
 | Data Dir | `--data-dir` | `FUSTAPI_DATA_DIR` | `~/.fustapi` |
 
 **Note**: `config.toml` is no longer used. All persistent state resides in `{data-dir}/fustapi.db`.

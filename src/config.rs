@@ -52,8 +52,8 @@ pub struct BootstrapConfig {
     pub data_dir: PathBuf,
 }
 
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 8080;
+pub const DEFAULT_HOST: &str = "127.0.0.1";
+pub const DEFAULT_PORT: u16 = 6000;
 
 impl Default for BootstrapConfig {
     fn default() -> Self {
@@ -179,13 +179,15 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 model: cfg.model.clone(),
             },
         )),
-        "openai" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-            crate::provider::cloud::openai::OpenAIConfig {
-                endpoint: cfg.endpoint.clone(),
-                api_key: cfg.api_key.clone().unwrap_or_default(),
-                model: cfg.model.clone(),
-            },
-        )),
+        "openai" | "openai-compatible" => {
+            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+                crate::provider::cloud::openai::OpenAIConfig {
+                    endpoint: cfg.endpoint.clone(),
+                    api_key: cfg.api_key.clone().unwrap_or_default(),
+                    model: cfg.model.clone(),
+                },
+            ))
+        }
         _ => Box::new(crate::provider::omlx::OmlxProvider::default_provider()),
     }
 }
@@ -246,7 +248,7 @@ mod tests {
     fn test_bootstrap_default() {
         let boot = BootstrapConfig::default();
         assert_eq!(boot.host, "127.0.0.1");
-        assert_eq!(boot.port, 8080);
+        assert_eq!(boot.port, 6000);
         assert!(boot.db_path().ends_with("fustapi.db"));
     }
 

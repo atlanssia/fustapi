@@ -144,6 +144,150 @@ pub fn inject_tool_schemas(system_prompt: &str, tools: &[ToolDefinition]) -> Str
     enhanced
 }
 
+/// A stream wrapper that intercepts text chunks to detect and parse emulated tool calls.
+pub struct ToolEmulationStream {
+    inner: crate::streaming::LLMStream,
+    buffer: String,
+    is_buffering: bool,
+    flushed: bool,
+}
+
+impl ToolEmulationStream {
+    pub fn new(inner: crate::streaming::LLMStream) -> Self {
+        Self {
+            inner,
+            buffer: String::new(),
+            is_buffering: false,
+            flushed: false,
+        }
+    }
+}
+
+impl tokio_stream::Stream for ToolEmulationStream {
+    type Item = Result<crate::streaming::LLMChunk, crate::streaming::StreamError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        loop {
+            if self.flushed {
+                return Poll::Ready(None);
+            }
+
+            let chunk_res = match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(res)) => res,
+                Poll::Ready(None) => {
+                    self.flushed = true;
+                    if self.is_buffering && !self.buffer.is_empty() {
+                        // EOF while buffering. Try to parse tool call.
+                        match parse_tool_call_from_text(&self.buffer) {
+                            Ok(Some(tc)) => {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: None,
+                                    tool_call: Some(tc),
+                                    done: true,
+                                })));
+                            }
+                            _ => {
+                                // Fallback to plain text
+                                let content = std::mem::take(&mut self.buffer);
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: Some(content),
+                                    tool_call: None,
+                                    done: true,
+                                })));
+                            }
+                        }
+                    }
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            };
+
+            let chunk = match chunk_res {
+                Ok(c) => c,
+                Err(e) => return Poll::Ready(Some(Err(e))),
+            };
+
+            if let Some(content) = chunk.content {
+                if !self.is_buffering {
+                    if content.trim_start().starts_with('{')
+                        || content.trim_start().starts_with("<tool_use>")
+                    {
+                        self.is_buffering = true;
+                        self.buffer.push_str(&content);
+                        continue;
+                    } else {
+                        // Normal text passthrough
+                        let done = chunk.done;
+                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                            content: Some(content),
+                            tool_call: None,
+                            done,
+                        })));
+                    }
+                } else {
+                    self.buffer.push_str(&content);
+                    if chunk.done || self.buffer.len() > 32 * 1024 {
+                        self.flushed = chunk.done;
+                        match parse_tool_call_from_text(&self.buffer) {
+                            Ok(Some(tc)) => {
+                                self.buffer.clear();
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: None,
+                                    tool_call: Some(tc),
+                                    done: chunk.done,
+                                })));
+                            }
+                            _ => {
+                                // Fallback to plain text if done or exceeded size
+                                let content = std::mem::take(&mut self.buffer);
+                                self.is_buffering = false; // Stop buffering if not done
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: Some(content),
+                                    tool_call: None,
+                                    done: chunk.done,
+                                })));
+                            }
+                        }
+                    }
+                    continue;
+                }
+            } else {
+                // If it doesn't have content (e.g. done chunk), just pass it through or handle flush
+                if chunk.done {
+                    self.flushed = true;
+                    if self.is_buffering {
+                        match parse_tool_call_from_text(&self.buffer) {
+                            Ok(Some(tc)) => {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: None,
+                                    tool_call: Some(tc),
+                                    done: true,
+                                })));
+                            }
+                            _ => {
+                                let content = std::mem::take(&mut self.buffer);
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    content: Some(content),
+                                    tool_call: None,
+                                    done: true,
+                                })));
+                            }
+                        }
+                    } else {
+                        return Poll::Ready(Some(Ok(chunk)));
+                    }
+                }
+                return Poll::Ready(Some(Ok(chunk)));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +380,97 @@ mod tests {
         let prompt = "You are helpful.";
         let enhanced = inject_tool_schemas(prompt, &[]);
         assert_eq!(enhanced, prompt);
+    }
+
+    #[tokio::test]
+    async fn test_tool_emulation_stream_normal_text() {
+        use tokio_stream::StreamExt;
+        
+        let chunks = vec![
+            Ok(crate::streaming::LLMChunk { content: Some("Hello".to_string()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some(" world!".to_string()), tool_call: None, done: true }),
+        ];
+        
+        let inner_stream = Box::pin(tokio_stream::iter(chunks));
+        let mut emulated = ToolEmulationStream::new(inner_stream);
+        
+        let c1 = emulated.next().await.unwrap().unwrap();
+        assert_eq!(c1.content.as_deref(), Some("Hello"));
+        assert!(!c1.done);
+        
+        let c2 = emulated.next().await.unwrap().unwrap();
+        assert_eq!(c2.content.as_deref(), Some(" world!"));
+        assert!(c2.done);
+        
+        assert!(emulated.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tool_emulation_stream_valid_tool_call() {
+        use tokio_stream::StreamExt;
+        
+        let chunks = vec![
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#""name":"test""#.to_string()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#","arguments":{}}"#.to_string()), tool_call: None, done: true }),
+        ];
+        
+        let inner_stream = Box::pin(tokio_stream::iter(chunks));
+        let mut emulated = ToolEmulationStream::new(inner_stream);
+        
+        let c1 = emulated.next().await.unwrap().unwrap();
+        assert!(c1.content.is_none());
+        assert!(c1.done);
+        
+        let tc = c1.tool_call.unwrap();
+        assert_eq!(tc.name, "test");
+        
+        assert!(emulated.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tool_emulation_stream_invalid_fallback() {
+        use tokio_stream::StreamExt;
+        
+        let chunks = vec![
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#"broken json"#.to_string()), tool_call: None, done: true }),
+        ];
+        
+        let inner_stream = Box::pin(tokio_stream::iter(chunks));
+        let mut emulated = ToolEmulationStream::new(inner_stream);
+        
+        let c1 = emulated.next().await.unwrap().unwrap();
+        assert_eq!(c1.content.as_deref(), Some("{broken json"));
+        assert!(c1.done);
+        assert!(c1.tool_call.is_none());
+        
+        assert!(emulated.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tool_emulation_stream_max_buffer() {
+        use tokio_stream::StreamExt;
+        
+        // Output something larger than 32KB
+        let huge_string = "a".repeat(33000);
+        let chunks = vec![
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some(huge_string.clone()), tool_call: None, done: false }),
+            Ok(crate::streaming::LLMChunk { content: Some("done".to_string()), tool_call: None, done: true }),
+        ];
+        
+        let inner_stream = Box::pin(tokio_stream::iter(chunks));
+        let mut emulated = ToolEmulationStream::new(inner_stream);
+        
+        // The first 33KB chunk triggers fallback BEFORE the stream is done
+        let c1 = emulated.next().await.unwrap().unwrap();
+        assert_eq!(c1.content.as_ref().unwrap().len(), 33001); // "{" + 33000 "a"s
+        assert!(!c1.done);
+        
+        // The final chunk passes through normally
+        let c2 = emulated.next().await.unwrap().unwrap();
+        assert_eq!(c2.content.as_deref(), Some("done"));
+        assert!(c2.done);
     }
 }

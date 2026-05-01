@@ -35,8 +35,14 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
+        let host = crate::config::DEFAULT_HOST;
+        let port = crate::config::DEFAULT_PORT;
+        let addr: std::net::SocketAddr = format!("{host}:{port}")
+            .parse()
+            .expect("invalid default host:port");
+
         Self {
-            addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            addr,
             router: Arc::new(RealRouter::from_config(&crate::config::default_config())),
             db_path: crate::config::BootstrapConfig::default().db_path(),
         }

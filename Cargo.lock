@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "fustapi"
-version = "1.0.2"
+version = "1.0.4"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -324,6 +324,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

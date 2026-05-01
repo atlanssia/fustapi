@@ -26,16 +26,35 @@ pub struct OpenAIRequest {
 }
 
 #[derive(Deserialize)]
+pub struct OpenAIMessage {
+    pub role: String,
+    #[serde(default)]
+    pub content: Option<OpenAIContentRaw>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<OpenAIToolCallIn>>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
-pub enum OpenAIMessage {
-    Simple {
-        role: String,
-        content: String,
-    },
-    MultiPart {
-        role: String,
-        content: Vec<OpenAIMessageContent>,
-    },
+pub enum OpenAIContentRaw {
+    Simple(String),
+    MultiPart(Vec<OpenAIMessageContent>),
+}
+
+#[derive(Deserialize)]
+pub struct OpenAIToolCallIn {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: OpenAIFunctionCallIn,
+}
+
+#[derive(Deserialize)]
+pub struct OpenAIFunctionCallIn {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Deserialize)]
@@ -243,7 +262,7 @@ pub fn parse_chat_request(json_str: &str) -> Result<UnifiedRequest, ParseError> 
 }
 
 fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
-    let role = match msg.role() {
+    let role = match msg.role.as_str() {
         "system" => Role::System,
         "user" => Role::User,
         "assistant" => Role::Assistant,
@@ -254,50 +273,60 @@ fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
             )));
         }
     };
-    match openai_message_to_content(&msg) {
-        Some(OpenAIContent::Text(text)) => Ok(Message {
-            role,
-            content: text,
-            images: None,
-            tool_calls: None,
-        }),
+
+    let content = match openai_message_to_content(&msg) {
+        Some(OpenAIContent::Text(text)) => text,
         Some(OpenAIContent::Parts(parts)) => {
             let mut text_parts = Vec::new();
-            let mut images = Vec::new();
             for part in parts {
-                match part {
-                    OpenAIMessageContentKind::Text(t) => text_parts.push(t),
-                    OpenAIMessageContentKind::ImageUrl(url) => {
-                        images.push(ImageInput {
-                            source: parse_image_source(&url),
-                            mime_type: detect_mime(&url),
-                        });
-                    }
+                if let OpenAIMessageContentKind::Text(t) = part {
+                    text_parts.push(t);
                 }
             }
-            let content = if text_parts.is_empty() {
-                String::new()
-            } else {
-                text_parts.join("\n")
-            };
-            Ok(Message {
-                role,
-                content,
-                images: if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                },
-                tool_calls: None,
-            })
+            text_parts.join("\n")
         }
-        None => Ok(Message {
-            role,
-            content: String::new(),
-            images: None,
-            tool_calls: None,
-        }),
-    }
+        None => String::new(),
+    };
+
+    let images = match openai_message_to_content(&msg) {
+        Some(OpenAIContent::Parts(parts)) => {
+            let mut images = Vec::new();
+            for part in parts {
+                if let OpenAIMessageContentKind::ImageUrl(url) = part {
+                    images.push(ImageInput {
+                        source: parse_image_source(&url),
+                        mime_type: detect_mime(&url),
+                    });
+                }
+            }
+            if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            }
+        }
+        _ => None,
+    };
+
+    let tool_calls = msg.tool_calls.map(|tcs| {
+        tcs.into_iter()
+            .map(|tc| ToolCall {
+                name: tc.function.name,
+                arguments: serde_json::from_str(&tc.function.arguments).unwrap_or_default(),
+            })
+            .collect()
+    });
+
+    // Handle tool_call_id by prepending it to content for providers that need it, 
+    // or we can add it to the Unified Message structure if needed. 
+    // For now, let's just make sure it's parsed.
+    
+    Ok(Message {
+        role,
+        content,
+        images,
+        tool_calls,
+    })
 }
 
 fn parse_image_source(url_str: &str) -> ImageSource {
@@ -359,33 +388,12 @@ impl std::error::Error for SerializeError {
     }
 }
 
-#[allow(dead_code)]
-trait OpenAIMessageExt {
-    fn role(&self) -> &str;
-    fn content(&self) -> Option<&Vec<OpenAIMessageContent>>;
-}
 
-impl OpenAIMessageExt for OpenAIMessage {
-    fn role(&self) -> &str {
-        match self {
-            OpenAIMessage::Simple { role, .. } => role.as_str(),
-            OpenAIMessage::MultiPart { role, .. } => role.as_str(),
-        }
-    }
-    fn content(&self) -> Option<&Vec<OpenAIMessageContent>> {
-        match self {
-            OpenAIMessage::Simple { .. } => None,
-            OpenAIMessage::MultiPart { content, .. } => Some(content),
-        }
-    }
-}
-
-/// Convert an OpenAIMessage to a parsed OpenAIContent.
 fn openai_message_to_content(msg: &OpenAIMessage) -> Option<OpenAIContent> {
-    match msg {
-        OpenAIMessage::Simple { content, .. } => Some(OpenAIContent::Text(content.clone())),
-        OpenAIMessage::MultiPart { content, .. } => {
-            let parts: Vec<OpenAIMessageContentKind> = content
+    match &msg.content {
+        Some(OpenAIContentRaw::Simple(text)) => Some(OpenAIContent::Text(text.clone())),
+        Some(OpenAIContentRaw::MultiPart(parts)) => {
+            let content_parts: Vec<OpenAIMessageContentKind> = parts
                 .iter()
                 .map(|c| match c.kind.as_str() {
                     "text" => OpenAIMessageContentKind::Text(c.text.clone().unwrap_or_default()),
@@ -398,8 +406,9 @@ fn openai_message_to_content(msg: &OpenAIMessage) -> Option<OpenAIContent> {
                     _ => OpenAIMessageContentKind::Text(c.text.clone().unwrap_or_default()),
                 })
                 .collect();
-            Some(OpenAIContent::Parts(parts))
+            Some(OpenAIContent::Parts(content_parts))
         }
+        None => None,
     }
 }
 
