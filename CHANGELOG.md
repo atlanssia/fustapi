@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.7] - 2026-05-02
+
+### Fixed
+- **Web UI Provider Type** — Fixed a bug where provider types (e.g., omlx, lmstudio) added via the Web UI were incorrectly saved as `openai` due to a missing JSON field mapping in the backend.
+
+## [1.0.6] - 2026-05-01
+
+### Changed
+- **Default Port** — Changed default server port to `8800`.
+- **UI Accessibility** — Removed external Google Fonts dependencies to support offline environments and improve loading performance in restricted regions.
+
 ## [1.0.5] - 2026-05-01
 
 ### Added

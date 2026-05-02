@@ -54,7 +54,7 @@ pub struct ProviderForm {
     pub api_key: Option<String>,
     #[serde(default)]
     pub upstream_model: Option<String>,
-    #[serde(default = "default_type")]
+    #[serde(default = "default_type", rename = "type")]
     pub provider_type: String,
 }
 
