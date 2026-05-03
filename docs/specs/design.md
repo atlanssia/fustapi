@@ -496,3 +496,32 @@ fustapi/
 - Single binary < 20MB
 - Memory usage < 50MB idle
 - Zero-copy verified via benchmarks
+
+---
+
+## 18. Observability & Telemetry
+
+### 18.1 High-performance Metrics
+
+FustAPI implements a real-time observability pipeline designed for zero impact on request throughput and latency.
+
+| Principle | Implementation |
+|-----------|----------------|
+| **Zero-impact** | Metrics collection uses non-blocking `mpsc` channels and lock-free telemetry. |
+| **Best-effort** | Performance and low latency are prioritized over absolute accuracy. |
+| **Non-blocking** | Telemetry data is offloaded to background tasks for aggregation. |
+
+### 18.2 Accuracy Disclaimer
+
+FustAPI metrics follow a high-performance "best-effort" model:
+
+- **Approximate Precision**: FustAPI does NOT guarantee exact token-level precision.
+- **Provider-Reported**: Usage data (tokens) is derived from provider responses when available.
+- **Batch Processing**: Metrics are computed and aggregated only at request completion to avoid overhead during active streaming.
+
+### 18.3 UI Integration
+
+The embedded Web UI provides a real-time dashboard visualizing:
+- **QPS (Requests per Second)**
+- **Average Latency**
+- **Token Throughput (Approximate)**
