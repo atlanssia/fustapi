@@ -12,6 +12,7 @@
 
 pub mod capability;
 pub mod config;
+pub mod metrics;
 pub mod protocol;
 pub mod provider;
 pub mod router;

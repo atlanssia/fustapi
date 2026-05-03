@@ -18,6 +18,7 @@ use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use crate::metrics::{self, MetricsEmitter};
 use crate::protocol;
 use crate::router::{RealRouter, Router as _, RouterStore};
 use crate::web;
@@ -78,9 +79,15 @@ struct ModelListResponse {
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(config.router.clone()));
     let db_path: Arc<PathBuf> = Arc::new(config.db_path.clone());
+
+    // Initialize metrics system (spawns background aggregator)
+    let (metrics_emitter, metrics_reader) = metrics::init();
+
     let router2 = router_store.clone();
     let router3 = router_store.clone();
     let router_for_v1_models = router_store.clone();
+    let emitter2 = metrics_emitter.clone();
+    let emitter3 = metrics_emitter.clone();
     let app = Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
@@ -98,15 +105,22 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         .route("/api/models", get(web::models_api_handler))
         .route("/api/routes", post(web::create_route))
         .route("/api/routes/{model}", delete(web::delete_route))
+        // Dashboard API — metrics
+        .route("/metrics/summary", get(web::metrics_summary_handler))
+        .route("/metrics/timeseries", get(web::metrics_timeseries_handler))
         // API routes
         .route("/health", get(health_handler))
         .route(
             "/v1/chat/completions",
-            post(move |headers, body| chat_completions_handler(headers, body, router2.clone())),
+            post(move |headers, body| {
+                chat_completions_handler(headers, body, router2.clone(), emitter2.clone())
+            }),
         )
         .route(
             "/v1/messages",
-            post(move |headers, body| messages_handler(headers, body, router3.clone())),
+            post(move |headers, body| {
+                messages_handler(headers, body, router3.clone(), emitter3.clone())
+            }),
         )
         .route(
             "/v1/models",
@@ -115,7 +129,8 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         .fallback(fallback_handler)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB body limit
         .layer(axum::extract::Extension(db_path))
-        .layer(axum::extract::Extension(router_store));
+        .layer(axum::extract::Extension(router_store))
+        .layer(axum::extract::Extension(metrics_reader));
 
     let addr = config.addr;
     let listener = TcpListener::bind(addr).await?;
@@ -140,12 +155,24 @@ async fn chat_completions_handler(
     headers: axum::http::HeaderMap,
     body: String,
     router: RouterStore,
+    emitter: MetricsEmitter,
 ) -> impl IntoResponse {
-    let protocol = protocol::detect_protocol("/v1/chat/completions", &headers);
+    let proto = protocol::detect_protocol("/v1/chat/completions", &headers);
     let current_router = router.load_full();
-    match protocol::dispatch_request(protocol, body, current_router.as_ref()).await {
-        Ok(response) => response,
-        Err(e) => e.into_response(),
+
+    // Resolve provider name for metrics (best-effort)
+    let provider_name = resolve_provider_name(&body, current_router.as_ref());
+    let start = emitter.request_start(&provider_name);
+
+    match protocol::dispatch_request(proto, body, current_router.as_ref()).await {
+        Ok(response) => {
+            emitter.request_end(&provider_name, start, true, None);
+            response
+        }
+        Err(e) => {
+            emitter.request_end(&provider_name, start, false, None);
+            e.into_response()
+        }
     }
 }
 
@@ -154,13 +181,33 @@ async fn messages_handler(
     headers: axum::http::HeaderMap,
     body: String,
     router: RouterStore,
+    emitter: MetricsEmitter,
 ) -> impl IntoResponse {
-    let protocol = protocol::detect_protocol("/v1/messages", &headers);
+    let proto = protocol::detect_protocol("/v1/messages", &headers);
     let current_router = router.load_full();
-    match protocol::dispatch_request(protocol, body, current_router.as_ref()).await {
-        Ok(response) => response,
-        Err(e) => e.into_response(),
+
+    let provider_name = resolve_provider_name(&body, current_router.as_ref());
+    let start = emitter.request_start(&provider_name);
+
+    match protocol::dispatch_request(proto, body, current_router.as_ref()).await {
+        Ok(response) => {
+            emitter.request_end(&provider_name, start, true, None);
+            response
+        }
+        Err(e) => {
+            emitter.request_end(&provider_name, start, false, None);
+            e.into_response()
+        }
     }
+}
+
+/// Extract model name from body and resolve to provider name (best-effort).
+fn resolve_provider_name(body: &str, router: &dyn crate::router::Router) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("model")?.as_str().map(String::from))
+        .and_then(|model| router.resolve(&model).ok())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// GET /v1/models — returns a list of available models.

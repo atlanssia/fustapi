@@ -8,7 +8,6 @@ pub mod openai;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use tokio_stream::StreamExt;
 
 use crate::router::Router;
 use crate::streaming::LLMChunk;

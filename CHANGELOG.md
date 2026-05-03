@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-05-03
+
+### Added
+- **Observability Dashboard** — Implemented a high-performance, non-blocking metrics pipeline for real-time monitoring of QPS, latency, and success rates.
+- **Lock-Free Telemetry** — Used `ArcSwap` and atomic counters to ensure the dashboard has zero impact on the request hot path.
+- **Real-time Canvas Charts** — Added native 2D canvas-based charting to the Web UI for high-performance time-series visualization.
+
+### Changed
+- **UI/UX Optimization** — Enhanced the Control Plane with better contrast, responsive grid layouts, and context-aware "Empty States" with guided CTA buttons for new users.
+- **Protocol Optimization** — Cleaned up protocol streaming logic for better throughput and lower allocation overhead.
+
 ## [1.0.9] - 2026-05-03
 
 ### Changed

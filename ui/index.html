@@ -15,7 +15,7 @@
       --border: #334155;
       --border-strong: #475569;
       --text: #F8FAFC;
-      --muted: #94a3b8;
+      --muted: #a1a1aa;
       --primary: #22C55E;
       --primary-strong: #16a34a;
       --primary-soft: rgba(34, 197, 94, 0.15);
@@ -219,7 +219,7 @@
     }
 
     .btn:active {
-      transform: translateY(1px);
+      transform: scale(0.97);
     }
 
     .btn.primary {
@@ -248,6 +248,12 @@
       min-height: 36px;
       padding: 0.35rem 0.55rem;
       font-size: 0.86rem;
+    }
+    
+    @media (max-width: 640px) {
+      .btn.small {
+        min-height: 44px; /* Touch target minimum */
+      }
     }
 
     .layout {
@@ -348,6 +354,7 @@
       margin-top: 0.2rem;
       font-size: 1.85rem;
       line-height: 1.15;
+      font-variant-numeric: tabular-nums;
     }
 
     .card {
@@ -387,6 +394,7 @@
     table {
       width: 100%;
       border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
     }
 
     caption {
@@ -844,6 +852,9 @@
       }
 
       .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .charts-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -904,8 +915,10 @@
     <div class="layout">
       <nav class="sidebar" aria-label="Control plane sections">
         <div class="tabs" role="tablist" aria-label="Control plane sections">
-          <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="true"
-            aria-controls="providers-panel" data-tab="providers" tabindex="0">Providers</button>
+          <button class="btn tab" type="button" role="tab" id="tab-dashboard" aria-selected="true"
+            aria-controls="dashboard-panel" data-tab="dashboard" tabindex="0">Dashboard</button>
+          <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="false"
+            aria-controls="providers-panel" data-tab="providers" tabindex="-1">Providers</button>
           <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false"
             aria-controls="routes-panel" data-tab="routes" tabindex="-1">Routes</button>
           <button class="btn tab" type="button" role="tab" id="tab-health" aria-selected="false"
@@ -948,7 +961,57 @@
           </div>
         </div>
 
-        <section id="providers-panel" class="panel active" role="tabpanel" tabindex="0" aria-labelledby="tab-providers">
+        <section id="dashboard-panel" class="panel active" role="tabpanel" tabindex="0" aria-labelledby="tab-dashboard">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Dashboard</h2>
+              <p>Real-time gateway metrics. Reading from memory with zero impact on the hot path.</p>
+            </div>
+          </div>
+          <div class="metrics" aria-label="Gateway metrics">
+            <div class="metric"><span>Global QPS</span><strong id="metric-qps">0.0</strong></div>
+            <div class="metric"><span>Avg Latency</span><strong id="metric-latency">0ms</strong></div>
+            <div class="metric"><span>In-Flight Requests</span><strong id="metric-inflight">0</strong></div>
+            <div class="metric"><span>Total Requests</span><strong id="metric-total-requests">0</strong></div>
+            <div class="metric"><span>Success Rate</span><strong id="metric-success-rate">100%</strong></div>
+            <div class="metric"><span>Uptime</span><strong id="metric-uptime">0s</strong></div>
+          </div>
+          
+          <div class="metrics charts-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
+            <div class="card" style="padding: 1rem;">
+              <div class="card-head" style="border:0; padding: 0 0 1rem 0;"><h3>Requests per Second</h3></div>
+              <canvas id="chart-qps" height="120" style="width: 100%;"></canvas>
+            </div>
+            <div class="card" style="padding: 1rem;">
+              <div class="card-head" style="border:0; padding: 0 0 1rem 0;"><h3>Average Latency (ms)</h3></div>
+              <canvas id="chart-latency" height="120" style="width: 100%;"></canvas>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top: 1rem;">
+            <div class="card-head">
+              <h3>Provider Performance</h3>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Provider</th>
+                    <th scope="col">Requests</th>
+                    <th scope="col">Success Rate</th>
+                    <th scope="col">Avg Latency</th>
+                    <th scope="col">Tokens (P/C)</th>
+                  </tr>
+                </thead>
+                <tbody id="dashboard-providers-tbody">
+                  <tr><td colspan="5" class="state" style="padding: 1rem;">No data yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="providers-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-providers" hidden aria-hidden="true">
           <div class="panel-header">
             <div class="panel-title">
               <h2>Providers</h2>
@@ -1176,7 +1239,9 @@
     const state = {
       providers: [],
       models: [],
-      activeTab: "providers",
+      metrics: null,
+      metricsInterval: null,
+      activeTab: "dashboard",
       modal: null,
       lastFocus: null,
       routeProviders: [],
@@ -1285,6 +1350,16 @@
       });
       if (updateHash) history.replaceState(null, "", `#${tabName}`);
       if (tabName === "health") fetchHealth();
+      
+      // Handle metrics polling
+      if (state.metricsInterval) {
+        clearInterval(state.metricsInterval);
+        state.metricsInterval = null;
+      }
+      if (tabName === "dashboard") {
+        fetchMetrics();
+        state.metricsInterval = setInterval(fetchMetrics, 1000);
+      }
     }
 
     function setupTabs() {
@@ -1304,7 +1379,8 @@
         });
       });
       const initial = location.hash.replace("#", "");
-      if (["providers", "routes", "health"].includes(initial)) activateTab(initial, false);
+      if (["dashboard", "providers", "routes", "health"].includes(initial)) activateTab(initial, false);
+      else activateTab("dashboard", false);
     }
 
     function openModal(id) {
@@ -1374,9 +1450,15 @@
       byId("metric-providers").textContent = total;
       byId("metric-keys").textContent = state.providers.filter((p) => p.has_key).length;
       byId("metric-local").textContent = state.providers.filter((p) => localProviderTypes.has(p.type)).length;
-      if (!total) {
-        byId("providers-content").hidden = true;
-        setStateHtml("providers-state", "<strong>No providers yet.</strong>Add a provider to make models routable.");
+      if (state.providers.length === 0) {
+        setStateHtml("providers-state", `
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="margin: 0 auto 1rem; color: var(--muted); display: block;">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 1 0 0 6h13.5a3 3 0 1 0 0-6m-16.5-3a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3m-19.5 0a4.5 4.5 0 0 1 .9-2.7L5.737 5.1a3.375 3.375 0 0 1 2.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 0 1 .9 2.7m0 0a3 3 0 0 1-3 3m0 3h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Z" />
+          </svg>
+          <strong>No providers configured</strong>
+          <p style="margin-bottom: 1.5rem;">Add a local or cloud provider to start routing requests.</p>
+          <button class="btn primary" onclick="openModal('provider-modal')">Add your first Provider</button>
+        `);
         return;
       }
       setStateText("providers-state", "", true);
@@ -1553,9 +1635,15 @@
       byId("metric-routes").textContent = total;
       byId("metric-route-providers").textContent = providerCount;
       byId("metric-fallbacks").textContent = fallbackCount;
-      if (!total) {
-        byId("routes-content").hidden = true;
-        setStateHtml("routes-state", "<strong>No routes yet.</strong>Add a route to expose a model name.");
+      if (state.models.length === 0) {
+        setStateHtml("routes-state", `
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="margin: 0 auto 1rem; color: var(--muted); display: block;">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          <strong>No routes configured</strong>
+          <p style="margin-bottom: 1.5rem;">Add a route to map your models to configured providers.</p>
+          <button class="btn primary" onclick="openModal('route-modal')">Add your first Route</button>
+        `);
         return;
       }
       setStateText("routes-state", "", true);
@@ -1736,6 +1824,97 @@
         pill.className = "status-pill err";
         pill.innerHTML = "<span class=\"dot\"></span>Gateway error";
       }
+    }
+
+    async function fetchMetrics() {
+      try {
+        const data = await api("/metrics/summary");
+        state.metrics = data;
+        renderMetrics();
+      } catch (e) {
+        console.error("Failed to fetch metrics", e);
+      }
+    }
+
+    function renderMetrics() {
+      if (!state.metrics) return;
+      const m = state.metrics;
+      
+      byId("metric-qps").textContent = m.qps.toFixed(2);
+      byId("metric-latency").textContent = Math.round(m.avg_latency_ms) + "ms";
+      byId("metric-inflight").textContent = m.in_flight;
+      byId("metric-total-requests").textContent = m.total_requests;
+      byId("metric-success-rate").textContent = m.success_rate.toFixed(1) + "%";
+      
+      const formatTime = (s) => {
+        if (s < 60) return s + "s";
+        if (s < 3600) return Math.floor(s/60) + "m " + (s%60) + "s";
+        return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
+      };
+      byId("metric-uptime").textContent = formatTime(m.uptime_secs);
+
+      const tbody = byId("dashboard-providers-tbody");
+      if (!m.provider_stats || m.provider_stats.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="state" style="padding: 1rem;">No data yet.</td></tr>';
+      } else {
+        tbody.innerHTML = m.provider_stats.map(p => `
+          <tr>
+            <td><strong>${escapeHtml(p.name)}</strong></td>
+            <td>${p.request_count} ${p.failure_count > 0 ? `<span style="color:var(--danger)">(${p.failure_count} err)</span>` : ''}</td>
+            <td>${p.success_rate.toFixed(1)}%</td>
+            <td>${Math.round(p.avg_latency_ms)}ms</td>
+            <td>${p.prompt_tokens} / ${p.completion_tokens}</td>
+          </tr>
+        `).join("");
+      }
+
+      drawChart("chart-qps", m.timeseries, "qps", "#22c55e");
+      drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#60a5fa");
+    }
+
+    function drawChart(canvasId, timeseries, dataKey, color) {
+      const canvas = byId(canvasId);
+      if (!canvas || !timeseries || timeseries.length === 0) return;
+      
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+      }
+      
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const maxVal = Math.max(...timeseries.map(t => t[dataKey]), 1);
+      
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+
+      for (let i = 0; i < timeseries.length; i++) {
+        const x = (i / Math.max(timeseries.length - 1, 1)) * width;
+        const y = height - (timeseries[i][dataKey] / maxVal) * (height - 10) - 5;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Draw area under curve
+      ctx.lineTo(width, height);
+      ctx.lineTo(0, height);
+      
+      let fillStyle = color;
+      if (color === "#22c55e") fillStyle = "rgba(34, 197, 94, 0.15)";
+      else if (color === "#60a5fa") fillStyle = "rgba(96, 165, 250, 0.15)";
+      
+      ctx.fillStyle = fillStyle;
+      ctx.fill();
     }
 
     function setupEvents() {

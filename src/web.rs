@@ -12,6 +12,7 @@
 //! - `POST /api/routes` — create/update a model route
 //! - `DELETE /api/routes/:model` — delete a model route
 
+use crate::metrics::MetricsReader;
 use crate::router::{RealRouter, RouterStore};
 use axum::{Json, extract::Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
@@ -453,6 +454,24 @@ pub async fn delete_route(
         }),
     )
         .into_response()
+}
+
+// ── Metrics Dashboard Handlers ──────────────────────────────────────
+
+/// GET /metrics/summary — returns current metrics snapshot from memory.
+pub async fn metrics_summary_handler(
+    Extension(reader): Extension<MetricsReader>,
+) -> impl IntoResponse {
+    let snapshot = reader.snapshot();
+    (StatusCode::OK, Json(snapshot.as_ref().clone())).into_response()
+}
+
+/// GET /metrics/timeseries — returns timeseries data from memory.
+pub async fn metrics_timeseries_handler(
+    Extension(reader): Extension<MetricsReader>,
+) -> impl IntoResponse {
+    let snapshot = reader.snapshot();
+    (StatusCode::OK, Json(&snapshot.timeseries)).into_response()
 }
 
 #[cfg(test)]
