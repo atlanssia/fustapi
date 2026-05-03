@@ -71,7 +71,21 @@ fustapi serve --host 0.0.0.0 --port 9000 --data-dir /path/to/data
 - **Web UI**: Open `http://localhost:8800/ui` to manage providers and routes.
 - **Health Check**: `curl http://localhost:8800/health` → `{"status":"ok"}`
 
-### Monitoring & Logging
+### 📊 Monitoring & Observability
+
+FustAPI includes a built-in observability dashboard for real-time monitoring of gateway performance.
+
+- **Real-time Dashboard**: Integrated time-series charts for QPS and latency.
+- **High Performance**: Metrics collection is non-blocking and uses lock-free telemetry to ensure zero impact on request latency.
+- **Zero-Dependency**: No external metrics collector or database (Prometheus/InfluxDB) required.
+
+#### Accuracy Disclaimer
+FustAPI metrics are designed for high-performance monitoring and follow a "best-effort" accuracy model:
+- **Approximate Precision**: FustAPI does NOT guarantee exact token-level precision.
+- **Provider-Reported**: Token usage data is derived from provider responses when available.
+- **Batch Processing**: Metrics are computed and aggregated only at request completion to minimize overhead during active streaming.
+
+### 📝 Logging
 
 FustAPI outputs structured logs to **standard output (stdout)**. You can control the verbosity using the `RUST_LOG` environment variable:
 
