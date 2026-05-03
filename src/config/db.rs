@@ -44,10 +44,6 @@ CREATE TABLE IF NOT EXISTS routes (
     model TEXT PRIMARY KEY,
     provider_ids TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS fustapi_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
 CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);
 "#;
 
@@ -135,87 +131,7 @@ pub fn delete_route(conn: &Transaction, model: &str) -> Result<bool> {
     Ok(c > 0)
 }
 
-/// Seed the database with default providers and routes if it hasn't been seeded yet.
-pub fn seed_if_empty(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
 
-    // Check if we've already seeded this database
-    let seeded: i32 = tx
-        .query_row(
-            "SELECT COUNT(*) FROM fustapi_settings WHERE key = 'seeded' AND value = 'true'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if seeded > 0 {
-        return Ok(());
-    }
-
-    // Also check if there are already providers (for backward compatibility with older DBs)
-    let count: i64 = tx.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
-    if count > 0 {
-        // Mark as seeded so we don't check again
-        tx.execute(
-            "INSERT OR REPLACE INTO fustapi_settings (key, value) VALUES ('seeded', 'true')",
-            [],
-        )?;
-        tx.commit()?;
-        return Ok(());
-    }
-
-    let defaults = vec![
-        ProviderRecord {
-            id: "omlx".into(),
-            r#type: "omlx".into(),
-            base_url: "http://localhost:5000/v1".into(),
-            api_key: None,
-            upstream_model: None,
-            is_local: true,
-        },
-        ProviderRecord {
-            id: "lmstudio".into(),
-            r#type: "lmstudio".into(),
-            base_url: "http://localhost:1234/v1".into(),
-            api_key: None,
-            upstream_model: None,
-            is_local: true,
-        },
-        ProviderRecord {
-            id: "sglang".into(),
-            r#type: "sglang".into(),
-            base_url: "http://localhost:30000/v1".into(),
-            api_key: None,
-            upstream_model: None,
-            is_local: true,
-        },
-    ];
-    for p in defaults {
-        upsert_provider(&tx, &p)?;
-    }
-    let routes = vec![
-        RouteRecord {
-            model: "gpt-4".into(),
-            provider_ids: vec!["omlx".into(), "lmstudio".into()],
-        },
-        RouteRecord {
-            model: "claude-3".into(),
-            provider_ids: vec!["sglang".into(), "omlx".into()],
-        },
-    ];
-    for r in routes {
-        upsert_route(&tx, &r)?;
-    }
-
-    // Mark as seeded
-    tx.execute(
-        "INSERT OR REPLACE INTO fustapi_settings (key, value) VALUES ('seeded', 'true')",
-        [],
-    )?;
-
-    tx.commit()?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -278,20 +194,7 @@ mod tests {
         assert_eq!(loaded[0].provider_ids.len(), 2);
     }
 
-    #[test]
-    fn test_seed_if_empty_populates_defaults() {
-        let path = temp_db("seed");
-        let mut conn = init_db(&path).expect("init_db failed");
-        seed_if_empty(&mut conn).expect("seed_if_empty failed");
-        let providers = load_providers(&conn).unwrap();
-        assert!(providers.len() >= 3);
-        let routes = load_routes(&conn).unwrap();
-        assert!(routes.len() >= 2);
-        seed_if_empty(&mut conn).expect("seed_if_empty should be idempotent");
-        let after = load_providers(&conn).unwrap();
-        assert_eq!(after.len(), providers.len());
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
+
 
     #[test]
     fn test_delete_provider() {
@@ -331,26 +234,4 @@ mod tests {
         assert!(!delete_route(&conn.transaction().unwrap(), "delete-me").unwrap());
     }
 
-    #[test]
-    fn test_seed_if_empty_does_not_reseed_after_deletion() {
-        let path = temp_db("no_reseed");
-        let mut conn = init_db(&path).expect("init_db failed");
-        seed_if_empty(&mut conn).expect("seed_if_empty failed");
-
-        // Delete all providers
-        {
-            let tx = conn.transaction().unwrap();
-            tx.execute("DELETE FROM providers", []).unwrap();
-            tx.commit().unwrap();
-        }
-
-        // Try to seed again
-        seed_if_empty(&mut conn).expect("seed_if_empty failed");
-
-        // Check that providers are still empty
-        let providers = load_providers(&conn).unwrap();
-        assert_eq!(providers.len(), 0);
-
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
 }

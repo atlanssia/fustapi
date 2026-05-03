@@ -120,9 +120,8 @@ impl std::error::Error for ConfigError {
 
 /// Load configuration from SQLite database.
 pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
-    use db::{load_providers, load_routes, seed_if_empty};
-    let mut conn = db::init_db(db_path).map_err(ConfigError::DbError)?;
-    seed_if_empty(&mut conn).map_err(ConfigError::DbError)?;
+    use db::{load_providers, load_routes};
+    let conn = db::init_db(db_path).map_err(ConfigError::DbError)?;
     let provider_records = load_providers(&conn).map_err(ConfigError::DbError)?;
     let mut providers = HashMap::new();
     for rec in &provider_records {
@@ -276,15 +275,14 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_db_seeds_defaults() {
-        let dir = std::env::temp_dir().join("fustapi_test_load_db_test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let db_path = dir.join("test.db");
-        let cfg = load_from_db(&db_path).expect("load_from_db failed");
-        assert!(!cfg.providers.is_empty());
-        assert!(!cfg.router.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
+    fn test_load_from_db_is_empty_initially() {
+        let temp_dir = std::env::temp_dir().join(format!("fustapi_test_load_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("fustapi.db");
+        let cfg = load_from_db(&db_path).unwrap();
+        assert!(cfg.providers.is_empty());
+        assert!(cfg.router.is_empty());
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]

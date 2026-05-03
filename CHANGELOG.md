@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.9] - 2026-05-03
+
+### Changed
+- **Database Seeding** — Removed the automatic database seeding logic. FustAPI will no longer insert default providers when the database is empty, giving users full control over their configuration from a clean slate.
+
 ## [1.0.8] - 2026-05-03
 
 ### Fixed

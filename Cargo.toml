@@ -1,6 +1,6 @@
 [package]
 name = "fustapi"
-version = "1.0.8"
+version = "1.0.9"
 edition = "2024"
 description = "Local-first, high-performance LLM API aggregation gateway"
 license = "Apache-2.0"
