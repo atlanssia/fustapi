@@ -31,7 +31,25 @@ pub struct RouteRecord {
     pub provider_ids: Vec<String>,
 }
 
-const SCHEMA_SQL: &str = r#"CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, type TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT, upstream_model TEXT, is_local BOOLEAN NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS routes (model TEXT PRIMARY KEY, provider_ids TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);"#;
+const SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS providers (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT,
+    upstream_model TEXT,
+    is_local BOOLEAN NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS routes (
+    model TEXT PRIMARY KEY,
+    provider_ids TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fustapi_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);
+"#;
 
 /// Initialize the database at the given path. Enables WAL mode.
 pub fn init_db(db_path: &Path) -> Result<Connection> {
@@ -117,13 +135,35 @@ pub fn delete_route(conn: &Transaction, model: &str) -> Result<bool> {
     Ok(c > 0)
 }
 
-/// Seed the database with default providers and routes if tables are empty.
+/// Seed the database with default providers and routes if it hasn't been seeded yet.
 pub fn seed_if_empty(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
-    let count: i64 = tx.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
-    if count > 0 {
+
+    // Check if we've already seeded this database
+    let seeded: i32 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM fustapi_settings WHERE key = 'seeded' AND value = 'true'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    if seeded > 0 {
         return Ok(());
     }
+
+    // Also check if there are already providers (for backward compatibility with older DBs)
+    let count: i64 = tx.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
+    if count > 0 {
+        // Mark as seeded so we don't check again
+        tx.execute(
+            "INSERT OR REPLACE INTO fustapi_settings (key, value) VALUES ('seeded', 'true')",
+            [],
+        )?;
+        tx.commit()?;
+        return Ok(());
+    }
+
     let defaults = vec![
         ProviderRecord {
             id: "omlx".into(),
@@ -166,6 +206,13 @@ pub fn seed_if_empty(conn: &mut Connection) -> Result<()> {
     for r in routes {
         upsert_route(&tx, &r)?;
     }
+
+    // Mark as seeded
+    tx.execute(
+        "INSERT OR REPLACE INTO fustapi_settings (key, value) VALUES ('seeded', 'true')",
+        [],
+    )?;
+
     tx.commit()?;
     Ok(())
 }
@@ -282,5 +329,28 @@ mod tests {
         assert!(delete_route(&tx2, "delete-me").unwrap());
         tx2.commit().unwrap();
         assert!(!delete_route(&conn.transaction().unwrap(), "delete-me").unwrap());
+    }
+
+    #[test]
+    fn test_seed_if_empty_does_not_reseed_after_deletion() {
+        let path = temp_db("no_reseed");
+        let mut conn = init_db(&path).expect("init_db failed");
+        seed_if_empty(&mut conn).expect("seed_if_empty failed");
+
+        // Delete all providers
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute("DELETE FROM providers", []).unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Try to seed again
+        seed_if_empty(&mut conn).expect("seed_if_empty failed");
+
+        // Check that providers are still empty
+        let providers = load_providers(&conn).unwrap();
+        assert_eq!(providers.len(), 0);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
