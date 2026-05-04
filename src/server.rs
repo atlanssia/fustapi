@@ -126,6 +126,7 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
             "/v1/models",
             get(move |headers| models_handler(headers, router_for_v1_models.clone())),
         )
+        .route("/", get(web::ui_handler))
         .fallback(fallback_handler)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB body limit
         .layer(axum::extract::Extension(db_path))
@@ -164,13 +165,10 @@ async fn chat_completions_handler(
     let provider_name = resolve_provider_name(&body, current_router.as_ref());
     let start = emitter.request_start(&provider_name);
 
-    match protocol::dispatch_request(proto, body, current_router.as_ref()).await {
-        Ok(response) => {
-            emitter.request_end(&provider_name, start, true, None);
-            response
-        }
+    match protocol::dispatch_request(proto, body, current_router.as_ref(), emitter.clone(), provider_name.clone(), start).await {
+        Ok(response) => response, // StreamTracker/collector handles emitting request_end
         Err(e) => {
-            emitter.request_end(&provider_name, start, false, None);
+            emitter.request_end(&provider_name, start, false, None, None);
             e.into_response()
         }
     }
@@ -189,13 +187,10 @@ async fn messages_handler(
     let provider_name = resolve_provider_name(&body, current_router.as_ref());
     let start = emitter.request_start(&provider_name);
 
-    match protocol::dispatch_request(proto, body, current_router.as_ref()).await {
-        Ok(response) => {
-            emitter.request_end(&provider_name, start, true, None);
-            response
-        }
+    match protocol::dispatch_request(proto, body, current_router.as_ref(), emitter.clone(), provider_name.clone(), start).await {
+        Ok(response) => response,
         Err(e) => {
-            emitter.request_end(&provider_name, start, false, None);
+            emitter.request_end(&provider_name, start, false, None, None);
             e.into_response()
         }
     }

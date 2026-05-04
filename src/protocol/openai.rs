@@ -636,6 +636,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_call: None,
             done: false,
+            usage: None
         };
         let sse = serialize_stream_chunk(&chunk, "chatcmpl-1", "gpt-4", &0);
         assert!(sse.starts_with("data:"));
@@ -649,6 +650,7 @@ mod tests {
             content: None,
             tool_call: None,
             done: true,
+            usage: None
         };
         let sse = serialize_stream_chunk(&chunk, "chatcmpl-1", "gpt-4", &0);
         assert_eq!(sse.trim(), "data:[DONE]");

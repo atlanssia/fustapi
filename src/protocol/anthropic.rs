@@ -604,6 +604,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_call: None,
             done: false,
+            usage: None
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
         assert!(sse.contains("event: content_block_delta"));
@@ -617,6 +618,7 @@ mod tests {
             content: None,
             tool_call: None,
             done: true,
+            usage: None
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
         assert!(sse.contains("event: message_delta"));
@@ -633,6 +635,7 @@ mod tests {
             content: None,
             tool_call: Some(tc),
             done: false,
+            usage: None
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
         assert!(sse.contains("event: content_block_start"));

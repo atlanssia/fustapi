@@ -522,6 +522,9 @@ FustAPI metrics follow a high-performance "best-effort" model:
 ### 18.3 UI Integration
 
 The embedded Web UI provides a real-time dashboard visualizing:
-- **QPS (Requests per Second)**
-- **Average Latency**
-- **Token Throughput (Approximate)**
+- **QPS (Requests per Second)**: Aggregated across all active providers.
+- **Average Latency**: Full request-response cycle duration.
+- **TTFT (Time to First Token)**: Latency until the first chunk is received.
+- **Generation Speed**: Token throughput (tokens per second) during active generation.
+- **Token Usage**: Aggregate prompt and completion token counts.
+

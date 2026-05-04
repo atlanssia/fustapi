@@ -73,6 +73,7 @@ fn process_event(
             duration,
             success,
             tokens,
+            ttft_ms,
         } => {
             global.dec_in_flight();
             if *success {
@@ -85,7 +86,7 @@ fn process_event(
                 .as_ref()
                 .map(|t| (t.prompt_tokens, t.completion_tokens))
                 .unwrap_or((0, 0));
-            provider_stats.record(provider, *success, latency_ms, pt, ct);
+            provider_stats.record(provider, *success, latency_ms, pt, ct, *ttft_ms);
         }
     }
 }
@@ -113,6 +114,7 @@ mod tests {
         let end_event = MetricEvent::RequestEnd {
             provider: "omlx".into(),
             duration: Duration::from_millis(150),
+            ttft_ms: Some(100),
             success: true,
             tokens: Some(super::super::TokenUsage {
                 prompt_tokens: 10,

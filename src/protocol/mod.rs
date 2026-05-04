@@ -40,15 +40,18 @@ pub async fn dispatch_request(
     protocol: Protocol,
     body: String,
     router: &dyn Router,
+    emitter: crate::metrics::MetricsEmitter,
+    provider: String,
+    start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     match protocol {
-        Protocol::OpenAI => openai_handler(body, router).await,
-        Protocol::Anthropic => anthropic_handler(body, router).await,
+        Protocol::OpenAI => openai_handler(body, router, emitter, provider, start).await,
+        Protocol::Anthropic => anthropic_handler(body, router, emitter, provider, start).await,
     }
 }
 
 /// Handle an OpenAI-format request. Forwards to the appropriate provider.
-async fn openai_handler(body: String, router: &dyn Router) -> Result<Response, ProtocolError> {
+async fn openai_handler(body: String, router: &dyn Router, emitter: crate::metrics::MetricsEmitter, provider: String, start: std::time::Instant) -> Result<Response, ProtocolError> {
     let unified_req = openai::parse_chat_request(&body).map_err(|e| ProtocolError::Parse {
         message: e.to_string(),
         protocol: Protocol::OpenAI,
@@ -57,9 +60,10 @@ async fn openai_handler(body: String, router: &dyn Router) -> Result<Response, P
     let provider_req = unified_req.clone();
 
     if is_streaming(&body) {
-        forward_streaming(router, provider_req, &model, Protocol::OpenAI).await
+        let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
+        forward_streaming(router, provider_req, &model, Protocol::OpenAI, tracker).await
     } else {
-        collect_non_streaming(router, provider_req, &model, Protocol::OpenAI).await
+        collect_non_streaming(router, provider_req, &model, Protocol::OpenAI, emitter, provider, start).await
     }
 }
 
@@ -69,6 +73,7 @@ async fn forward_streaming(
     request: crate::provider::UnifiedRequest,
     model: &str,
     protocol: Protocol,
+    mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
     // If client requested Anthropic protocol, we MUST normalize if the provider is OpenAI-compatible (which all are currently).
     // Passthrough only works if the provider's native SSE matches the client's requested protocol.
@@ -88,33 +93,40 @@ async fn forward_streaming(
             let mut block_index = 0;
             let model_name_start = model_name.to_string();
 
-            let body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
-                Ok(chunk) => {
-                    let text = match protocol {
-                        Protocol::OpenAI => create_sse_chunk(&chunk, &model_name),
-                        Protocol::Anthropic => {
-                            let s = anthropic::serialize_stream_event(
-                                &chunk,
-                                "msg_gw",
-                                &model_name,
-                                &block_index,
-                            );
-                            if chunk.content.is_some() || chunk.tool_call.is_some() {
-                                block_index += 1;
+            let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
+                match chunk_result {
+                    Ok(chunk) => {
+                        tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+                        if let Some(usage) = &chunk.usage {
+                            tracker.set_tokens(usage.clone());
+                        }
+                        let text = match protocol {
+                            Protocol::OpenAI => create_sse_chunk(&chunk, &model_name),
+                            Protocol::Anthropic => {
+                                let s = anthropic::serialize_stream_event(
+                                    &chunk,
+                                    "msg_gw",
+                                    &model_name,
+                                    &block_index,
+                                );
+                                if chunk.content.is_some() || chunk.tool_call.is_some() {
+                                    block_index += 1;
+                                }
+                                s
                             }
-                            s
-                        }
-                    };
-                    Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
-                }
-                Err(e) => {
-                    let err_json = serde_json::json!({
-                        "error": {
-                            "message": e.to_string(),
-                            "type": "internal_error"
-                        }
-                    });
-                    Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", err_json)))
+                        };
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
+                    }
+                    Err(e) => {
+                        tracker.set_success(false);
+                        let err_json = serde_json::json!({
+                            "error": {
+                                "message": e.to_string(),
+                                "type": "internal_error"
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", err_json)))
+                    }
                 }
             }).boxed();
 
@@ -149,12 +161,31 @@ async fn forward_streaming(
             Ok(response)
         }
         crate::streaming::StreamMode::Passthrough(byte_stream) => {
+            let body_stream = futures::StreamExt::map(byte_stream, move |chunk_result| {
+                match chunk_result {
+                    Ok(bytes) => {
+                        tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+                        Ok::<_, std::convert::Infallible>(bytes)
+                    }
+                    Err(e) => {
+                        tracker.set_success(false);
+                        let err_json = serde_json::json!({
+                            "error": {
+                                "message": e.to_string(),
+                                "type": "internal_error"
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", err_json)))
+                    }
+                }
+            });
+
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
                 .header("cache-control", "no-cache")
                 .header("connection", "keep-alive")
-                .body(axum::body::Body::from_stream(byte_stream))
+                .body(axum::body::Body::from_stream(body_stream))
                 .unwrap_or_else(|_| {
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -267,6 +298,9 @@ async fn collect_non_streaming(
     request: crate::provider::UnifiedRequest,
     model: &str,
     protocol: Protocol,
+    emitter: crate::metrics::MetricsEmitter,
+    provider: String,
+    start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
 
@@ -290,9 +324,19 @@ async fn collect_non_streaming(
     };
 
     let mut chunks = Vec::new();
+    let mut first_token_ms = None;
+    let mut final_usage = None;
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
-            Ok(chunk) => chunks.push(chunk),
+            Ok(chunk) => {
+                if first_token_ms.is_none() {
+                    first_token_ms = Some(start.elapsed().as_millis() as u64);
+                }
+                if let Some(ref usage) = chunk.usage {
+                    final_usage = Some(usage.clone());
+                }
+                chunks.push(chunk);
+            }
             Err(e) => {
                 return Err(ProtocolError::Internal {
                     message: e.to_string(),
@@ -364,6 +408,8 @@ async fn collect_non_streaming(
         })?,
     };
 
+    emitter.request_end(&provider, start, true, final_usage, first_token_ms);
+
     Ok((
         StatusCode::OK,
         Json(serde_json::from_str::<serde_json::Value>(&response_body).unwrap()),
@@ -372,19 +418,19 @@ async fn collect_non_streaming(
 }
 
 /// Handle an Anthropic-format request. Forwards to the appropriate provider.
-async fn anthropic_handler(body: String, router: &dyn Router) -> Result<Response, ProtocolError> {
-    let unified_req =
-        anthropic::parse_messages_request(&body).map_err(|e| ProtocolError::Parse {
-            message: e.to_string(),
-            protocol: Protocol::Anthropic,
-        })?;
+async fn anthropic_handler(body: String, router: &dyn Router, emitter: crate::metrics::MetricsEmitter, provider: String, start: std::time::Instant) -> Result<Response, ProtocolError> {
+    let unified_req = anthropic::parse_messages_request(&body).map_err(|e| ProtocolError::Parse {
+        message: e.to_string(),
+        protocol: Protocol::Anthropic,
+    })?;
+
     let model = unified_req.model.clone();
-    let provider_req = unified_req.clone();
 
     if is_streaming(&body) {
-        forward_streaming(router, provider_req, &model, Protocol::Anthropic).await
+        let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
+        forward_streaming(router, unified_req, &model, Protocol::Anthropic, tracker).await
     } else {
-        collect_non_streaming(router, provider_req, &model, Protocol::Anthropic).await
+        collect_non_streaming(router, unified_req, &model, Protocol::Anthropic, emitter, provider, start).await
     }
 }
 

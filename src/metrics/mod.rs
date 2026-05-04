@@ -24,7 +24,7 @@ use snapshot::MetricsSnapshot;
 const CHANNEL_CAPACITY: usize = 4096;
 
 /// Token usage reported by the provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -44,6 +44,7 @@ pub enum MetricEvent {
         duration: Duration,
         success: bool,
         tokens: Option<TokenUsage>,
+        ttft_ms: Option<u64>,
     },
 }
 
@@ -80,15 +81,68 @@ impl MetricsEmitter {
         start: Instant,
         success: bool,
         tokens: Option<TokenUsage>,
+        ttft_ms: Option<u64>,
     ) {
         self.emit(MetricEvent::RequestEnd {
             provider: provider.to_string(),
             duration: start.elapsed(),
             success,
             tokens,
+            ttft_ms,
         });
     }
 }
+
+/// A tracker that automatically emits request_end when dropped.
+/// This is used to track stream lifetimes lock-free.
+pub struct StreamTracker {
+    pub emitter: MetricsEmitter,
+    pub provider: String,
+    pub start: Instant,
+    pub success: bool,
+    pub ttft_ms: Option<u64>,
+    pub tokens: Option<TokenUsage>,
+}
+
+impl StreamTracker {
+    pub fn new(emitter: MetricsEmitter, provider: String, start: Instant) -> Self {
+        Self {
+            emitter,
+            provider,
+            start,
+            success: true,
+            ttft_ms: None,
+            tokens: None,
+        }
+    }
+    
+    pub fn set_ttft(&mut self, ttft: u64) {
+        if self.ttft_ms.is_none() {
+            self.ttft_ms = Some(ttft);
+        }
+    }
+    
+    pub fn set_tokens(&mut self, tokens: TokenUsage) {
+        self.tokens = Some(tokens);
+    }
+    
+    pub fn set_success(&mut self, success: bool) {
+        self.success = success;
+    }
+}
+
+impl Drop for StreamTracker {
+    fn drop(&mut self) {
+        self.emitter.request_end(
+            &self.provider,
+            self.start,
+            self.success,
+            self.tokens.clone(),
+            self.ttft_ms,
+        );
+    }
+}
+
 
 /// Read-only handle for the dashboard to access the current snapshot.
 #[derive(Clone)]

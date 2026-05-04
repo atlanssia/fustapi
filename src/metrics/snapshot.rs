@@ -42,6 +42,8 @@ pub struct ProviderStats {
     pub success_rate: f64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub avg_ttft_ms: f64,
+    pub avg_gen_tokens_per_sec: f64,
 }
 
 /// Complete metrics snapshot served to the dashboard.
@@ -151,6 +153,16 @@ impl SnapshotBuilder {
                 } else {
                     0.0
                 };
+                let avg_ttft_ms = if c.ttft_samples > 0 {
+                    c.total_ttft_ms as f64 / c.ttft_samples as f64
+                } else {
+                    0.0
+                };
+                let avg_gen_tokens_per_sec = if c.total_generation_time_ms > 0 {
+                    (c.generation_tokens as f64 / c.total_generation_time_ms as f64) * 1000.0
+                } else {
+                    0.0
+                };
                 ProviderStats {
                     name: name.clone(),
                     request_count: c.request_count,
@@ -160,6 +172,8 @@ impl SnapshotBuilder {
                     success_rate: psr,
                     prompt_tokens: c.prompt_tokens,
                     completion_tokens: c.completion_tokens,
+                    avg_ttft_ms,
+                    avg_gen_tokens_per_sec,
                 }
             })
             .collect();
@@ -240,6 +254,10 @@ mod tests {
                 total_latency_ms: 9000,
                 prompt_tokens: 600,
                 completion_tokens: 1200,
+                total_ttft_ms: 3000,
+                ttft_samples: 60,
+                total_generation_time_ms: 6000,
+                generation_tokens: 1200,
             },
         );
         providers.insert(
@@ -251,6 +269,10 @@ mod tests {
                 total_latency_ms: 8000,
                 prompt_tokens: 400,
                 completion_tokens: 800,
+                total_ttft_ms: 2000,
+                ttft_samples: 40,
+                total_generation_time_ms: 6000,
+                generation_tokens: 800,
             },
         );
         let snap = builder.build(&global, &providers);

@@ -20,6 +20,9 @@ pub struct LLMChunk {
     /// Whether this is the final chunk.
     #[serde(default)]
     pub done: bool,
+    /// Token usage reported by the provider (typically in the final chunk).
+    #[serde(default)]
+    pub usage: Option<crate::metrics::TokenUsage>,
 }
 
 /// Type alias for the standard LLM stream.

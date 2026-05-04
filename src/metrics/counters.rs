@@ -76,6 +76,10 @@ pub struct ProviderCounters {
     pub total_latency_ms: u64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub total_ttft_ms: u64,
+    pub ttft_samples: u64,
+    pub total_generation_time_ms: u64,
+    pub generation_tokens: u64,
 }
 
 /// Thread-safe provider stats map. Only the aggregator writes; snapshots are
@@ -99,6 +103,7 @@ impl ProviderStatsMap {
         latency_ms: u64,
         prompt_tokens: u32,
         completion_tokens: u32,
+        ttft_ms: Option<u64>,
     ) {
         let mut map = self.inner.write().expect("provider stats lock poisoned");
         let entry = map.entry(provider.to_string()).or_default();
@@ -109,6 +114,14 @@ impl ProviderStatsMap {
         entry.total_latency_ms += latency_ms;
         entry.prompt_tokens += prompt_tokens as u64;
         entry.completion_tokens += completion_tokens as u64;
+        
+        if let Some(t) = ttft_ms {
+            entry.total_ttft_ms += t;
+            entry.ttft_samples += 1;
+            let gen_time = latency_ms.saturating_sub(t);
+            entry.total_generation_time_ms += gen_time;
+            entry.generation_tokens += completion_tokens as u64;
+        }
     }
 
     /// Record a fallback event for a provider (called by aggregator only).
@@ -150,9 +163,9 @@ mod tests {
     #[test]
     fn test_provider_stats_record_and_snapshot() {
         let stats = ProviderStatsMap::new();
-        stats.record("omlx", true, 150, 10, 20);
-        stats.record("omlx", false, 300, 5, 0);
-        stats.record("lmstudio", true, 100, 8, 15);
+        stats.record("omlx", true, 150, 10, 20, Some(50));
+        stats.record("omlx", false, 300, 5, 0, None);
+        stats.record("lmstudio", true, 100, 8, 15, Some(30));
         stats.record_fallback("lmstudio");
 
         let snap = stats.snapshot();
@@ -164,6 +177,10 @@ mod tests {
         assert_eq!(omlx.total_latency_ms, 450);
         assert_eq!(omlx.prompt_tokens, 15);
         assert_eq!(omlx.completion_tokens, 20);
+        assert_eq!(omlx.total_ttft_ms, 50);
+        assert_eq!(omlx.ttft_samples, 1);
+        assert_eq!(omlx.total_generation_time_ms, 100);
+        assert_eq!(omlx.generation_tokens, 20);
 
         let lms = &snap["lmstudio"];
         assert_eq!(lms.request_count, 1);

@@ -1000,11 +1000,13 @@
                     <th scope="col">Requests</th>
                     <th scope="col">Success Rate</th>
                     <th scope="col">Avg Latency</th>
+                    <th scope="col">Avg TTFT</th>
+                    <th scope="col">Gen Speed</th>
                     <th scope="col">Tokens (P/C)</th>
                   </tr>
                 </thead>
                 <tbody id="dashboard-providers-tbody">
-                  <tr><td colspan="5" class="state" style="padding: 1rem;">No data yet.</td></tr>
+                  <tr><td colspan="7" class="state" style="padding: 1rem;">No data yet.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1457,7 +1459,7 @@
           </svg>
           <strong>No providers configured</strong>
           <p style="margin-bottom: 1.5rem;">Add a local or cloud provider to start routing requests.</p>
-          <button class="btn primary" onclick="openModal('provider-modal')">Add your first Provider</button>
+          <button class="btn primary" data-provider-action="add">Add your first Provider</button>
         `);
         return;
       }
@@ -1500,6 +1502,7 @@
       document.querySelectorAll("[data-provider-action]").forEach((button) => {
         button.addEventListener("click", () => {
           const name = button.dataset.providerName || "";
+          if (button.dataset.providerAction === "add") openProviderModal();
           if (button.dataset.providerAction === "edit") openProviderModal(name);
           if (button.dataset.providerAction === "delete") confirmDeleteProvider(name);
         });
@@ -1642,7 +1645,7 @@
           </svg>
           <strong>No routes configured</strong>
           <p style="margin-bottom: 1.5rem;">Add a route to map your models to configured providers.</p>
-          <button class="btn primary" onclick="openModal('route-modal')">Add your first Route</button>
+          <button class="btn primary" data-route-action="add">Add your first Route</button>
         `);
         return;
       }
@@ -1675,6 +1678,7 @@
       document.querySelectorAll("[data-route-action]").forEach((button) => {
         button.addEventListener("click", () => {
           const model = button.dataset.routeId || "";
+          if (button.dataset.routeAction === "add") openRouteModal();
           if (button.dataset.routeAction === "edit") openRouteModal(model);
           if (button.dataset.routeAction === "delete") confirmDeleteRoute(model);
         });
@@ -1855,7 +1859,7 @@
 
       const tbody = byId("dashboard-providers-tbody");
       if (!m.provider_stats || m.provider_stats.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="state" style="padding: 1rem;">No data yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="state" style="padding: 1rem;">No data yet.</td></tr>';
       } else {
         tbody.innerHTML = m.provider_stats.map(p => `
           <tr>
@@ -1863,6 +1867,8 @@
             <td>${p.request_count} ${p.failure_count > 0 ? `<span style="color:var(--danger)">(${p.failure_count} err)</span>` : ''}</td>
             <td>${p.success_rate.toFixed(1)}%</td>
             <td>${Math.round(p.avg_latency_ms)}ms</td>
+            <td>${Math.round(p.avg_ttft_ms || 0)}ms</td>
+            <td>${Math.round(p.avg_gen_tokens_per_sec || 0)} t/s</td>
             <td>${p.prompt_tokens} / ${p.completion_tokens}</td>
           </tr>
         `).join("");

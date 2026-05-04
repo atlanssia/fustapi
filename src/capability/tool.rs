@@ -185,7 +185,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         // EOF while buffering. Try to parse tool call.
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: true,
@@ -194,7 +194,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             _ => {
                                 // Fallback to plain text
                                 let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: true,
@@ -223,7 +223,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                     } else {
                         // Normal text passthrough
                         let done = chunk.done;
-                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                             content: Some(content),
                             tool_call: None,
                             done,
@@ -236,7 +236,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
                                 self.buffer.clear();
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: chunk.done,
@@ -246,7 +246,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                                 // Fallback to plain text if done or exceeded size
                                 let content = std::mem::take(&mut self.buffer);
                                 self.is_buffering = false; // Stop buffering if not done
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: chunk.done,
@@ -263,7 +263,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                     if self.is_buffering {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: true,
@@ -271,7 +271,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             }
                             _ => {
                                 let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: true,
@@ -387,8 +387,8 @@ mod tests {
         use tokio_stream::StreamExt;
         
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("Hello".to_string()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some(" world!".to_string()), tool_call: None, done: true }),
+            Ok(crate::streaming::LLMChunk { content: Some("Hello".to_string()), tool_call: None, done: false , usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some(" world!".to_string()), tool_call: None, done: true , usage: None }),
         ];
         
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
@@ -410,9 +410,9 @@ mod tests {
         use tokio_stream::StreamExt;
         
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#""name":"test""#.to_string()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#","arguments":{}}"#.to_string()), tool_call: None, done: true }),
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false, usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#""name":"test""#.to_string()), tool_call: None, done: false, usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#","arguments":{}}"#.to_string()), tool_call: None, done: true, usage: None }),
         ];
         
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
@@ -433,8 +433,8 @@ mod tests {
         use tokio_stream::StreamExt;
         
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#"broken json"#.to_string()), tool_call: None, done: true }),
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false , usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some(r#"broken json"#.to_string()), tool_call: None, done: true , usage: None }),
         ];
         
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
@@ -455,9 +455,9 @@ mod tests {
         // Output something larger than 32KB
         let huge_string = "a".repeat(33000);
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some(huge_string.clone()), tool_call: None, done: false }),
-            Ok(crate::streaming::LLMChunk { content: Some("done".to_string()), tool_call: None, done: true }),
+            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false , usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some(huge_string.clone()), tool_call: None, done: false , usage: None }),
+            Ok(crate::streaming::LLMChunk { content: Some("done".to_string()), tool_call: None, done: true , usage: None }),
         ];
         
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
