@@ -90,7 +90,10 @@ async fn forward_streaming(
     match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => {
             use futures::StreamExt;
-            let mut block_index = 0;
+            let mut block_index: usize = 0;
+            // Tracks whether we need to emit content_block_start for the
+            // current text content block. Resets when the block changes.
+            let mut need_block_start = true;
             let model_name_start = model_name.to_string();
 
             let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
@@ -108,9 +111,22 @@ async fn forward_streaming(
                                     "msg_gw",
                                     &model_name,
                                     &block_index,
+                                    need_block_start,
                                 );
-                                if chunk.content.is_some() || chunk.tool_call.is_some() {
+                                if chunk.content.is_some() {
+                                    // After the first text chunk, subsequent
+                                    // deltas in the same block skip the start.
+                                    need_block_start = false;
+                                }
+                                if chunk.tool_call.is_some() {
+                                    // Tool calls always emit their own start.
                                     block_index += 1;
+                                    need_block_start = true;
+                                }
+                                if chunk.done {
+                                    // Done resets for the next potential block.
+                                    block_index += 1;
+                                    need_block_start = true;
                                 }
                                 s
                             }

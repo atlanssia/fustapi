@@ -398,10 +398,28 @@ pub fn serialize_response(
 }
 
 /// Serialize an LLMChunk to Anthropic SSE event format string.
-pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: &usize) -> String {
+///
+/// `need_block_start` indicates whether a `content_block_start` event should
+/// precede the first text delta for this content block. The caller is
+/// responsible for toggling this flag after the first text chunk is emitted.
+pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: &usize, need_block_start: bool) -> String {
     let mut s = String::new();
 
     if let Some(text) = &chunk.content {
+        // Anthropic protocol requires a content_block_start before the first
+        // text delta in each content block.
+        if need_block_start {
+            let block_start = serde_json::json!({
+                "type": "content_block_start",
+                "index": *index,
+                "content_block": { "type": "text", "text": "" }
+            });
+            s.push_str(&format!(
+                "event: content_block_start\n\ndata: {}\n\n",
+                serde_json::to_string(&block_start).unwrap_or_default()
+            ));
+        }
+
         let delta = AnthropicStreamEvent {
             event_type: "content_block_delta".to_string(),
             message: None,
@@ -454,6 +472,16 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
     }
 
     if chunk.done {
+        // Close the current content block before the final message_delta.
+        let block_stop = serde_json::json!({
+            "type": "content_block_stop",
+            "index": *index
+        });
+        s.push_str(&format!(
+            "event: content_block_stop\n\ndata: {}\n\n",
+            serde_json::to_string(&block_stop).unwrap_or_default()
+        ));
+
         let event = AnthropicStreamEvent {
             event_type: "message_delta".to_string(),
             message: None,
@@ -462,7 +490,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
                 delta_type: "stop_reason".to_string(),
                 text: None,
                 partial_json: None,
-                stop_reason: Some("stop".to_string()),
+                stop_reason: Some("end_turn".to_string()),
             }),
             content_block: None,
         };
@@ -476,24 +504,27 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
 }
 
 pub fn serialize_message_start(id: &str, model: &str) -> String {
-    let event = AnthropicStreamEvent {
-        event_type: "message_start".to_string(),
-        message: Some(AnthropicStreamMessage {
-            id: id.to_string(),
-            obj: "message".to_string(),
-            role: "assistant".to_string(),
-            content: Vec::new(),
-            model: model.to_string(),
-            stop_reason: None,
-            stop_sequence: None,
-        }),
-        index: None,
-        delta: None,
-        content_block: None,
-    };
+    // Build the message_start event manually to include the usage object
+    // that Claude Code expects.
+    let msg = serde_json::json!({
+        "type": "message_start",
+        "message": {
+            "id": id,
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": model,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0
+            }
+        }
+    });
     format!(
         "event: message_start\n\ndata: {}\n\n",
-        serde_json::to_string(&event).unwrap_or_default()
+        serde_json::to_string(&msg).unwrap_or_default()
     )
 }
 
@@ -606,7 +637,7 @@ mod tests {
             done: false,
             usage: None
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""text":"Hello""#));
         assert!(sse.ends_with("\n\n"));
@@ -620,7 +651,7 @@ mod tests {
             done: true,
             usage: None
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false);
         assert!(sse.contains("event: message_delta"));
         assert!(sse.contains(r#""type":"stop_reason""#));
     }
@@ -637,7 +668,7 @@ mod tests {
             done: false,
             usage: None
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
         assert!(sse.contains("event: content_block_start"));
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""type":"tool_use""#));
