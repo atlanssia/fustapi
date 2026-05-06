@@ -253,7 +253,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str) -> String {
                 "delta": {
                     "tool_calls": [{
                         "index": 0,
-                        "id": "call_emulated",
+                        "id": tc.id.clone().unwrap_or_else(|| "call_emulated".to_string()),
                         "type": "function",
                         "function": {
                             "name": tc.name,

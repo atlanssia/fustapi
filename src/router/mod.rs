@@ -170,6 +170,7 @@ impl Router for RealRouter {
                             ),
                             images: None,
                             tool_calls: None,
+                            tool_call_id: None,
                         },
                     );
                 }

@@ -86,11 +86,17 @@ impl OpenAIProvider {
 
             if let Some(tcs) = &msg.tool_calls {
                 let calls = tcs.iter().enumerate().map(|(i, tc)| serde_json::json!({
-                    "id": format!("call_{}", i),
+                    "id": tc.id.clone().unwrap_or_else(|| format!("call_{}", i)),
                     "type": "function",
                     "function": { "name": tc.name.clone(), "arguments": tc.arguments.to_string() }
                 })).collect::<Vec<_>>();
                 m["tool_calls"] = serde_json::json!(calls);
+            }
+
+            if msg.role == crate::provider::Role::Tool {
+                if let Some(tc_id) = &msg.tool_call_id {
+                    m["tool_call_id"] = serde_json::json!(tc_id);
+                }
             }
 
             m
@@ -135,6 +141,7 @@ impl OpenAIProvider {
                     chunks.push(LLMChunk { usage: None,
                         content: None,
                         tool_call: Some(crate::capability::ToolCall {
+                            id: Some(tc.id.clone()),
                             name: tc.function.name.clone(),
                             arguments: serde_json::from_str(&tc.function.arguments)
                                 .unwrap_or_default(),
@@ -213,12 +220,13 @@ pub fn parse_openai_sse_stream(
 ) -> LLMStream {
     use futures::stream;
     let buffer = String::new();
+    let tool_id: Option<String> = None;
     let tool_name: Option<String> = None;
     let tool_args = String::new();
 
     let s = stream::unfold(
-        (stream, buffer, tool_name, tool_args),
-        |(mut stream, mut buffer, mut tool_name, mut tool_args)| async move {
+        (stream, buffer, tool_id, tool_name, tool_args),
+        |(mut stream, mut buffer, mut tool_id, mut tool_name, mut tool_args)| async move {
             loop {
                 if let Some(pos) = buffer.find('\n') {
                     let line = buffer[..pos].trim().to_string();
@@ -231,6 +239,7 @@ pub fn parse_openai_sse_stream(
                                 let args = serde_json::from_str(&tool_args)
                                     .unwrap_or(serde_json::json!({}));
                                 let tc = crate::capability::ToolCall {
+                                    id: tool_id.take(),
                                     name,
                                     arguments: args,
                                 };
@@ -240,7 +249,7 @@ pub fn parse_openai_sse_stream(
                                         tool_call: Some(tc),
                                         done: true,
                                     }),
-                                    (stream, buffer, tool_name, tool_args),
+                                    (stream, buffer, tool_id, tool_name, tool_args),
                                 ));
                             }
                             return Some((
@@ -249,7 +258,7 @@ pub fn parse_openai_sse_stream(
                                     tool_call: None,
                                     done: true,
                                 }),
-                                (stream, buffer, tool_name, tool_args),
+                                (stream, buffer, tool_id, tool_name, tool_args),
                             ));
                         }
                         if !data.is_empty()
@@ -271,13 +280,14 @@ pub fn parse_openai_sse_stream(
                                         tool_call: None,
                                         done: false,
                                     }),
-                                    (stream, buffer, tool_name, tool_args),
+                                    (stream, buffer, tool_id, tool_name, tool_args),
                                 ));
                             }
                             if let Some(tool_calls) = delta.get("tool_calls")
                                 && let Some(tc) = tool_calls.get(0)
                                 && let Some(func) = tc.get("function")
                             {
+                                let new_id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
                                 let new_name = func.get("name").and_then(|n| n.as_str());
                                 let new_args =
                                     func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
@@ -288,10 +298,12 @@ pub fn parse_openai_sse_stream(
                                         let parsed_args = serde_json::from_str(&tool_args)
                                             .unwrap_or(serde_json::json!({}));
                                         flush_tc = Some(crate::capability::ToolCall {
+                                            id: tool_id.take(),
                                             name: old_name,
                                             arguments: parsed_args,
                                         });
                                     }
+                                    tool_id = new_id;
                                     tool_name = Some(name.to_string());
                                     tool_args = new_args.to_string();
 
@@ -302,7 +314,7 @@ pub fn parse_openai_sse_stream(
                                                 tool_call: flush_tc,
                                                 done: false,
                                             }),
-                                            (stream, buffer, tool_name, tool_args),
+                                            (stream, buffer, tool_id, tool_name, tool_args),
                                         ));
                                     }
                                 } else {
@@ -322,7 +334,7 @@ pub fn parse_openai_sse_stream(
                     Some(Err(e)) => {
                         return Some((
                             Err(crate::streaming::StreamError::Provider(e.to_string())),
-                            (stream, buffer, tool_name, tool_args),
+                            (stream, buffer, tool_id, tool_name, tool_args),
                         ));
                     }
                     None => {
@@ -330,6 +342,7 @@ pub fn parse_openai_sse_stream(
                             let args =
                                 serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
                             let tc = crate::capability::ToolCall {
+                                id: tool_id.take(),
                                 name,
                                 arguments: args,
                             };
@@ -339,7 +352,7 @@ pub fn parse_openai_sse_stream(
                                     tool_call: Some(tc),
                                     done: true,
                                 }),
-                                (stream, buffer, tool_name, tool_args),
+                                (stream, buffer, tool_id, tool_name, tool_args),
                             ));
                         }
                         return None;

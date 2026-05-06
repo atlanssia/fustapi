@@ -37,6 +37,10 @@ pub struct Message {
     /// Optional tool calls (for assistant messages with tool responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Tool call ID (required for `tool` role messages — references the
+    /// `id` field of the corresponding assistant tool_call).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Chat message role.

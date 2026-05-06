@@ -311,21 +311,19 @@ fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
     let tool_calls = msg.tool_calls.map(|tcs| {
         tcs.into_iter()
             .map(|tc| ToolCall {
+                id: Some(tc.id),
                 name: tc.function.name,
                 arguments: serde_json::from_str(&tc.function.arguments).unwrap_or_default(),
             })
             .collect()
     });
 
-    // Handle tool_call_id by prepending it to content for providers that need it, 
-    // or we can add it to the Unified Message structure if needed. 
-    // For now, let's just make sure it's parsed.
-    
     Ok(Message {
         role,
         content,
         images,
         tool_calls,
+        tool_call_id: msg.tool_call_id,
     })
 }
 
@@ -439,7 +437,7 @@ pub fn serialize_response(
         for (i, tc) in tcs.iter().enumerate() {
             tc_outs.push(OpenAIToolCallOut {
                 index: i,
-                id: format!("call_{}", i),
+                id: tc.id.clone().unwrap_or_else(|| format!("call_{}", i)),
                 kind: "function",
                 function: OpenAIFunctionCall {
                     name: tc.name.clone(),
@@ -496,7 +494,7 @@ pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &u
     if let Some(tc) = &chunk.tool_call {
         delta.tool_calls = Some(vec![OpenAIStreamToolCall {
             index: *index,
-            id: Some(format!("call_{}", index)),
+            id: Some(tc.id.clone().unwrap_or_else(|| format!("call_{}", index))),
             kind: Some("function"),
             function: Some(OpenAIStreamFunction {
                 name: Some(tc.name.clone()),
@@ -659,6 +657,7 @@ mod tests {
     #[test]
     fn test_serialize_tool_calls_response() {
         let tcs = vec![ToolCall {
+            id: None,
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         }];

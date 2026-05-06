@@ -232,6 +232,7 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
                 content: sys,
                 images: None,
                 tool_calls: None,
+                tool_call_id: None,
             },
         );
     }
@@ -268,6 +269,7 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
     let mut text_parts = Vec::new();
     let mut images = Vec::new();
     let mut tool_calls = Vec::new();
+    let mut tool_call_id = None;
 
     let blocks = msg.content_blocks();
     for part in blocks {
@@ -279,11 +281,16 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
             }
             "tool_use" => {
                 tool_calls.push(ToolCall {
+                    id: part.id.clone(),
                     name: part.name.clone().unwrap_or_default(),
                     arguments: part.input.clone().unwrap_or(Value::Object(serde_json::Map::new())),
                 });
             }
             "tool_result" => {
+                // Capture tool_use_id for this tool result message.
+                if part.tool_use_id.is_some() {
+                    tool_call_id = part.tool_use_id.clone();
+                }
                 if let Some(content) = part.content {
                     match content {
                         AnthropicToolResultContent::Simple(s) => text_parts.push(s),
@@ -320,6 +327,7 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
         content,
         images: if images.is_empty() { None } else { Some(images) },
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        tool_call_id,
     })
 }
 
@@ -650,6 +658,7 @@ mod tests {
     #[test]
     fn test_serialize_response_tool_use() {
         let tcs = vec![ToolCall {
+            id: None,
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         }];
@@ -691,6 +700,7 @@ mod tests {
     #[test]
     fn test_serialize_stream_event_tool_call() {
         let tc = ToolCall {
+            id: None,
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         };

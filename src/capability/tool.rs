@@ -9,6 +9,10 @@ use serde_json::Value;
 /// A completed tool call from the LLM.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCall {
+    /// The ID of the tool call (e.g., "call_abc123"). Must be preserved for
+    /// tool result messages to reference back via `tool_call_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// The name of the tool to call.
     pub name: String,
     /// JSON-encoded arguments for the tool.
@@ -111,6 +115,7 @@ fn parse_json_tool_call(json_str: &str) -> Result<Option<ToolCall>, ParseError> 
         parsed.arguments
     };
     Ok(Some(ToolCall {
+        id: None,
         name: parsed.name,
         arguments,
     }))
