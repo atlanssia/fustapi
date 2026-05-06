@@ -323,6 +323,15 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
         }
     }
 
+    // Anthropic sends tool results as user messages with tool_result blocks.
+    // OpenAI-compatible backends expect tool results as role="tool" messages
+    // with matching tool_call_id. Map accordingly.
+    let role = if tool_call_id.is_some() {
+        Role::Tool
+    } else {
+        role
+    };
+
     let content = text_parts.join("\n");
     Ok(Message {
         role,
