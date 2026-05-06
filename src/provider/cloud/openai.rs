@@ -98,6 +98,13 @@ impl OpenAIProvider {
                     m["tool_call_id"] = serde_json::json!(tc_id);
                 }
 
+            // Forward provider-specific extras (e.g., DeepSeek reasoning_content).
+            if let Some(extras) = &msg.extras {
+                for (key, value) in extras {
+                    m[key] = value.clone();
+                }
+            }
+
             m
         }).collect::<Vec<_>>();
 

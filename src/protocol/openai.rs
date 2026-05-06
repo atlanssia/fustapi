@@ -34,6 +34,9 @@ pub struct OpenAIMessage {
     pub tool_calls: Option<Vec<OpenAIToolCallIn>>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// DeepSeek thinking mode: internal reasoning content that must be echoed back.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -318,12 +321,19 @@ fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
             .collect()
     });
 
+    // Collect provider-specific fields into extras.
+    let mut extras = serde_json::Map::new();
+    if let Some(rc) = msg.reasoning_content {
+        extras.insert("reasoning_content".to_string(), serde_json::Value::String(rc));
+    }
+
     Ok(Message {
         role,
         content,
         images,
         tool_calls,
         tool_call_id: msg.tool_call_id,
+        extras: if extras.is_empty() { None } else { Some(extras) },
     })
 }
 

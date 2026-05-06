@@ -231,6 +231,7 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
                 images: None,
                 tool_calls: None,
                 tool_call_id: None,
+                extras: None,
             },
         );
     }
@@ -335,6 +336,7 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
             Some(tool_calls)
         },
         tool_call_id,
+        extras: None,
     })
 }
 

@@ -41,6 +41,11 @@ pub struct Message {
     /// `id` field of the corresponding assistant tool_call).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Provider-specific fields not part of the core protocol (e.g., DeepSeek's
+    /// `reasoning_content`). Forwarded transparently — providers that don't
+    /// recognize a field simply ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Chat message role.
