@@ -134,6 +134,8 @@ pub struct AnthropicContentOut {
     #[serde(rename = "type")]
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
@@ -351,11 +353,11 @@ enum AnthropicContent {
 struct AnthropicContentBlockOut {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     input: Option<Value>,
 }
 
@@ -419,15 +421,17 @@ pub fn serialize_response(
     if let Some(text) = content {
         content_outs.push(AnthropicContentOut {
             kind: "text".to_string(),
+            id: None,
             text: Some(text.to_string()),
             input: None,
             name: None,
         });
     }
     if let Some(tcs) = tool_calls {
-        for tc in tcs {
+        for (i, tc) in tcs.into_iter().enumerate() {
             content_outs.push(AnthropicContentOut {
                 kind: "tool_use".to_string(),
+                id: Some(tc.id.clone().unwrap_or_else(|| format!("toolu_{}", i))),
                 text: None,
                 input: Some(tc.arguments),
                 name: Some(tc.name),
@@ -449,20 +453,20 @@ pub fn serialize_response(
 /// Serialize an LLMChunk to Anthropic SSE event format string.
 ///
 /// `need_block_start` indicates whether a `content_block_start` event should
-/// precede the first text delta for this content block. The caller is
-/// responsible for toggling this flag after the first text chunk is emitted.
+/// precede the first text delta for this content block.
+/// `stop_reason` is the Anthropic stop reason to use when `chunk.done` is true
+/// (e.g., `"end_turn"` for text, `"tool_use"` for tool calls).
 pub fn serialize_stream_event(
     chunk: &LLMChunk,
     _id: &str,
     _model: &str,
     index: &usize,
     need_block_start: bool,
+    stop_reason: &str,
 ) -> String {
     let mut s = String::new();
 
     if let Some(text) = &chunk.content {
-        // Anthropic protocol requires a content_block_start before the first
-        // text delta in each content block.
         if need_block_start {
             let block_start = serde_json::json!({
                 "type": "content_block_start",
@@ -494,6 +498,7 @@ pub fn serialize_stream_event(
     }
 
     if let Some(tc) = &chunk.tool_call {
+        let tool_id = tc.id.clone().unwrap_or_else(|| format!("toolu_{}", index));
         let start = AnthropicStreamEvent {
             event_type: "content_block_start".to_string(),
             message: None,
@@ -501,7 +506,7 @@ pub fn serialize_stream_event(
             delta: None,
             content_block: Some(AnthropicContentBlockOut {
                 kind: "tool_use".to_string(),
-                id: Some(format!("toolu_{}", index)),
+                id: Some(tool_id),
                 name: Some(tc.name.clone()),
                 input: None,
             }),
@@ -512,7 +517,7 @@ pub fn serialize_stream_event(
             message: None,
             index: Some(*index),
             delta: Some(AnthropicStreamDelta {
-                delta_type: "input_json".to_string(),
+                delta_type: "input_json_delta".to_string(),
                 text: None,
                 partial_json: Some(json_str),
                 stop_reason: None,
@@ -527,7 +532,6 @@ pub fn serialize_stream_event(
     }
 
     if chunk.done {
-        // Close the current content block before the final message_delta.
         let block_stop = serde_json::json!({
             "type": "content_block_stop",
             "index": *index
@@ -537,21 +541,19 @@ pub fn serialize_stream_event(
             serde_json::to_string(&block_stop).unwrap_or_default()
         ));
 
-        let event = AnthropicStreamEvent {
-            event_type: "message_delta".to_string(),
-            message: None,
-            index: None,
-            delta: Some(AnthropicStreamDelta {
-                delta_type: "stop_reason".to_string(),
-                text: None,
-                partial_json: None,
-                stop_reason: Some("end_turn".to_string()),
-            }),
-            content_block: None,
-        };
+        let msg_delta = serde_json::json!({
+            "type": "message_delta",
+            "delta": {
+                "type": "stop_reason",
+                "stop_reason": stop_reason
+            },
+            "usage": {
+                "output_tokens": 0
+            }
+        });
         s.push_str(&format!(
             "event: message_delta\ndata: {}\n\n",
-            serde_json::to_string(&event).unwrap_or_default()
+            serde_json::to_string(&msg_delta).unwrap_or_default()
         ));
     }
 
@@ -693,7 +695,7 @@ mod tests {
             done: false,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "end_turn");
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""text":"Hello""#));
         assert!(sse.ends_with("\n\n"));
@@ -707,7 +709,7 @@ mod tests {
             done: true,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false, "end_turn");
         assert!(sse.contains("event: message_delta"));
         assert!(sse.contains(r#""type":"stop_reason""#));
     }
@@ -725,7 +727,7 @@ mod tests {
             done: false,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "tool_use");
         assert!(sse.contains("event: content_block_start"));
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""type":"tool_use""#));

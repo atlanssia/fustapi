@@ -24,7 +24,7 @@ pub async fn forward_sse_stream(
                 Ok(chunk) => {
                     let sse_str = match protocol {
                         Protocol::OpenAI => openai::serialize_stream_chunk(&chunk, id, "mock", &index),
-                        Protocol::Anthropic => anthropic::serialize_stream_event(&chunk, id, "mock", &index),
+                        Protocol::Anthropic => anthropic::serialize_stream_event(&chunk, id, "mock", &index, true, "end_turn"),
                     };
                     index += 1;
 

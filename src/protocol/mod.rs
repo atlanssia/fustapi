@@ -110,6 +110,13 @@ async fn forward_streaming(
             // Tracks whether we need to emit content_block_start for the
             // current text content block. Resets when the block changes.
             let mut need_block_start = true;
+            // Tracks whether a text content block is currently open and needs
+            // a content_block_stop before a tool_use block starts.
+            let mut text_block_open = false;
+            // Tracks whether any tool call has been emitted (for stop_reason).
+            let mut has_tool_calls = false;
+            // Tracks whether the initial role chunk has been sent (OpenAI protocol).
+            let mut sent_role = false;
             let model_name_start = model_name.to_string();
 
             let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
@@ -120,31 +127,68 @@ async fn forward_streaming(
                             tracker.set_tokens(usage.clone());
                         }
                         let text = match protocol {
-                            Protocol::OpenAI => create_sse_chunk(&chunk, &model_name),
+                            Protocol::OpenAI => {
+                                let include_role = !sent_role;
+                                sent_role = true;
+                                create_sse_chunk(&chunk, &model_name, include_role)
+                            }
                             Protocol::Anthropic => {
+                                let mut prefix = String::new();
+
+                                // If a text block is open and we're about to start
+                                // a tool_use block or end the message, close the
+                                // text block first.
+                                if text_block_open
+                                    && (chunk.tool_call.is_some() || chunk.done)
+                                {
+                                    let block_stop = serde_json::json!({
+                                        "type": "content_block_stop",
+                                        "index": block_index
+                                    });
+                                    prefix.push_str(&format!(
+                                        "event: content_block_stop\ndata: {}\n\n",
+                                        serde_json::to_string(&block_stop)
+                                            .unwrap_or_default()
+                                    ));
+                                    block_index += 1;
+                                    text_block_open = false;
+                                    need_block_start = true;
+                                }
+
+                                let stop_reason = if has_tool_calls
+                                    || chunk.tool_call.is_some()
+                                {
+                                    "tool_use"
+                                } else {
+                                    "end_turn"
+                                };
+
                                 let s = anthropic::serialize_stream_event(
                                     &chunk,
                                     "msg_gw",
                                     &model_name,
                                     &block_index,
                                     need_block_start,
+                                    stop_reason,
                                 );
+
                                 if chunk.content.is_some() {
-                                    // After the first text chunk, subsequent
-                                    // deltas in the same block skip the start.
                                     need_block_start = false;
+                                    text_block_open = true;
                                 }
                                 if chunk.tool_call.is_some() {
-                                    // Tool calls always emit their own start.
+                                    has_tool_calls = true;
                                     block_index += 1;
                                     need_block_start = true;
+                                    text_block_open = false;
                                 }
                                 if chunk.done {
-                                    // Done resets for the next potential block.
                                     block_index += 1;
                                     need_block_start = true;
+                                    text_block_open = false;
                                 }
-                                s
+
+                                format!("{}{}", prefix, s)
                             }
                         };
                         Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
@@ -243,15 +287,29 @@ async fn forward_streaming(
     }
 }
 
-/// Create an SSE-formatted chunk from an LLMChunk.  
-fn create_sse_chunk(chunk: &LLMChunk, model: &str) -> String {
+/// Create an SSE-formatted chunk from an LLMChunk.
+fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String {
     let ts = current_timestamp();
     let mut lines = Vec::new();
+
+    if include_role {
+        let role_data = serde_json::json!({
+            "id": "chatcmpl-gw",
+            "object": "chat.completion.chunk",
+            "created": ts,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant"},
+                "finish_reason": null
+            }]
+        });
+        lines.push(format!("data: {}", role_data));
+    }
 
     if let Some(ref content) = chunk.content
         && !content.is_empty()
     {
-        let escaped = escape_json(content);
         let data = serde_json::json!({
             "id": "chatcmpl-gw",
             "object": "chat.completion.chunk",
@@ -259,7 +317,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str) -> String {
             "model": model,
             "choices": [{
                 "index": 0,
-                "delta": {"content": escaped},
+                "delta": {"content": content},
                 "finish_reason": null
             }]
         });
@@ -319,7 +377,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str) -> String {
     }
 }
 
-/// Get current UTC timestamp in seconds.  
+/// Get current UTC timestamp in seconds.
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -328,16 +386,7 @@ fn current_timestamp() -> u64 {
         .as_secs()
 }
 
-/// Escape a string for JSON embedding in SSE data.  
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
-
-/// Collect all chunks and return a single non-streaming response.  
+/// Collect all chunks and return a single non-streaming response.
 async fn collect_non_streaming(
     router: &dyn Router,
     request: crate::provider::UnifiedRequest,
