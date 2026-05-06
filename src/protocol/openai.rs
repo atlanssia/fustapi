@@ -324,7 +324,10 @@ fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
     // Collect provider-specific fields into extras.
     let mut extras = serde_json::Map::new();
     if let Some(rc) = msg.reasoning_content {
-        extras.insert("reasoning_content".to_string(), serde_json::Value::String(rc));
+        extras.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(rc),
+        );
     }
 
     Ok(Message {
@@ -333,7 +336,11 @@ fn parse_openai_message(msg: OpenAIMessage) -> Result<Message, ParseError> {
         images,
         tool_calls,
         tool_call_id: msg.tool_call_id,
-        extras: if extras.is_empty() { None } else { Some(extras) },
+        extras: if extras.is_empty() {
+            None
+        } else {
+            Some(extras)
+        },
     })
 }
 
