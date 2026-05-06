@@ -23,6 +23,9 @@ pub struct OpenAIRequest {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub tools: Option<Vec<OpenAITool>>,
+    /// Capture all other request parameters (top_p, stop, n, etc.) for passthrough.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +141,8 @@ pub struct OpenAIMessageOut {
     pub role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAIToolCallOut>>,
 }
@@ -263,6 +268,7 @@ pub fn parse_chat_request(json_str: &str) -> Result<UnifiedRequest, ParseError> 
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?,
+        extra_params: req.extra,
     })
 }
 
@@ -438,6 +444,7 @@ pub fn serialize_response(
     prompt_tokens: usize,
     completion_tokens: usize,
     total_tokens: usize,
+    reasoning_content: Option<&str>,
 ) -> Result<String, SerializeError> {
     let mut choices = Vec::new();
     if let Some(text) = content {
@@ -446,6 +453,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: Some(text.to_string()),
+                reasoning_content: reasoning_content.map(|s| s.to_string()),
                 tool_calls: None,
             },
             finish_reason: Some(finish_reason),
@@ -468,6 +476,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: None,
+                reasoning_content: reasoning_content.map(|s| s.to_string()),
                 tool_calls: Some(tc_outs),
             },
             finish_reason: Some(finish_reason),
@@ -479,6 +488,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: None,
+                reasoning_content: reasoning_content.map(|s| s.to_string()),
                 tool_calls: None,
             },
             finish_reason: Some(finish_reason),
@@ -636,6 +646,7 @@ mod tests {
             10,
             5,
             15,
+            None,
         )
         .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
@@ -691,6 +702,7 @@ mod tests {
             10,
             5,
             15,
+            None,
         )
         .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
@@ -702,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_serialize_empty_response() {
-        let json = serialize_response("chatcmpl-1", "gpt-4", None, None, "stop", 0, 0, 0)
+        let json = serialize_response("chatcmpl-1", "gpt-4", None, None, "stop", 0, 0, 0, None)
             .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["choices"].as_array().unwrap().len(), 1);

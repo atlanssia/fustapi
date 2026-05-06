@@ -131,6 +131,11 @@ impl OpenAIProvider {
             body["tools"] = serde_json::json!(tool_defs);
         }
 
+        // Forward all extra parameters (top_p, stop, n, etc.) as-is.
+        for (key, value) in &request.extra_params {
+            body[key] = value.clone();
+        }
+
         body
     }
 

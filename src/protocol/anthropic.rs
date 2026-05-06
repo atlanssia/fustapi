@@ -25,6 +25,9 @@ pub struct AnthropicRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub tools: Option<Vec<AnthropicTool>>,
+    /// Capture all other request parameters (top_p, top_k, stop_sequences, etc.) for passthrough.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Deserialize Anthropic `system` field which can be a string or an array of
@@ -77,6 +80,10 @@ pub struct AnthropicContentBlock {
     pub kind: String,
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>, // For thinking blocks (Claude extended thinking / DeepSeek reasoning)
+    #[serde(default)]
+    pub signature: Option<String>, // For thinking blocks
     #[serde(default)]
     pub id: Option<String>, // For tool_use
     #[serde(default)]
@@ -252,6 +259,7 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?,
+        extra_params: req.extra,
     })
 }
 
@@ -271,10 +279,17 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
     let mut images = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_call_id = None;
+    let mut reasoning_parts = Vec::new();
 
     let blocks = msg.content_blocks();
     for part in blocks {
         match part.kind.as_str() {
+            "thinking" | "redacted_thinking" => {
+                // DeepSeek reasoning_content mapped to Anthropic thinking blocks.
+                if let Some(t) = part.thinking.clone() {
+                    reasoning_parts.push(t);
+                }
+            }
             "text" => {
                 if let Some(t) = part.text {
                     text_parts.push(t);
@@ -333,6 +348,13 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
     };
 
     let content = text_parts.join("\n");
+    let mut extras = serde_json::Map::new();
+    if !reasoning_parts.is_empty() {
+        extras.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(reasoning_parts.join("\n")),
+        );
+    }
     Ok(Message {
         role,
         content,
@@ -347,7 +369,11 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
             Some(tool_calls)
         },
         tool_call_id,
-        extras: None,
+        extras: if extras.is_empty() {
+            None
+        } else {
+            Some(extras)
+        },
     })
 }
 
@@ -419,14 +445,26 @@ impl std::error::Error for SerializeError {
 }
 
 /// Serialize a non-streaming Anthropic response.
+#[allow(clippy::too_many_arguments)]
 pub fn serialize_response(
     id: &str,
     model: &str,
     content: Option<&str>,
     tool_calls: Option<Vec<ToolCall>>,
     stop_reason: Option<&str>,
+    reasoning_content: Option<&str>,
 ) -> Result<String, SerializeError> {
     let mut content_outs = Vec::new();
+    // Anthropic thinking block for reasoning content (DeepSeek → Anthropic mapping).
+    if let Some(reasoning) = reasoning_content {
+        content_outs.push(AnthropicContentOut {
+            kind: "thinking".to_string(),
+            id: None,
+            text: Some(reasoning.to_string()),
+            input: None,
+            name: None,
+        });
+    }
     if let Some(text) = content {
         content_outs.push(AnthropicContentOut {
             kind: "text".to_string(),
@@ -474,6 +512,31 @@ pub fn serialize_stream_event(
     stop_reason: &str,
 ) -> String {
     let mut s = String::new();
+
+    // DeepSeek reasoning_content → Anthropic thinking block
+    if let Some(reasoning) = &chunk.reasoning_content {
+        if need_block_start {
+            let block_start = serde_json::json!({
+                "type": "content_block_start",
+                "index": *index,
+                "content_block": { "type": "thinking", "thinking": "" }
+            });
+            s.push_str(&format!(
+                "event: content_block_start\ndata: {}\n\n",
+                serde_json::to_string(&block_start).unwrap_or_default()
+            ));
+        }
+
+        let delta = serde_json::json!({
+            "type": "content_block_delta",
+            "index": *index,
+            "delta": { "type": "thinking_delta", "thinking": reasoning }
+        });
+        s.push_str(&format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::to_string(&delta).unwrap_or_default()
+        ));
+    }
 
     if let Some(text) = &chunk.content {
         if need_block_start {
@@ -671,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_serialize_response_text() {
-        let json = serialize_response("msg_1", "claude-3", Some("Hello!"), None, Some("end_turn"))
+        let json = serialize_response("msg_1", "claude-3", Some("Hello!"), None, Some("end_turn"), None)
             .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["id"], "msg_1");
@@ -688,7 +751,7 @@ mod tests {
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         }];
-        let json = serialize_response("msg_1", "claude-3", None, Some(tcs), Some("tool_use"))
+        let json = serialize_response("msg_1", "claude-3", None, Some(tcs), Some("tool_use"), None)
             .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["content"][0]["type"], "tool_use");

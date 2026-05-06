@@ -108,11 +108,13 @@ async fn forward_streaming(
             use futures::StreamExt;
             let mut block_index: usize = 0;
             // Tracks whether we need to emit content_block_start for the
-            // current text content block. Resets when the block changes.
+            // current content block. Resets when the block changes.
             let mut need_block_start = true;
             // Tracks whether a text content block is currently open and needs
-            // a content_block_stop before a tool_use block starts.
+            // a content_block_stop before a different block type starts.
             let mut text_block_open = false;
+            // Tracks whether a thinking/reasoning block is currently open.
+            let mut reasoning_block_open = false;
             // Tracks whether any tool call has been emitted (for stop_reason).
             let mut has_tool_calls = false;
             // Tracks whether the initial role chunk has been sent (OpenAI protocol).
@@ -135,11 +137,14 @@ async fn forward_streaming(
                             Protocol::Anthropic => {
                                 let mut prefix = String::new();
 
-                                // If a text block is open and we're about to start
-                                // a tool_use block, close the text block first.
-                                // When chunk.done, serialize_stream_event handles
-                                // the content_block_stop — do not double-emit.
-                                if text_block_open && chunk.tool_call.is_some() {
+                                // Close any open block before transitioning to a
+                                // different block type. When chunk.done,
+                                // serialize_stream_event handles content_block_stop.
+                                let needs_close = (reasoning_block_open
+                                    && (chunk.content.is_some()
+                                        || chunk.tool_call.is_some()))
+                                    || (text_block_open && chunk.tool_call.is_some());
+                                if needs_close {
                                     let block_stop = serde_json::json!({
                                         "type": "content_block_stop",
                                         "index": block_index
@@ -149,6 +154,7 @@ async fn forward_streaming(
                                         serde_json::to_string(&block_stop).unwrap_or_default()
                                     ));
                                     block_index += 1;
+                                    reasoning_block_open = false;
                                     text_block_open = false;
                                     need_block_start = true;
                                 }
@@ -168,6 +174,10 @@ async fn forward_streaming(
                                     stop_reason,
                                 );
 
+                                if chunk.reasoning_content.is_some() {
+                                    need_block_start = false;
+                                    reasoning_block_open = true;
+                                }
                                 if chunk.content.is_some() {
                                     need_block_start = false;
                                     text_block_open = true;
@@ -177,11 +187,13 @@ async fn forward_streaming(
                                     block_index += 1;
                                     need_block_start = true;
                                     text_block_open = false;
+                                    reasoning_block_open = false;
                                 }
                                 if chunk.done {
                                     block_index += 1;
                                     need_block_start = true;
                                     text_block_open = false;
+                                    reasoning_block_open = false;
                                 }
 
                                 format!("{}{}", prefix, s)
@@ -459,6 +471,12 @@ async fn collect_non_streaming(
         .collect::<Vec<_>>()
         .join("");
 
+    let reasoning_content = chunks
+        .iter()
+        .filter_map(|c| c.reasoning_content.clone())
+        .collect::<Vec<_>>()
+        .join("");
+
     let tool_calls: Vec<_> = chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
 
     let tool_calls_opt = if tool_calls.is_empty() {
@@ -479,6 +497,11 @@ async fn collect_non_streaming(
         }
     };
 
+    let (prompt_tokens, completion_tokens) = final_usage
+        .as_ref()
+        .map(|u| (u.prompt_tokens as usize, u.completion_tokens as usize))
+        .unwrap_or((0, 0));
+
     let response_body = match protocol {
         Protocol::OpenAI => openai::serialize_response(
             "chatcmpl-gw",
@@ -490,9 +513,14 @@ async fn collect_non_streaming(
             },
             tool_calls_opt,
             finish_reason,
-            10,
-            5,
-            15,
+            prompt_tokens,
+            completion_tokens,
+            prompt_tokens + completion_tokens,
+            if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(&reasoning_content)
+            },
         )
         .map_err(|e| ProtocolError::Internal {
             message: e.to_string(),
@@ -508,6 +536,11 @@ async fn collect_non_streaming(
             },
             tool_calls_opt,
             Some(finish_reason),
+            if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(&reasoning_content)
+            },
         )
         .map_err(|e| ProtocolError::Internal {
             message: e.to_string(),

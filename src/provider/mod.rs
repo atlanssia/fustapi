@@ -77,6 +77,9 @@ pub struct UnifiedRequest {
     pub temperature: Option<f32>,
     /// Maximum tokens to generate.
     pub max_tokens: Option<u32>,
+    /// All other request parameters not explicitly parsed (top_p, stop, n, etc.)
+    /// forwarded as-is to the upstream provider.
+    pub extra_params: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Provider trait — every adapter implements this.
