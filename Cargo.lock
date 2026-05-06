@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "fustapi"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "arc-swap",
  "async-trait",

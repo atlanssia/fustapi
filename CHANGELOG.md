@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.3] - 2026-05-06
+
+### Fixed
+- **Tool Call Identity** — Implemented strict tool call ID preservation across OpenAI and Anthropic protocols. This ensures that tool results are correctly associated with their original calls, fixing "missing tool_call_id" errors in advanced agents like Claude Code.
+
 ## [1.2.2] - 2026-05-06
 
 ### Added
