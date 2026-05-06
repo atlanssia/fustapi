@@ -139,26 +139,21 @@ async fn forward_streaming(
                                 // a tool_use block, close the text block first.
                                 // When chunk.done, serialize_stream_event handles
                                 // the content_block_stop — do not double-emit.
-                                if text_block_open
-                                    && chunk.tool_call.is_some()
-                                {
+                                if text_block_open && chunk.tool_call.is_some() {
                                     let block_stop = serde_json::json!({
                                         "type": "content_block_stop",
                                         "index": block_index
                                     });
                                     prefix.push_str(&format!(
                                         "event: content_block_stop\ndata: {}\n\n",
-                                        serde_json::to_string(&block_stop)
-                                            .unwrap_or_default()
+                                        serde_json::to_string(&block_stop).unwrap_or_default()
                                     ));
                                     block_index += 1;
                                     text_block_open = false;
                                     need_block_start = true;
                                 }
 
-                                let stop_reason = if has_tool_calls
-                                    || chunk.tool_call.is_some()
-                                {
+                                let stop_reason = if has_tool_calls || chunk.tool_call.is_some() {
                                     "tool_use"
                                 } else {
                                     "end_turn"
