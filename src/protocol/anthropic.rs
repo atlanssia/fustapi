@@ -15,7 +15,7 @@ use crate::streaming::LLMChunk;
 pub struct AnthropicRequest {
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_system")]
     pub system: Option<String>,
     #[serde(default)]
     pub max_tokens: u32,
@@ -25,6 +25,38 @@ pub struct AnthropicRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub tools: Option<Vec<AnthropicTool>>,
+}
+
+/// Deserialize Anthropic `system` field which can be a string or an array of
+/// content blocks: `[{"type":"text","text":"..."}]`.
+fn deserialize_system<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    let val = Option::<serde_json::Value>::deserialize(de)?;
+    match val {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Array(arr)) => {
+            let texts: Vec<String> = arr
+                .iter()
+                .filter_map(|item| {
+                    item.get("text").and_then(|t| t.as_str()).map(String::from)
+                })
+                .collect();
+            if texts.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(texts.join("\n")))
+            }
+        }
+        Some(other) => Err(de::Error::custom(format!(
+            "expected string or array for system, got {}",
+            other
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -415,7 +447,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
                 "content_block": { "type": "text", "text": "" }
             });
             s.push_str(&format!(
-                "event: content_block_start\n\ndata: {}\n\n",
+                "event: content_block_start\ndata: {}\n\n",
                 serde_json::to_string(&block_start).unwrap_or_default()
             ));
         }
@@ -433,7 +465,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             content_block: None,
         };
         s.push_str(&format!(
-            "event: content_block_delta\n\ndata: {}\n\n",
+            "event: content_block_delta\ndata: {}\n\n",
             serde_json::to_string(&delta).unwrap_or_default()
         ));
     }
@@ -465,7 +497,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             content_block: None,
         };
         s.push_str(&format!(
-            "event: content_block_start\n\ndata: {}\n\nevent: content_block_delta\n\ndata: {}\n\n",
+            "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\n",
             serde_json::to_string(&start).unwrap_or_default(),
             serde_json::to_string(&delta).unwrap_or_default()
         ));
@@ -478,7 +510,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             "index": *index
         });
         s.push_str(&format!(
-            "event: content_block_stop\n\ndata: {}\n\n",
+            "event: content_block_stop\ndata: {}\n\n",
             serde_json::to_string(&block_stop).unwrap_or_default()
         ));
 
@@ -495,7 +527,7 @@ pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: 
             content_block: None,
         };
         s.push_str(&format!(
-            "event: message_delta\n\ndata: {}\n\n",
+            "event: message_delta\ndata: {}\n\n",
             serde_json::to_string(&event).unwrap_or_default()
         ));
     }
@@ -523,13 +555,13 @@ pub fn serialize_message_start(id: &str, model: &str) -> String {
         }
     });
     format!(
-        "event: message_start\n\ndata: {}\n\n",
+        "event: message_start\ndata: {}\n\n",
         serde_json::to_string(&msg).unwrap_or_default()
     )
 }
 
 pub fn serialize_message_stop() -> String {
-    format!("event: message_stop\n\ndata: {{\"type\":\"message_stop\"}}\n\n")
+    format!("event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n")
 }
 
 #[cfg(test)]

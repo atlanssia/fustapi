@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-05-06
+
+### Added
+- **Proxy Compatibility** — Added support for `/v1/v1/` endpoint pathing to ensure seamless integration with client SDKs (e.g., Claude Code) that may append redundant path segments.
+- **Anthropic Model List** — Implemented Anthropic-compatible `/v1/models` response format when the `anthropic-version` header is present.
+
+### Fixed
+- **Anthropic SSE Compliance** — Fixed malformed Server-Sent Events (SSE) format by removing redundant newlines between `event:` and `data:` fields, ensuring strict compliance with the SSE specification.
+
 ## [1.1.0] - 2026-05-03
 
 ### Added

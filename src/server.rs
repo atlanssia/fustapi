@@ -83,11 +83,6 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
     // Initialize metrics system (spawns background aggregator)
     let (metrics_emitter, metrics_reader) = metrics::init();
 
-    let router2 = router_store.clone();
-    let router3 = router_store.clone();
-    let router_for_v1_models = router_store.clone();
-    let emitter2 = metrics_emitter.clone();
-    let emitter3 = metrics_emitter.clone();
     let app = Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
@@ -112,19 +107,49 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         .route("/health", get(health_handler))
         .route(
             "/v1/chat/completions",
-            post(move |headers, body| {
-                chat_completions_handler(headers, body, router2.clone(), emitter2.clone())
+            post({
+                let router = router_store.clone();
+                let emitter = metrics_emitter.clone();
+                move |headers, body| chat_completions_handler(headers, body, router, emitter)
+            }),
+        )
+        .route(
+            "/v1/v1/chat/completions",
+            post({
+                let router = router_store.clone();
+                let emitter = metrics_emitter.clone();
+                move |headers, body| chat_completions_handler(headers, body, router, emitter)
             }),
         )
         .route(
             "/v1/messages",
-            post(move |headers, body| {
-                messages_handler(headers, body, router3.clone(), emitter3.clone())
+            post({
+                let router = router_store.clone();
+                let emitter = metrics_emitter.clone();
+                move |headers, body| messages_handler(headers, body, router, emitter)
+            }),
+        )
+        .route(
+            "/v1/v1/messages",
+            post({
+                let router = router_store.clone();
+                let emitter = metrics_emitter.clone();
+                move |headers, body| messages_handler(headers, body, router, emitter)
             }),
         )
         .route(
             "/v1/models",
-            get(move |headers| models_handler(headers, router_for_v1_models.clone())),
+            get({
+                let router = router_store.clone();
+                move |headers| models_handler(headers, router)
+            }),
+        )
+        .route(
+            "/v1/v1/models",
+            get({
+                let router = router_store.clone();
+                move |headers| models_handler(headers, router)
+            }),
         )
         .route("/", get(web::ui_handler))
         .fallback(fallback_handler)
@@ -206,27 +231,56 @@ fn resolve_provider_name(body: &str, router: &dyn crate::router::Router) -> Stri
 }
 
 /// GET /v1/models — returns a list of available models.
-async fn models_handler(_headers: axum::http::HeaderMap, router: RouterStore) -> impl IntoResponse {
+async fn models_handler(headers: axum::http::HeaderMap, router: RouterStore) -> impl IntoResponse {
     let current_router = router.load_full();
     let model_ids = current_router.list_models();
-    let models = model_ids
-        .into_iter()
-        .map(|id| ModelInfo {
-            id,
-            object: "model",
-            created: 1_000_000_000,
-            owned_by: "fustapi",
-        })
-        .collect();
+    
+    let is_anthropic = headers.contains_key("anthropic-version");
 
-    (
-        StatusCode::OK,
-        Json(ModelListResponse {
-            object: "list",
-            data: models,
-        }),
-    )
-        .into_response()
+    if is_anthropic {
+        let models: Vec<serde_json::Value> = model_ids
+            .into_iter()
+            .map(|id| serde_json::json!({
+                "type": "model",
+                "id": id,
+                "display_name": id,
+                "created_at": "2024-01-01T00:00:00Z"
+            }))
+            .collect();
+            
+        let first_id = models.first().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
+        let last_id = models.last().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
+            
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "data": models,
+                "has_more": false,
+                "first_id": if first_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(first_id) },
+                "last_id": if last_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(last_id) }
+            })),
+        )
+            .into_response()
+    } else {
+        let models = model_ids
+            .into_iter()
+            .map(|id| ModelInfo {
+                id,
+                object: "model",
+                created: 1_000_000_000,
+                owned_by: "fustapi",
+            })
+            .collect();
+    
+        (
+            StatusCode::OK,
+            Json(ModelListResponse {
+                object: "list",
+                data: models,
+            }),
+        )
+            .into_response()
+    }
 }
 
 /// Fallback handler for unknown routes — returns 404 with JSON error.
