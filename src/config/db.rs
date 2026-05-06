@@ -49,11 +49,10 @@ CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);
 
 /// Initialize the database at the given path. Enables WAL mode.
 pub fn init_db(db_path: &Path) -> Result<Connection> {
-    if let Some(parent) = db_path.parent() {
-        if !parent.exists() {
+    if let Some(parent) = db_path.parent()
+        && !parent.exists() {
             let _ = std::fs::create_dir_all(parent);
         }
-    }
     let conn = Connection::open(db_path)?;
     conn.execute_batch(SCHEMA_SQL)?;
     // Simple migration: add upstream_model if missing

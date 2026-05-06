@@ -582,7 +582,7 @@ pub fn serialize_message_start(id: &str, model: &str) -> String {
 }
 
 pub fn serialize_message_stop() -> String {
-    format!("event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n")
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string()
 }
 
 #[cfg(test)]

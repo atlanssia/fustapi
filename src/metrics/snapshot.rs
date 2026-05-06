@@ -86,6 +86,12 @@ pub struct SnapshotBuilder {
     recent_totals: Vec<(u64, u64)>,
 }
 
+impl Default for SnapshotBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SnapshotBuilder {
     pub fn new() -> Self {
         Self {
@@ -174,7 +180,7 @@ impl SnapshotBuilder {
                 }
             })
             .collect();
-        provider_stats.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+        provider_stats.sort_by_key(|b| std::cmp::Reverse(b.request_count));
 
         // Add timeseries point
         let point = TimeseriesPoint {

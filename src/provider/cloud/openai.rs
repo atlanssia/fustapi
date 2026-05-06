@@ -93,11 +93,10 @@ impl OpenAIProvider {
                 m["tool_calls"] = serde_json::json!(calls);
             }
 
-            if msg.role == crate::provider::Role::Tool {
-                if let Some(tc_id) = &msg.tool_call_id {
+            if msg.role == crate::provider::Role::Tool
+                && let Some(tc_id) = &msg.tool_call_id {
                     m["tool_call_id"] = serde_json::json!(tc_id);
                 }
-            }
 
             m
         }).collect::<Vec<_>>();

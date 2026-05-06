@@ -18,6 +18,12 @@ pub struct GlobalCounters {
     pub in_flight_requests: AtomicI64,
 }
 
+impl Default for GlobalCounters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalCounters {
     pub fn new() -> Self {
         Self {
@@ -86,6 +92,12 @@ pub struct ProviderCounters {
 /// cheap clones for the dashboard.
 pub struct ProviderStatsMap {
     inner: std::sync::RwLock<HashMap<String, ProviderCounters>>,
+}
+
+impl Default for ProviderStatsMap {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProviderStatsMap {

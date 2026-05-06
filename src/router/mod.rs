@@ -141,7 +141,7 @@ impl Router for RealRouter {
             let caps = provider.capabilities();
             let needs_emulation = caps.tool_calling
                 == crate::provider::ToolCallingSupport::Emulated
-                && request.tools.as_ref().map_or(false, |t| !t.is_empty());
+                && request.tools.as_ref().is_some_and(|t| !t.is_empty());
 
             if needs_emulation {
                 let tools = request.tools.take().unwrap();
