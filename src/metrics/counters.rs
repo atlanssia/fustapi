@@ -114,7 +114,7 @@ impl ProviderStatsMap {
         entry.total_latency_ms += latency_ms;
         entry.prompt_tokens += prompt_tokens as u64;
         entry.completion_tokens += completion_tokens as u64;
-        
+
         if let Some(t) = ttft_ms {
             entry.total_ttft_ms += t;
             entry.ttft_samples += 1;

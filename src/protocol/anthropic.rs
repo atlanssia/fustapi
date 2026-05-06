@@ -42,9 +42,7 @@ where
         Some(serde_json::Value::Array(arr)) => {
             let texts: Vec<String> = arr
                 .iter()
-                .filter_map(|item| {
-                    item.get("text").and_then(|t| t.as_str()).map(String::from)
-                })
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()).map(String::from))
                 .collect();
             if texts.is_empty() {
                 Ok(None)
@@ -283,7 +281,10 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
                 tool_calls.push(ToolCall {
                     id: part.id.clone(),
                     name: part.name.clone().unwrap_or_default(),
-                    arguments: part.input.clone().unwrap_or(Value::Object(serde_json::Map::new())),
+                    arguments: part
+                        .input
+                        .clone()
+                        .unwrap_or(Value::Object(serde_json::Map::new())),
                 });
             }
             "tool_result" => {
@@ -308,9 +309,7 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
                 if let Some(src) = part.source
                     && let Some(data) = src.data
                 {
-                    let mime = src
-                        .media_type
-                        .unwrap_or_else(|| "image/png".to_string());
+                    let mime = src.media_type.unwrap_or_else(|| "image/png".to_string());
                     images.push(ImageInput {
                         source: ImageSource::Base64 { data },
                         mime_type: mime,
@@ -325,8 +324,16 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
     Ok(Message {
         role,
         content,
-        images: if images.is_empty() { None } else { Some(images) },
-        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        images: if images.is_empty() {
+            None
+        } else {
+            Some(images)
+        },
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
         tool_call_id,
     })
 }
@@ -442,7 +449,13 @@ pub fn serialize_response(
 /// `need_block_start` indicates whether a `content_block_start` event should
 /// precede the first text delta for this content block. The caller is
 /// responsible for toggling this flag after the first text chunk is emitted.
-pub fn serialize_stream_event(chunk: &LLMChunk, _id: &str, _model: &str, index: &usize, need_block_start: bool) -> String {
+pub fn serialize_stream_event(
+    chunk: &LLMChunk,
+    _id: &str,
+    _model: &str,
+    index: &usize,
+    need_block_start: bool,
+) -> String {
     let mut s = String::new();
 
     if let Some(text) = &chunk.content {
@@ -676,7 +689,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_call: None,
             done: false,
-            usage: None
+            usage: None,
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
         assert!(sse.contains("event: content_block_delta"));
@@ -690,7 +703,7 @@ mod tests {
             content: None,
             tool_call: None,
             done: true,
-            usage: None
+            usage: None,
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false);
         assert!(sse.contains("event: message_delta"));
@@ -708,7 +721,7 @@ mod tests {
             content: None,
             tool_call: Some(tc),
             done: false,
-            usage: None
+            usage: None,
         };
         let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true);
         assert!(sse.contains("event: content_block_start"));

@@ -190,7 +190,16 @@ async fn chat_completions_handler(
     let provider_name = resolve_provider_name(&body, current_router.as_ref());
     let start = emitter.request_start(&provider_name);
 
-    match protocol::dispatch_request(proto, body, current_router.as_ref(), emitter.clone(), provider_name.clone(), start).await {
+    match protocol::dispatch_request(
+        proto,
+        body,
+        current_router.as_ref(),
+        emitter.clone(),
+        provider_name.clone(),
+        start,
+    )
+    .await
+    {
         Ok(response) => response, // StreamTracker/collector handles emitting request_end
         Err(e) => {
             emitter.request_end(&provider_name, start, false, None, None);
@@ -212,7 +221,16 @@ async fn messages_handler(
     let provider_name = resolve_provider_name(&body, current_router.as_ref());
     let start = emitter.request_start(&provider_name);
 
-    match protocol::dispatch_request(proto, body, current_router.as_ref(), emitter.clone(), provider_name.clone(), start).await {
+    match protocol::dispatch_request(
+        proto,
+        body,
+        current_router.as_ref(),
+        emitter.clone(),
+        provider_name.clone(),
+        start,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(e) => {
             emitter.request_end(&provider_name, start, false, None, None);
@@ -234,23 +252,33 @@ fn resolve_provider_name(body: &str, router: &dyn crate::router::Router) -> Stri
 async fn models_handler(headers: axum::http::HeaderMap, router: RouterStore) -> impl IntoResponse {
     let current_router = router.load_full();
     let model_ids = current_router.list_models();
-    
+
     let is_anthropic = headers.contains_key("anthropic-version");
 
     if is_anthropic {
         let models: Vec<serde_json::Value> = model_ids
             .into_iter()
-            .map(|id| serde_json::json!({
-                "type": "model",
-                "id": id,
-                "display_name": id,
-                "created_at": "2024-01-01T00:00:00Z"
-            }))
+            .map(|id| {
+                serde_json::json!({
+                    "type": "model",
+                    "id": id,
+                    "display_name": id,
+                    "created_at": "2024-01-01T00:00:00Z"
+                })
+            })
             .collect();
-            
-        let first_id = models.first().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
-        let last_id = models.last().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
-            
+
+        let first_id = models
+            .first()
+            .and_then(|m| m["id"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let last_id = models
+            .last()
+            .and_then(|m| m["id"].as_str())
+            .unwrap_or("")
+            .to_string();
+
         (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -271,7 +299,7 @@ async fn models_handler(headers: axum::http::HeaderMap, router: RouterStore) -> 
                 owned_by: "fustapi",
             })
             .collect();
-    
+
         (
             StatusCode::OK,
             Json(ModelListResponse {

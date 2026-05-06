@@ -131,8 +131,6 @@ pub fn delete_route(conn: &Transaction, model: &str) -> Result<bool> {
     Ok(c > 0)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,8 +192,6 @@ mod tests {
         assert_eq!(loaded[0].provider_ids.len(), 2);
     }
 
-
-
     #[test]
     fn test_delete_provider() {
         let path = temp_db("delete_provider");
@@ -233,5 +229,4 @@ mod tests {
         tx2.commit().unwrap();
         assert!(!delete_route(&conn.transaction().unwrap(), "delete-me").unwrap());
     }
-
 }

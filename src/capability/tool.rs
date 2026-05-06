@@ -190,7 +190,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         // EOF while buffering. Try to parse tool call.
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: true,
@@ -199,7 +200,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             _ => {
                                 // Fallback to plain text
                                 let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: true,
@@ -228,7 +230,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                     } else {
                         // Normal text passthrough
                         let done = chunk.done;
-                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                            usage: None,
                             content: Some(content),
                             tool_call: None,
                             done,
@@ -241,7 +244,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
                                 self.buffer.clear();
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: chunk.done,
@@ -251,7 +255,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                                 // Fallback to plain text if done or exceeded size
                                 let content = std::mem::take(&mut self.buffer);
                                 self.is_buffering = false; // Stop buffering if not done
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: chunk.done,
@@ -268,7 +273,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                     if self.is_buffering {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: true,
@@ -276,7 +282,8 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             }
                             _ => {
                                 let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk { usage: None,
+                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: Some(content),
                                     tool_call: None,
                                     done: true,
@@ -390,89 +397,139 @@ mod tests {
     #[tokio::test]
     async fn test_tool_emulation_stream_normal_text() {
         use tokio_stream::StreamExt;
-        
+
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("Hello".to_string()), tool_call: None, done: false , usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some(" world!".to_string()), tool_call: None, done: true , usage: None }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some("Hello".to_string()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some(" world!".to_string()),
+                tool_call: None,
+                done: true,
+                usage: None,
+            }),
         ];
-        
+
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
         let mut emulated = ToolEmulationStream::new(inner_stream);
-        
+
         let c1 = emulated.next().await.unwrap().unwrap();
         assert_eq!(c1.content.as_deref(), Some("Hello"));
         assert!(!c1.done);
-        
+
         let c2 = emulated.next().await.unwrap().unwrap();
         assert_eq!(c2.content.as_deref(), Some(" world!"));
         assert!(c2.done);
-        
+
         assert!(emulated.next().await.is_none());
     }
 
     #[tokio::test]
     async fn test_tool_emulation_stream_valid_tool_call() {
         use tokio_stream::StreamExt;
-        
+
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false, usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#""name":"test""#.to_string()), tool_call: None, done: false, usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#","arguments":{}}"#.to_string()), tool_call: None, done: true, usage: None }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some("{".to_string()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some(r#""name":"test""#.to_string()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some(r#","arguments":{}}"#.to_string()),
+                tool_call: None,
+                done: true,
+                usage: None,
+            }),
         ];
-        
+
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
         let mut emulated = ToolEmulationStream::new(inner_stream);
-        
+
         let c1 = emulated.next().await.unwrap().unwrap();
         assert!(c1.content.is_none());
         assert!(c1.done);
-        
+
         let tc = c1.tool_call.unwrap();
         assert_eq!(tc.name, "test");
-        
+
         assert!(emulated.next().await.is_none());
     }
 
     #[tokio::test]
     async fn test_tool_emulation_stream_invalid_fallback() {
         use tokio_stream::StreamExt;
-        
+
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false , usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some(r#"broken json"#.to_string()), tool_call: None, done: true , usage: None }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some("{".to_string()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some(r#"broken json"#.to_string()),
+                tool_call: None,
+                done: true,
+                usage: None,
+            }),
         ];
-        
+
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
         let mut emulated = ToolEmulationStream::new(inner_stream);
-        
+
         let c1 = emulated.next().await.unwrap().unwrap();
         assert_eq!(c1.content.as_deref(), Some("{broken json"));
         assert!(c1.done);
         assert!(c1.tool_call.is_none());
-        
+
         assert!(emulated.next().await.is_none());
     }
 
     #[tokio::test]
     async fn test_tool_emulation_stream_max_buffer() {
         use tokio_stream::StreamExt;
-        
+
         // Output something larger than 32KB
         let huge_string = "a".repeat(33000);
         let chunks = vec![
-            Ok(crate::streaming::LLMChunk { content: Some("{".to_string()), tool_call: None, done: false , usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some(huge_string.clone()), tool_call: None, done: false , usage: None }),
-            Ok(crate::streaming::LLMChunk { content: Some("done".to_string()), tool_call: None, done: true , usage: None }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some("{".to_string()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some(huge_string.clone()),
+                tool_call: None,
+                done: false,
+                usage: None,
+            }),
+            Ok(crate::streaming::LLMChunk {
+                content: Some("done".to_string()),
+                tool_call: None,
+                done: true,
+                usage: None,
+            }),
         ];
-        
+
         let inner_stream = Box::pin(tokio_stream::iter(chunks));
         let mut emulated = ToolEmulationStream::new(inner_stream);
-        
+
         // The first 33KB chunk triggers fallback BEFORE the stream is done
         let c1 = emulated.next().await.unwrap().unwrap();
         assert_eq!(c1.content.as_ref().unwrap().len(), 33001); // "{" + 33000 "a"s
         assert!(!c1.done);
-        
+
         // The final chunk passes through normally
         let c2 = emulated.next().await.unwrap().unwrap();
         assert_eq!(c2.content.as_deref(), Some("done"));

@@ -115,17 +115,17 @@ impl StreamTracker {
             tokens: None,
         }
     }
-    
+
     pub fn set_ttft(&mut self, ttft: u64) {
         if self.ttft_ms.is_none() {
             self.ttft_ms = Some(ttft);
         }
     }
-    
+
     pub fn set_tokens(&mut self, tokens: TokenUsage) {
         self.tokens = Some(tokens);
     }
-    
+
     pub fn set_success(&mut self, success: bool) {
         self.success = success;
     }
@@ -142,7 +142,6 @@ impl Drop for StreamTracker {
         );
     }
 }
-
 
 /// Read-only handle for the dashboard to access the current snapshot.
 #[derive(Clone)]

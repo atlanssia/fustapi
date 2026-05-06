@@ -114,19 +114,16 @@ impl SnapshotBuilder {
             let last = &self.recent_totals[self.recent_totals.len() - 1];
             let dt = last.0.saturating_sub(first.0);
             let dr = last.1.saturating_sub(first.1);
-            if dt > 0 {
-                dr as f64 / dt as f64
-            } else {
-                0.0
-            }
+            if dt > 0 { dr as f64 / dt as f64 } else { 0.0 }
         } else {
             0.0
         };
 
         // Calculate total avg latency from provider stats
-        let (total_latency, total_counted) = provider_map.values().fold((0u64, 0u64), |(lat, cnt), p| {
-            (lat + p.total_latency_ms, cnt + p.request_count)
-        });
+        let (total_latency, total_counted) =
+            provider_map.values().fold((0u64, 0u64), |(lat, cnt), p| {
+                (lat + p.total_latency_ms, cnt + p.request_count)
+            });
         let avg_latency_ms = if total_counted > 0 {
             total_latency as f64 / total_counted as f64
         } else {

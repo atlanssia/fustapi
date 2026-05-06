@@ -276,7 +276,8 @@ mod tests {
 
     #[test]
     fn test_load_from_db_is_empty_initially() {
-        let temp_dir = std::env::temp_dir().join(format!("fustapi_test_load_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("fustapi_test_load_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("fustapi.db");
         let cfg = load_from_db(&db_path).unwrap();

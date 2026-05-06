@@ -13,9 +13,9 @@ use arc_swap::ArcSwap;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use super::MetricEvent;
 use super::counters::{GlobalCounters, ProviderStatsMap};
 use super::snapshot::{MetricsSnapshot, SnapshotBuilder};
-use super::MetricEvent;
 
 /// Snapshot update interval.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
@@ -58,11 +58,7 @@ pub async fn run_aggregator(
     }
 }
 
-fn process_event(
-    event: &MetricEvent,
-    global: &GlobalCounters,
-    provider_stats: &ProviderStatsMap,
-) {
+fn process_event(event: &MetricEvent, global: &GlobalCounters, provider_stats: &ProviderStatsMap) {
     match event {
         MetricEvent::RequestStart { .. } => {
             global.inc_total();

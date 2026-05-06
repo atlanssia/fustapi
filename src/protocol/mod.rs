@@ -51,7 +51,13 @@ pub async fn dispatch_request(
 }
 
 /// Handle an OpenAI-format request. Forwards to the appropriate provider.
-async fn openai_handler(body: String, router: &dyn Router, emitter: crate::metrics::MetricsEmitter, provider: String, start: std::time::Instant) -> Result<Response, ProtocolError> {
+async fn openai_handler(
+    body: String,
+    router: &dyn Router,
+    emitter: crate::metrics::MetricsEmitter,
+    provider: String,
+    start: std::time::Instant,
+) -> Result<Response, ProtocolError> {
     let unified_req = openai::parse_chat_request(&body).map_err(|e| ProtocolError::Parse {
         message: e.to_string(),
         protocol: Protocol::OpenAI,
@@ -63,7 +69,16 @@ async fn openai_handler(body: String, router: &dyn Router, emitter: crate::metri
         let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
         forward_streaming(router, provider_req, &model, Protocol::OpenAI, tracker).await
     } else {
-        collect_non_streaming(router, provider_req, &model, Protocol::OpenAI, emitter, provider, start).await
+        collect_non_streaming(
+            router,
+            provider_req,
+            &model,
+            Protocol::OpenAI,
+            emitter,
+            provider,
+            start,
+        )
+        .await
     }
 }
 
@@ -80,12 +95,13 @@ async fn forward_streaming(
     let model_name = model.to_string();
     let allow_passthrough = protocol == Protocol::OpenAI;
 
-    let stream_mode = router.chat_stream(request, allow_passthrough).await.map_err(|e| {
-        ProtocolError::Internal {
+    let stream_mode = router
+        .chat_stream(request, allow_passthrough)
+        .await
+        .map_err(|e| ProtocolError::Internal {
             message: e.to_string(),
             protocol,
-        }
-    })?;
+        })?;
 
     match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => {
@@ -141,23 +157,34 @@ async fn forward_streaming(
                                 "type": "internal_error"
                             }
                         });
-                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", err_json)))
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                            "data: {}\n\n",
+                            err_json
+                        )))
                     }
                 }
-            }).boxed();
+            })
+            .boxed();
 
             if protocol == Protocol::Anthropic {
-                let start_bytes = axum::body::Bytes::from(anthropic::serialize_message_start("msg_gw", &model_name_start));
+                let start_bytes = axum::body::Bytes::from(anthropic::serialize_message_start(
+                    "msg_gw",
+                    &model_name_start,
+                ));
                 let stop_bytes = axum::body::Bytes::from(anthropic::serialize_message_stop());
-                
+
                 let combined = futures::StreamExt::chain(
                     futures::StreamExt::chain(
-                        futures::stream::once(async move { Ok::<_, std::convert::Infallible>(start_bytes) }),
-                        body_stream
+                        futures::stream::once(async move {
+                            Ok::<_, std::convert::Infallible>(start_bytes)
+                        }),
+                        body_stream,
                     ),
-                    futures::stream::once(async move { Ok::<_, std::convert::Infallible>(stop_bytes) })
+                    futures::stream::once(
+                        async move { Ok::<_, std::convert::Infallible>(stop_bytes) },
+                    ),
                 );
-                
+
                 let response = Response::builder()
                     .status(StatusCode::OK)
                     .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
@@ -177,8 +204,8 @@ async fn forward_streaming(
             Ok(response)
         }
         crate::streaming::StreamMode::Passthrough(byte_stream) => {
-            let body_stream = futures::StreamExt::map(byte_stream, move |chunk_result| {
-                match chunk_result {
+            let body_stream =
+                futures::StreamExt::map(byte_stream, move |chunk_result| match chunk_result {
                     Ok(bytes) => {
                         tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
                         Ok::<_, std::convert::Infallible>(bytes)
@@ -191,10 +218,12 @@ async fn forward_streaming(
                                 "type": "internal_error"
                             }
                         });
-                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", err_json)))
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                            "data: {}\n\n",
+                            err_json
+                        )))
                     }
-                }
-            });
+                });
 
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -434,11 +463,18 @@ async fn collect_non_streaming(
 }
 
 /// Handle an Anthropic-format request. Forwards to the appropriate provider.
-async fn anthropic_handler(body: String, router: &dyn Router, emitter: crate::metrics::MetricsEmitter, provider: String, start: std::time::Instant) -> Result<Response, ProtocolError> {
-    let unified_req = anthropic::parse_messages_request(&body).map_err(|e| ProtocolError::Parse {
-        message: e.to_string(),
-        protocol: Protocol::Anthropic,
-    })?;
+async fn anthropic_handler(
+    body: String,
+    router: &dyn Router,
+    emitter: crate::metrics::MetricsEmitter,
+    provider: String,
+    start: std::time::Instant,
+) -> Result<Response, ProtocolError> {
+    let unified_req =
+        anthropic::parse_messages_request(&body).map_err(|e| ProtocolError::Parse {
+            message: e.to_string(),
+            protocol: Protocol::Anthropic,
+        })?;
 
     let model = unified_req.model.clone();
 
@@ -446,7 +482,16 @@ async fn anthropic_handler(body: String, router: &dyn Router, emitter: crate::me
         let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
         forward_streaming(router, unified_req, &model, Protocol::Anthropic, tracker).await
     } else {
-        collect_non_streaming(router, unified_req, &model, Protocol::Anthropic, emitter, provider, start).await
+        collect_non_streaming(
+            router,
+            unified_req,
+            &model,
+            Protocol::Anthropic,
+            emitter,
+            provider,
+            start,
+        )
+        .await
     }
 }
 

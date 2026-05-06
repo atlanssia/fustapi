@@ -129,7 +129,8 @@ impl OpenAIProvider {
 
         if let Some(choice) = response.choices.first() {
             if let Some(content) = &choice.message.content {
-                chunks.push(LLMChunk { usage: None,
+                chunks.push(LLMChunk {
+                    usage: None,
                     content: Some(content.clone()),
                     tool_call: None,
                     done: false,
@@ -138,7 +139,8 @@ impl OpenAIProvider {
 
             if let Some(tool_calls) = &choice.message.tool_calls {
                 for tc in tool_calls.iter() {
-                    chunks.push(LLMChunk { usage: None,
+                    chunks.push(LLMChunk {
+                        usage: None,
                         content: None,
                         tool_call: Some(crate::capability::ToolCall {
                             id: Some(tc.id.clone()),
@@ -151,7 +153,8 @@ impl OpenAIProvider {
                 }
             }
 
-            chunks.push(LLMChunk { usage: None,
+            chunks.push(LLMChunk {
+                usage: None,
                 content: None,
                 tool_call: None,
                 done: true,
@@ -244,7 +247,8 @@ pub fn parse_openai_sse_stream(
                                     arguments: args,
                                 };
                                 return Some((
-                                    Ok(crate::streaming::LLMChunk { usage: None,
+                                    Ok(crate::streaming::LLMChunk {
+                                        usage: None,
                                         content: None,
                                         tool_call: Some(tc),
                                         done: true,
@@ -253,7 +257,8 @@ pub fn parse_openai_sse_stream(
                                 ));
                             }
                             return Some((
-                                Ok(crate::streaming::LLMChunk { usage: None,
+                                Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: None,
                                     tool_call: None,
                                     done: true,
@@ -275,7 +280,8 @@ pub fn parse_openai_sse_stream(
                                 && !content.is_empty()
                             {
                                 return Some((
-                                    Ok(crate::streaming::LLMChunk { usage: None,
+                                    Ok(crate::streaming::LLMChunk {
+                                        usage: None,
                                         content: Some(content.to_string()),
                                         tool_call: None,
                                         done: false,
@@ -287,7 +293,8 @@ pub fn parse_openai_sse_stream(
                                 && let Some(tc) = tool_calls.get(0)
                                 && let Some(func) = tc.get("function")
                             {
-                                let new_id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                                let new_id =
+                                    tc.get("id").and_then(|i| i.as_str()).map(String::from);
                                 let new_name = func.get("name").and_then(|n| n.as_str());
                                 let new_args =
                                     func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
@@ -309,7 +316,8 @@ pub fn parse_openai_sse_stream(
 
                                     if flush_tc.is_some() {
                                         return Some((
-                                            Ok(crate::streaming::LLMChunk { usage: None,
+                                            Ok(crate::streaming::LLMChunk {
+                                                usage: None,
                                                 content: None,
                                                 tool_call: flush_tc,
                                                 done: false,
@@ -347,7 +355,8 @@ pub fn parse_openai_sse_stream(
                                 arguments: args,
                             };
                             return Some((
-                                Ok(crate::streaming::LLMChunk { usage: None,
+                                Ok(crate::streaming::LLMChunk {
+                                    usage: None,
                                     content: None,
                                     tool_call: Some(tc),
                                     done: true,
