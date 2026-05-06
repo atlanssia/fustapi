@@ -699,6 +699,7 @@ mod tests {
     #[test]
     fn test_serialize_stream_event_text() {
         let chunk = LLMChunk {
+            reasoning_content: None,
             content: Some("Hello".to_string()),
             tool_call: None,
             done: false,
@@ -713,6 +714,7 @@ mod tests {
     #[test]
     fn test_serialize_stream_event_done() {
         let chunk = LLMChunk {
+            reasoning_content: None,
             content: None,
             tool_call: None,
             done: true,
@@ -731,6 +733,7 @@ mod tests {
             arguments: serde_json::json!({"city": "nyc"}),
         };
         let chunk = LLMChunk {
+            reasoning_content: None,
             content: None,
             tool_call: Some(tc),
             done: false,

@@ -9,11 +9,14 @@ use tokio_stream::Stream;
 use crate::capability::ToolCall;
 
 /// A single chunk from an LLM streaming response.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LLMChunk {
     /// The text content delta (may be empty for tool calls).
     #[serde(default)]
     pub content: Option<String>,
+    /// DeepSeek reasoning/thinking content (must be echoed back in multi-turn conversations).
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
     /// Tool call if this chunk contains one.
     #[serde(default)]
     pub tool_call: Option<ToolCall>,

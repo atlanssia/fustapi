@@ -191,6 +191,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: None,
                                     tool_call: Some(tc),
@@ -201,6 +202,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                                 // Fallback to plain text
                                 let content = std::mem::take(&mut self.buffer);
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: Some(content),
                                     tool_call: None,
@@ -231,6 +233,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         // Normal text passthrough
                         let done = chunk.done;
                         return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                            reasoning_content: None,
                             usage: None,
                             content: Some(content),
                             tool_call: None,
@@ -245,6 +248,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             Ok(Some(tc)) => {
                                 self.buffer.clear();
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: None,
                                     tool_call: Some(tc),
@@ -256,6 +260,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                                 let content = std::mem::take(&mut self.buffer);
                                 self.is_buffering = false; // Stop buffering if not done
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: Some(content),
                                     tool_call: None,
@@ -274,6 +279,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                         match parse_tool_call_from_text(&self.buffer) {
                             Ok(Some(tc)) => {
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: None,
                                     tool_call: Some(tc),
@@ -283,6 +289,7 @@ impl tokio_stream::Stream for ToolEmulationStream {
                             _ => {
                                 let content = std::mem::take(&mut self.buffer);
                                 return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: Some(content),
                                     tool_call: None,
@@ -400,12 +407,14 @@ mod tests {
 
         let chunks = vec![
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some("Hello".to_string()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some(" world!".to_string()),
                 tool_call: None,
                 done: true,
@@ -433,18 +442,21 @@ mod tests {
 
         let chunks = vec![
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some("{".to_string()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some(r#""name":"test""#.to_string()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some(r#","arguments":{}}"#.to_string()),
                 tool_call: None,
                 done: true,
@@ -471,12 +483,14 @@ mod tests {
 
         let chunks = vec![
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some("{".to_string()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some(r#"broken json"#.to_string()),
                 tool_call: None,
                 done: true,
@@ -503,18 +517,21 @@ mod tests {
         let huge_string = "a".repeat(33000);
         let chunks = vec![
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some("{".to_string()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some(huge_string.clone()),
                 tool_call: None,
                 done: false,
                 usage: None,
             }),
             Ok(crate::streaming::LLMChunk {
+                reasoning_content: None,
                 content: Some("done".to_string()),
                 tool_call: None,
                 done: true,

@@ -189,6 +189,8 @@ pub struct OpenAIDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAIStreamToolCall>>,
 }
 
@@ -505,6 +507,7 @@ pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &u
     let mut delta = OpenAIDelta {
         role: Some("assistant"),
         content: chunk.content.clone(),
+        reasoning_content: chunk.reasoning_content.clone(),
         tool_calls: None,
     };
     if let Some(tc) = &chunk.tool_call {
@@ -647,6 +650,7 @@ mod tests {
     #[test]
     fn test_serialize_stream_chunk() {
         let chunk = LLMChunk {
+            reasoning_content: None,
             content: Some("Hello".to_string()),
             tool_call: None,
             done: false,
@@ -661,6 +665,7 @@ mod tests {
     #[test]
     fn test_serialize_done_chunk() {
         let chunk = LLMChunk {
+            reasoning_content: None,
             content: None,
             tool_call: None,
             done: true,

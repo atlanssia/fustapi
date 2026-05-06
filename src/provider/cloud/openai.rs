@@ -141,6 +141,7 @@ impl OpenAIProvider {
         if let Some(choice) = response.choices.first() {
             if let Some(content) = &choice.message.content {
                 chunks.push(LLMChunk {
+                    reasoning_content: None,
                     usage: None,
                     content: Some(content.clone()),
                     tool_call: None,
@@ -151,6 +152,7 @@ impl OpenAIProvider {
             if let Some(tool_calls) = &choice.message.tool_calls {
                 for tc in tool_calls.iter() {
                     chunks.push(LLMChunk {
+                        reasoning_content: None,
                         usage: None,
                         content: None,
                         tool_call: Some(crate::capability::ToolCall {
@@ -165,6 +167,7 @@ impl OpenAIProvider {
             }
 
             chunks.push(LLMChunk {
+                reasoning_content: None,
                 usage: None,
                 content: None,
                 tool_call: None,
@@ -259,6 +262,7 @@ pub fn parse_openai_sse_stream(
                                 };
                                 return Some((
                                     Ok(crate::streaming::LLMChunk {
+                                        reasoning_content: None,
                                         usage: None,
                                         content: None,
                                         tool_call: Some(tc),
@@ -269,6 +273,7 @@ pub fn parse_openai_sse_stream(
                             }
                             return Some((
                                 Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: None,
                                     tool_call: None,
@@ -283,17 +288,34 @@ pub fn parse_openai_sse_stream(
                             && let Some(choice) = choices.get(0)
                             && let Some(delta) = choice.get("delta")
                         {
+                            // Distinguish reasoning_content from content —
+                            // DeepSeek requires reasoning_content to be echoed back.
+                            let reasoning_str = delta
+                                .get("reasoning_content")
+                                .and_then(|c| c.as_str())
+                                .filter(|s| !s.is_empty());
+                            if let Some(reasoning) = reasoning_str {
+                                return Some((
+                                    Ok(crate::streaming::LLMChunk {
+                                        usage: None,
+                                        content: None,
+                                        reasoning_content: Some(reasoning.to_string()),
+                                        tool_call: None,
+                                        done: false,
+                                    }),
+                                    (stream, buffer, tool_id, tool_name, tool_args),
+                                ));
+                            }
                             let content_str = delta
                                 .get("content")
-                                .or_else(|| delta.get("reasoning_content"))
-                                .and_then(|c| c.as_str());
-                            if let Some(content) = content_str
-                                && !content.is_empty()
-                            {
+                                .and_then(|c| c.as_str())
+                                .filter(|s| !s.is_empty());
+                            if let Some(content) = content_str {
                                 return Some((
                                     Ok(crate::streaming::LLMChunk {
                                         usage: None,
                                         content: Some(content.to_string()),
+                                        reasoning_content: None,
                                         tool_call: None,
                                         done: false,
                                     }),
@@ -328,6 +350,7 @@ pub fn parse_openai_sse_stream(
                                     if flush_tc.is_some() {
                                         return Some((
                                             Ok(crate::streaming::LLMChunk {
+                                                reasoning_content: None,
                                                 usage: None,
                                                 content: None,
                                                 tool_call: flush_tc,
@@ -367,6 +390,7 @@ pub fn parse_openai_sse_stream(
                             };
                             return Some((
                                 Ok(crate::streaming::LLMChunk {
+                                    reasoning_content: None,
                                     usage: None,
                                     content: None,
                                     tool_call: Some(tc),

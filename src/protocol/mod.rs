@@ -320,6 +320,23 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
         lines.push(format!("data: {}", data));
     }
 
+    if let Some(ref reasoning) = chunk.reasoning_content
+        && !reasoning.is_empty()
+    {
+        let data = serde_json::json!({
+            "id": "chatcmpl-gw",
+            "object": "chat.completion.chunk",
+            "created": ts,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"reasoning_content": reasoning},
+                "finish_reason": null
+            }]
+        });
+        lines.push(format!("data: {}", data));
+    }
+
     if let Some(ref tc) = chunk.tool_call {
         let args_str = if tc.arguments.is_string() {
             tc.arguments.as_str().unwrap().to_string()
