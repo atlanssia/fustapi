@@ -108,7 +108,12 @@ impl OpenAIProvider {
             m
         }).collect::<Vec<_>>();
 
-        let model = self.config.model.as_ref().unwrap_or(&request.model);
+        let model = self
+            .config
+            .model
+            .as_ref()
+            .filter(|m| !m.is_empty())
+            .unwrap_or(&request.model);
         let mut body =
             serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
 

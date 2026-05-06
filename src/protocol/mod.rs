@@ -136,10 +136,11 @@ async fn forward_streaming(
                                 let mut prefix = String::new();
 
                                 // If a text block is open and we're about to start
-                                // a tool_use block or end the message, close the
-                                // text block first.
+                                // a tool_use block, close the text block first.
+                                // When chunk.done, serialize_stream_event handles
+                                // the content_block_stop — do not double-emit.
                                 if text_block_open
-                                    && (chunk.tool_call.is_some() || chunk.done)
+                                    && chunk.tool_call.is_some()
                                 {
                                     let block_stop = serde_json::json!({
                                         "type": "content_block_stop",
