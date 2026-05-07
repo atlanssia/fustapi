@@ -225,11 +225,10 @@ fn parse_anthropic_tool(tool: AnthropicTool) -> Result<ToolDefinition, ParseErro
 /// Parse an Anthropic-format messages request into a [`UnifiedRequest`].
 pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseError> {
     let req: AnthropicRequest = serde_json::from_str(json_str).map_err(ParseError::InvalidJson)?;
-    let mut messages = req
-        .messages
-        .into_iter()
-        .map(parse_anthropic_message)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut messages = Vec::new();
+    for msg in req.messages {
+        messages.extend(parse_anthropic_messages(msg)?);
+    }
     // Prepend system message if present.
     if let Some(sys) = req.system {
         messages.insert(
@@ -263,7 +262,7 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
     })
 }
 
-fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError> {
+fn parse_anthropic_messages(msg: AnthropicMessage) -> Result<Vec<Message>, ParseError> {
     let role_str = msg.role();
     let role = match role_str.as_str() {
         "user" => Role::User,
@@ -278,8 +277,10 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
     let mut text_parts = Vec::new();
     let mut images = Vec::new();
     let mut tool_calls = Vec::new();
-    let mut tool_call_id = None;
     let mut reasoning_parts = Vec::new();
+    // Collect tool_result blocks separately — each must become its own
+    // role="tool" message for OpenAI-compatible backends.
+    let mut tool_results: Vec<(Option<String>, String)> = Vec::new();
 
     let blocks = msg.content_blocks();
     for part in blocks {
@@ -306,22 +307,21 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
                 });
             }
             "tool_result" => {
-                // Capture tool_use_id for this tool result message.
-                if part.tool_use_id.is_some() {
-                    tool_call_id = part.tool_use_id.clone();
-                }
-                if let Some(content) = part.content {
-                    match content {
-                        AnthropicToolResultContent::Simple(s) => text_parts.push(s),
-                        AnthropicToolResultContent::MultiPart(subblocks) => {
-                            for sub in subblocks {
-                                if let Some(t) = sub.text {
-                                    text_parts.push(t);
-                                }
+                let tc_id = part.tool_use_id.clone();
+                let content = match part.content {
+                    Some(AnthropicToolResultContent::Simple(s)) => s,
+                    Some(AnthropicToolResultContent::MultiPart(subblocks)) => {
+                        let mut texts = Vec::new();
+                        for sub in subblocks {
+                            if let Some(t) = sub.text {
+                                texts.push(t);
                             }
                         }
+                        texts.join("\n")
                     }
-                }
+                    None => String::new(),
+                };
+                tool_results.push((tc_id, content));
             }
             "image" => {
                 if let Some(src) = part.source
@@ -338,43 +338,59 @@ fn parse_anthropic_message(msg: AnthropicMessage) -> Result<Message, ParseError>
         }
     }
 
-    // Anthropic sends tool results as user messages with tool_result blocks.
-    // OpenAI-compatible backends expect tool results as role="tool" messages
-    // with matching tool_call_id. Map accordingly.
-    let role = if tool_call_id.is_some() {
-        Role::Tool
-    } else {
-        role
-    };
+    let mut messages = Vec::new();
 
-    let content = text_parts.join("\n");
-    let mut extras = serde_json::Map::new();
-    if !reasoning_parts.is_empty() {
-        extras.insert(
-            "reasoning_content".to_string(),
-            serde_json::Value::String(reasoning_parts.join("\n")),
-        );
+    // Each tool_result block becomes a separate role="tool" message.
+    // Anthropic sends multiple tool results in a single user message, but
+    // OpenAI-compatible backends require one tool message per tool_call_id.
+    for (tc_id, content) in tool_results {
+        messages.push(Message {
+            role: Role::Tool,
+            content,
+            images: None,
+            tool_calls: None,
+            tool_call_id: tc_id,
+            extras: None,
+        });
     }
-    Ok(Message {
-        role,
-        content,
-        images: if images.is_empty() {
-            None
-        } else {
-            Some(images)
-        },
-        tool_calls: if tool_calls.is_empty() {
-            None
-        } else {
-            Some(tool_calls)
-        },
-        tool_call_id,
-        extras: if extras.is_empty() {
-            None
-        } else {
-            Some(extras)
-        },
-    })
+
+    // Remaining non-tool_result blocks map to a user or assistant message.
+    let has_other = !text_parts.is_empty()
+        || !images.is_empty()
+        || !tool_calls.is_empty()
+        || !reasoning_parts.is_empty();
+    if has_other || messages.is_empty() {
+        let content = text_parts.join("\n");
+        let mut extras = serde_json::Map::new();
+        if !reasoning_parts.is_empty() {
+            extras.insert(
+                "reasoning_content".to_string(),
+                serde_json::Value::String(reasoning_parts.join("\n")),
+            );
+        }
+        messages.push(Message {
+            role,
+            content,
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
+            tool_call_id: None,
+            extras: if extras.is_empty() {
+                None
+            } else {
+                Some(extras)
+            },
+        });
+    }
+
+    Ok(messages)
 }
 
 #[allow(dead_code)]
@@ -806,5 +822,61 @@ mod tests {
         assert!(sse.contains("event: content_block_start"));
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""type":"tool_use""#));
+    }
+
+    #[test]
+    fn test_parse_multi_tool_result_splits_into_separate_messages() {
+        // Anthropic sends multiple tool_results in a single user message.
+        // Each tool_result must become a separate role="tool" message for
+        // OpenAI-compatible backends.
+        let json = r#"{
+            "model": "deepseek-v4-pro",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "do A and B"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_01", "name": "foo", "input": {}},
+                    {"type": "tool_use", "id": "toolu_02", "name": "bar", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": "result1"},
+                    {"type": "tool_result", "tool_use_id": "toolu_02", "content": "result2"}
+                ]}
+            ]
+        }"#;
+        let result = parse_messages_request(json).expect("parse should succeed");
+        // user + assistant (with 2 tool_calls) + 2 tool messages = 4 messages
+        assert_eq!(result.messages.len(), 4);
+        // First tool message
+        assert_eq!(result.messages[2].role, Role::Tool);
+        assert_eq!(result.messages[2].tool_call_id, Some("toolu_01".to_string()));
+        assert_eq!(result.messages[2].content, "result1");
+        // Second tool message
+        assert_eq!(result.messages[3].role, Role::Tool);
+        assert_eq!(result.messages[3].tool_call_id, Some("toolu_02".to_string()));
+        assert_eq!(result.messages[3].content, "result2");
+    }
+
+    #[test]
+    fn test_parse_single_tool_result_still_works() {
+        let json = r#"{
+            "model": "deepseek-v4-pro",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "do something"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_01", "name": "foo", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": "result1"}
+                ]}
+            ]
+        }"#;
+        let result = parse_messages_request(json).expect("parse should succeed");
+        // user + assistant + 1 tool = 3 messages
+        assert_eq!(result.messages.len(), 3);
+        assert_eq!(result.messages[2].role, Role::Tool);
+        assert_eq!(result.messages[2].tool_call_id, Some("toolu_01".to_string()));
+        assert_eq!(result.messages[2].content, "result1");
     }
 }
