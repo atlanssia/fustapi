@@ -77,7 +77,10 @@ impl Provider for DeepSeekProvider {
 
     async fn balance(&self) -> Result<Option<String>, ProviderError> {
         let client = reqwest::Client::new();
-        let url = format!("{}/user/balance", self.config.endpoint.trim_end_matches('/'));
+        // balance endpoint is at the base domain, not under /v1
+        let base = self.config.endpoint.trim_end_matches('/');
+        let base_root = base.strip_suffix("/v1").unwrap_or(base);
+        let url = format!("{}/user/balance", base_root);
 
         let mut builder = client
             .get(&url)
