@@ -95,6 +95,8 @@ pub struct BalanceEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub provider_type: String,
+    pub endpoint: String,
+    pub has_key: bool,
     pub balance: Option<String>,
     pub error: Option<String>,
 }
@@ -484,13 +486,23 @@ pub async fn balance_api_handler(
         .map(|(name, cfg)| {
             let name = name.clone();
             let ptype = cfg.r#type.clone();
+            let endpoint = cfg.endpoint.clone();
+            let has_key = cfg.api_key.is_some();
             let provider = crate::config::create_provider(&name, cfg);
             tokio::spawn(async move {
+                let entry = |balance, error| BalanceEntry {
+                    name,
+                    provider_type: ptype,
+                    endpoint,
+                    has_key,
+                    balance,
+                    error,
+                };
                 match tokio::time::timeout(std::time::Duration::from_secs(10), provider.balance()).await {
-                    Ok(Ok(Some(balance))) => BalanceEntry { name, provider_type: ptype, balance: Some(balance), error: None },
-                    Ok(Ok(None)) => BalanceEntry { name, provider_type: ptype, balance: None, error: None },
-                    Ok(Err(e)) => BalanceEntry { name, provider_type: ptype, balance: None, error: Some(e.to_string()) },
-                    Err(_) => BalanceEntry { name, provider_type: ptype, balance: None, error: Some("timeout".into()) },
+                    Ok(Ok(Some(balance))) => entry(Some(balance), None),
+                    Ok(Ok(None)) => entry(None, None),
+                    Ok(Err(e)) => entry(None, Some(e.to_string())),
+                    Err(_) => entry(None, Some("timeout".into())),
                 }
             })
         })
@@ -501,6 +513,8 @@ pub async fn balance_api_handler(
         balances.push(handle.await.unwrap_or_else(|e| BalanceEntry {
             name: "unknown".into(),
             provider_type: "unknown".into(),
+            endpoint: String::new(),
+            has_key: false,
             balance: None,
             error: Some(e.to_string()),
         }));

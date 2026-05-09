@@ -76,11 +76,11 @@ impl Provider for DeepSeekProvider {
     }
 
     async fn balance(&self) -> Result<Option<String>, ProviderError> {
+        use tracing::debug;
         let client = reqwest::Client::new();
-        // balance endpoint is at the base domain, not under /v1
-        let base = self.config.endpoint.trim_end_matches('/');
-        let base_root = base.strip_suffix("/v1").unwrap_or(base);
-        let url = format!("{}/user/balance", base_root);
+        let url = format!("{}/user/balance", self.config.endpoint.trim_end_matches('/'));
+
+        debug!(url = %url, has_key = !self.config.api_key.is_empty(), "deepseek balance query");
 
         let mut builder = client
             .get(&url)
@@ -96,19 +96,25 @@ impl Provider for DeepSeekProvider {
             .await
             .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
+        debug!(status = %resp.status(), "deepseek balance response");
+
         if !resp.status().is_success() {
             let status = resp.status();
             let err_text = resp.text().await.unwrap_or_default();
+            debug!(status = %status, err = %err_text, "deepseek balance failed");
             return Err(ProviderError::Request(format!(
                 "balance query failed {}: {}",
                 status, err_text
             )));
         }
 
-        let body: DeepSeekBalanceResponse = resp
-            .json()
-            .await
+        let resp_text = resp.text().await.unwrap_or_default();
+        debug!(body = %resp_text, "deepseek balance raw response");
+
+        let body: DeepSeekBalanceResponse = serde_json::from_str(&resp_text)
             .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        debug!(is_available = body.is_available, infos = body.balance_infos.len(), "deepseek balance parsed");
 
         if body.is_available
             && let Some(info) = body.balance_infos.first()
