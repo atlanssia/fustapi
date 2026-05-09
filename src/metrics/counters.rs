@@ -73,6 +73,17 @@ pub struct GlobalSnapshot {
     pub in_flight_requests: i64,
 }
 
+/// Aggregated data for a single completed request.
+pub struct RequestSample<'a> {
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub success: bool,
+    pub latency_ms: u64,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub ttft_ms: Option<u64>,
+}
+
 /// Per-provider counters (updated only by the aggregator — single writer).
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ProviderCounters {
@@ -108,33 +119,24 @@ impl ProviderStatsMap {
     }
 
     /// Record a completed request for a provider+model (called by aggregator only).
-    pub fn record(
-        &self,
-        provider: &str,
-        model: &str,
-        success: bool,
-        latency_ms: u64,
-        prompt_tokens: u32,
-        completion_tokens: u32,
-        ttft_ms: Option<u64>,
-    ) {
+    pub fn record(&self, sample: &RequestSample) {
         let mut map = self.inner.write().expect("provider stats lock poisoned");
-        let key = format!("{}:{}", provider, model);
+        let key = format!("{}:{}", sample.provider, sample.model);
         let entry = map.entry(key).or_default();
         entry.request_count += 1;
-        if !success {
+        if !sample.success {
             entry.failure_count += 1;
         }
-        entry.total_latency_ms += latency_ms;
-        entry.prompt_tokens += prompt_tokens as u64;
-        entry.completion_tokens += completion_tokens as u64;
+        entry.total_latency_ms += sample.latency_ms;
+        entry.prompt_tokens += sample.prompt_tokens as u64;
+        entry.completion_tokens += sample.completion_tokens as u64;
 
-        if let Some(t) = ttft_ms {
+        if let Some(t) = sample.ttft_ms {
             entry.total_ttft_ms += t;
             entry.ttft_samples += 1;
-            let gen_time = latency_ms.saturating_sub(t);
+            let gen_time = sample.latency_ms.saturating_sub(t);
             entry.total_generation_time_ms += gen_time;
-            entry.generation_tokens += completion_tokens as u64;
+            entry.generation_tokens += sample.completion_tokens as u64;
         }
     }
 
@@ -178,9 +180,9 @@ mod tests {
     #[test]
     fn test_provider_stats_record_and_snapshot() {
         let stats = ProviderStatsMap::new();
-        stats.record("omlx", "gpt-4", true, 150, 10, 20, Some(50));
-        stats.record("omlx", "gpt-4", false, 300, 5, 0, None);
-        stats.record("lmstudio", "llama3", true, 100, 8, 15, Some(30));
+        stats.record(&RequestSample { provider: "omlx", model: "gpt-4", success: true, latency_ms: 150, prompt_tokens: 10, completion_tokens: 20, ttft_ms: Some(50) });
+        stats.record(&RequestSample { provider: "omlx", model: "gpt-4", success: false, latency_ms: 300, prompt_tokens: 5, completion_tokens: 0, ttft_ms: None });
+        stats.record(&RequestSample { provider: "lmstudio", model: "llama3", success: true, latency_ms: 100, prompt_tokens: 8, completion_tokens: 15, ttft_ms: Some(30) });
         stats.record_fallback("lmstudio", "llama3");
 
         let snap = stats.snapshot();

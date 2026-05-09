@@ -106,6 +106,13 @@ pub trait Provider: Send + Sync {
         // Default: assume healthy unless overridden.
         Ok(())
     }
+
+    /// Query the provider account balance (returns display string, e.g. "¥1.60 CNY").
+    ///
+    /// Default: `Ok(None)` — most local providers won't implement this.
+    async fn balance(&self) -> Result<Option<String>, ProviderError> {
+        Ok(None)
+    }
 }
 
 /// Errors that can occur when interacting with a provider.

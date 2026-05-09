@@ -1043,6 +1043,7 @@
                       <th scope="col">Type</th>
                       <th scope="col">Endpoint</th>
                       <th scope="col">API key</th>
+                      <th scope="col">Balance</th>
                       <th scope="col">Actions</th>
                     </tr>
                   </thead>
@@ -1249,6 +1250,7 @@
       lastFocus: null,
       routeProviders: [],
       confirmAction: null,
+      balances: [],
     };
 
     const localProviderTypes = new Set(["omlx", "lmstudio", "sglang"]);
@@ -1448,6 +1450,16 @@
       }
     }
 
+    async function fetchBalance() {
+      try {
+        const data = await api("/api/balance");
+        state.balances = Array.isArray(data.balances) ? data.balances : [];
+        renderProviders();
+      } catch (_) {
+        // Balance is best-effort; don't block the UI.
+      }
+    }
+
     function renderProviders() {
       const total = state.providers.length;
       byId("metric-providers").textContent = total;
@@ -1466,33 +1478,49 @@
       }
       setStateText("providers-state", "", true);
       byId("providers-content").hidden = false;
-      byId("providers-tbody").innerHTML = state.providers.map((provider) => `
-    <tr>
-      <td><strong>${escapeHtml(provider.name)}</strong></td>
-      <td><span class="badge type">${escapeHtml(provider.type || "openai")}</span></td>
-      <td class="endpoint">${escapeHtml(provider.endpoint)}</td>
-      <td>
-        ${provider.has_key ? "<span class=\"badge ok\">Key Set</span>" : "<span class=\"badge warn\">No key</span>"}
-        ${provider.upstream_model ? `<br><span class="help" style="font-size: 0.75rem">Model: ${escapeHtml(provider.upstream_model)}</span>` : ""}
-      </td>
-      <td><div class="actions">
-        <button class="btn small" type="button" data-provider-action="edit" data-provider-name="${escapeHtml(provider.name)}">Edit</button>
-        <button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="${escapeHtml(provider.name)}">Delete</button>
-      </div></td>
-    </tr>
-  `).join("");
-      byId("providers-mobile").innerHTML = state.providers.map((provider) => `
-    <article class="record">
-      <h3>${escapeHtml(provider.name)}</h3>
-      <dl>
-        <div><dt>Type</dt><dd>${escapeHtml(provider.type || "openai")}</dd></div>
-        <div><dt>Endpoint</dt><dd>${escapeHtml(provider.endpoint)}</dd></div>
-        <div><dt>API key</dt><dd>${provider.has_key ? "Set" : "Not set"}</dd></div>
-        ${provider.upstream_model ? `<div><dt>Upstream Model</dt><dd>${escapeHtml(provider.upstream_model)}</dd></div>` : ""}
-      </dl>
-      <div class="actions">
-        <button class="btn small" type="button" data-provider-action="edit" data-provider-name="${escapeHtml(provider.name)}">Edit</button>
-        <button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="${escapeHtml(provider.name)}">Delete</button>
+      byId("providers-tbody").innerHTML = state.providers.map((provider) => {
+        const bal = state.balances.find((b) => b.name === provider.name);
+        let balHtml = '<span style="color:var(--muted)">-</span>';
+        if (bal) {
+          if (bal.error) balHtml = '<span style="color:var(--danger)">' + escapeHtml(bal.error) + '</span>';
+          else if (bal.balance) balHtml = '<span class="badge ok">' + escapeHtml(bal.balance) + '</span>';
+        }
+        return '<tr>' +
+          '<td><strong>' + escapeHtml(provider.name) + '</strong></td>' +
+          '<td><span class="badge type">' + escapeHtml(provider.type || "openai") + '</span></td>' +
+          '<td class="endpoint">' + escapeHtml(provider.endpoint) + '</td>' +
+          '<td>' +
+            (provider.has_key ? '<span class="badge ok">Key Set</span>' : '<span class="badge warn">No key</span>') +
+            (provider.upstream_model ? '<br><span class="help" style="font-size: 0.75rem">Model: ' + escapeHtml(provider.upstream_model) + '</span>' : '') +
+          '</td>' +
+          '<td>' + balHtml + '</td>' +
+          '<td><div class="actions">' +
+            '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
+            '<button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(provider.name) + '">Delete</button>' +
+          '</div></td>' +
+        '</tr>';
+      }).join("");
+      byId("providers-mobile").innerHTML = state.providers.map((provider) => {
+        const bal = state.balances.find((b) => b.name === provider.name);
+        let balHtml = '<span style="color:var(--muted)">-</span>';
+        if (bal) {
+          if (bal.error) balHtml = '<span style="color:var(--danger)">' + escapeHtml(bal.error) + '</span>';
+          else if (bal.balance) balHtml = '<span class="badge ok">' + escapeHtml(bal.balance) + '</span>';
+        }
+        return '<article class="record">' +
+          '<h3>' + escapeHtml(provider.name) + '</h3>' +
+          '<dl>' +
+            '<div><dt>Type</dt><dd>' + escapeHtml(provider.type || "openai") + '</dd></div>' +
+            '<div><dt>Endpoint</dt><dd>' + escapeHtml(provider.endpoint) + '</dd></div>' +
+            '<div><dt>API key</dt><dd>' + (provider.has_key ? "Set" : "Not set") + '</dd></div>' +
+            (provider.upstream_model ? '<div><dt>Upstream Model</dt><dd>' + escapeHtml(provider.upstream_model) + '</dd></div>' : '') +
+            '<div><dt>Balance</dt><dd>' + balHtml + '</dd></div>' +
+          '</dl>' +
+          '<div class="actions">' +
+            '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
+            '<button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(provider.name) + '">Delete</button>' +
+          '</div>' +
+        '</article>';
       </div>
     </article>
   `).join("");
@@ -2006,6 +2034,7 @@
       setupTabs();
       setupEvents();
       await Promise.all([fetchProviders(), fetchModels(), fetchHealth()]);
+      fetchBalance();
     }
 
     init();

@@ -3,6 +3,7 @@
 //! Fallback adapter for the DeepSeek API.
 
 use async_trait::async_trait;
+use serde::Deserialize;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 
@@ -40,6 +41,7 @@ impl DeepSeekProvider {
                 endpoint: config.endpoint.clone(),
                 api_key: config.api_key.clone(),
                 model: config.model.clone(),
+                stream_options: true,
             },
         );
         Self {
@@ -47,6 +49,18 @@ impl DeepSeekProvider {
             openai_backend,
         }
     }
+}
+
+#[derive(Deserialize)]
+struct DeepSeekBalanceResponse {
+    is_available: bool,
+    balance_infos: Vec<BalanceInfo>,
+}
+
+#[derive(Deserialize)]
+struct BalanceInfo {
+    currency: String,
+    total_balance: String,
 }
 
 #[async_trait]
@@ -60,6 +74,53 @@ impl Provider for DeepSeekProvider {
             .chat_stream(request, allow_passthrough)
             .await
     }
+
+    async fn balance(&self) -> Result<Option<String>, ProviderError> {
+        let client = reqwest::Client::new();
+        let url = format!("{}/user/balance", self.config.endpoint.trim_end_matches('/'));
+
+        let mut builder = client
+            .get(&url)
+            .header("Accept", "application/json");
+
+        if !self.config.api_key.is_empty() {
+            builder = builder
+                .header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Request(format!(
+                "balance query failed {}: {}",
+                status, err_text
+            )));
+        }
+
+        let body: DeepSeekBalanceResponse = resp
+            .json()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        if body.is_available
+            && let Some(info) = body.balance_infos.first()
+        {
+            let balance = info.total_balance.parse::<f64>().unwrap_or(0.0);
+            let status = if balance <= 0.0 { "Insufficient" } else { "Available" };
+            return Ok(Some(format!(
+                "{} {} ({})",
+                info.currency, info.total_balance, status
+            )));
+        }
+
+        Ok(None)
+    }
+
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
         crate::provider::ProviderCapabilities {
             tool_calling: crate::provider::ToolCallingSupport::Native,
@@ -67,6 +128,7 @@ impl Provider for DeepSeekProvider {
             streaming: true,
         }
     }
+
     fn name(&self) -> &str {
         "deepseek"
     }

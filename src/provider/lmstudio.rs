@@ -38,6 +38,7 @@ impl LmStudioProvider {
                 endpoint: config.endpoint.clone(),
                 api_key: "lm-studio".to_string(),
                 model: config.model.clone(),
+                stream_options: false,
             },
         );
         Self {

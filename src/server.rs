@@ -103,6 +103,8 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         // Dashboard API — metrics
         .route("/metrics/summary", get(web::metrics_summary_handler))
         .route("/metrics/timeseries", get(web::metrics_timeseries_handler))
+        // Dashboard API — balance
+        .route("/api/balance", get(web::balance_api_handler))
         // API routes
         .route("/health", get(health_handler))
         .route(

@@ -178,12 +178,23 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 model: cfg.model.clone(),
             },
         )),
-        "openai" | "openai-compatible" => {
+        "openai" => {
             Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
                 crate::provider::cloud::openai::OpenAIConfig {
                     endpoint: cfg.endpoint.clone(),
                     api_key: cfg.api_key.clone().unwrap_or_default(),
                     model: cfg.model.clone(),
+                    stream_options: true,
+                },
+            ))
+        }
+        "openai-compatible" => {
+            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+                crate::provider::cloud::openai::OpenAIConfig {
+                    endpoint: cfg.endpoint.clone(),
+                    api_key: cfg.api_key.clone().unwrap_or_default(),
+                    model: cfg.model.clone(),
+                    stream_options: false,
                 },
             ))
         }

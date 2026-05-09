@@ -38,6 +38,7 @@ impl SglProvider {
                 endpoint: config.endpoint.clone(),
                 api_key: "sglang".to_string(),
                 model: config.model.clone(),
+                stream_options: true,
             },
         );
         Self {

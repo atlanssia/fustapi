@@ -16,6 +16,9 @@ pub struct OpenAIConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: Option<String>,
+    /// Whether to send `stream_options.include_usage` in streaming requests.
+    /// Disable for providers that don't support this OpenAI extension (e.g. GLM).
+    pub stream_options: bool,
 }
 
 impl Default for OpenAIConfig {
@@ -24,6 +27,7 @@ impl Default for OpenAIConfig {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: None,
+            stream_options: true,
         }
     }
 }
@@ -118,7 +122,7 @@ impl OpenAIProvider {
             serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
 
         // Request usage data in streaming responses.
-        if request.stream {
+        if request.stream && self.config.stream_options {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
 

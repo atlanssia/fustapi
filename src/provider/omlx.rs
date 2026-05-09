@@ -38,6 +38,7 @@ impl OmlxProvider {
                 endpoint: config.endpoint.clone(),
                 api_key: "omlx".to_string(),
                 model: config.model.clone(),
+                stream_options: false,
             },
         );
         Self {

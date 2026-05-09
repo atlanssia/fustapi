@@ -90,6 +90,20 @@ pub struct MessageResponse {
     pub message: String,
 }
 
+#[derive(Serialize)]
+pub struct BalanceEntry {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub balance: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BalanceResponse {
+    pub balances: Vec<BalanceEntry>,
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn load_config(db_path: &std::path::Path) -> crate::config::AppConfig {
@@ -454,6 +468,46 @@ pub async fn delete_route(
         }),
     )
         .into_response()
+}
+
+// ── Balance Handler ──────────────────────────────────────────────────
+
+/// GET /api/balance — query account balance for all providers that support it.
+pub async fn balance_api_handler(
+    Extension(db_path): Extension<Arc<PathBuf>>,
+) -> impl IntoResponse {
+    let config = load_config(&db_path);
+
+    let tasks: Vec<_> = config
+        .providers
+        .iter()
+        .map(|(name, cfg)| {
+            let name = name.clone();
+            let ptype = cfg.r#type.clone();
+            let provider = crate::config::create_provider(&name, cfg);
+            tokio::spawn(async move {
+                match tokio::time::timeout(std::time::Duration::from_secs(10), provider.balance()).await {
+                    Ok(Ok(Some(balance))) => BalanceEntry { name, provider_type: ptype, balance: Some(balance), error: None },
+                    Ok(Ok(None)) => BalanceEntry { name, provider_type: ptype, balance: None, error: None },
+                    Ok(Err(e)) => BalanceEntry { name, provider_type: ptype, balance: None, error: Some(e.to_string()) },
+                    Err(_) => BalanceEntry { name, provider_type: ptype, balance: None, error: Some("timeout".into()) },
+                }
+            })
+        })
+        .collect();
+
+    let mut balances = Vec::with_capacity(tasks.len());
+    for handle in tasks {
+        balances.push(handle.await.unwrap_or_else(|e| BalanceEntry {
+            name: "unknown".into(),
+            provider_type: "unknown".into(),
+            balance: None,
+            error: Some(e.to_string()),
+        }));
+    }
+    balances.sort_by(|a, b| a.name.cmp(&b.name));
+
+    (StatusCode::OK, Json(BalanceResponse { balances })).into_response()
 }
 
 // ── Metrics Dashboard Handlers ──────────────────────────────────────

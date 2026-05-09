@@ -78,11 +78,46 @@ async fn openai_handler(
             Protocol::OpenAI,
             emitter,
             provider,
-            model,
             start,
         )
         .await
     }
+}
+
+/// Extract token usage from raw SSE bytes in passthrough mode.
+///
+/// Scans SSE data lines for usage fields from upstream providers that
+/// support `stream_options.include_usage`. Maintains a small sliding
+/// buffer to handle cross‑chunk boundaries without adding latency.
+fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenUsage> {
+    let text = String::from_utf8_lossy(buf);
+    for line in text.lines() {
+        let data = line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"));
+        let Some(data) = data else { continue };
+        let data = data.trim();
+        if data == "[DONE]" {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+            && let Some(usage) = v.get("usage")
+        {
+            let pt = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                as u32;
+            let ct = usage
+                .get("completion_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0) as u32;
+            if pt > 0 || ct > 0 {
+                return Some(crate::metrics::TokenUsage {
+                    prompt_tokens: pt,
+                    completion_tokens: ct,
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Forward provider stream as SSE response.
@@ -259,10 +294,27 @@ async fn forward_streaming(
             Ok(response)
         }
         crate::streaming::StreamMode::Passthrough(byte_stream) => {
+            let mut buf = bytes::BytesMut::with_capacity(8192);
+
             let body_stream =
                 futures::StreamExt::map(byte_stream, move |chunk_result| match chunk_result {
                     Ok(bytes) => {
                         tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+
+                        // Scan passthrough SSE bytes for usage data so that
+                        // gen speed and token columns are accurate even when
+                        // the client uses the OpenAI protocol.
+                        if tracker.tokens.is_none() {
+                            buf.extend_from_slice(&bytes);
+                            if buf.len() > 8192 {
+                                let excess = buf.len() - 8192;
+                                let _ = buf.split_to(excess);
+                            }
+                            if let Some(usage) = extract_usage_from_sse_bytes(&buf) {
+                                tracker.set_tokens(usage);
+                            }
+                        }
+
                         Ok::<_, std::convert::Infallible>(bytes)
                     }
                     Err(e) => {
@@ -422,7 +474,6 @@ async fn collect_non_streaming(
     protocol: Protocol,
     emitter: crate::metrics::MetricsEmitter,
     provider: String,
-    model_name: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
@@ -552,7 +603,7 @@ async fn collect_non_streaming(
         })?,
     };
 
-    emitter.request_end(&provider, &model_name, start, true, final_usage, first_token_ms);
+    emitter.request_end(&provider, model, start, true, final_usage, first_token_ms);
 
     Ok((
         StatusCode::OK,
@@ -589,7 +640,6 @@ async fn anthropic_handler(
             Protocol::Anthropic,
             emitter,
             provider,
-            model,
             start,
         )
         .await

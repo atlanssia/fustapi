@@ -83,7 +83,15 @@ fn process_event(event: &MetricEvent, global: &GlobalCounters, provider_stats: &
                 .as_ref()
                 .map(|t| (t.prompt_tokens, t.completion_tokens))
                 .unwrap_or((0, 0));
-            provider_stats.record(provider, model, *success, latency_ms, pt, ct, *ttft_ms);
+            provider_stats.record(&super::counters::RequestSample {
+                provider,
+                model,
+                success: *success,
+                latency_ms,
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                ttft_ms: *ttft_ms,
+            });
         }
     }
 }
