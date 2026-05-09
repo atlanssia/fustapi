@@ -66,6 +66,7 @@ fn process_event(event: &MetricEvent, global: &GlobalCounters, provider_stats: &
         }
         MetricEvent::RequestEnd {
             provider,
+            model,
             duration,
             success,
             tokens,
@@ -82,7 +83,7 @@ fn process_event(event: &MetricEvent, global: &GlobalCounters, provider_stats: &
                 .as_ref()
                 .map(|t| (t.prompt_tokens, t.completion_tokens))
                 .unwrap_or((0, 0));
-            provider_stats.record(provider, *success, latency_ms, pt, ct, *ttft_ms);
+            provider_stats.record(provider, model, *success, latency_ms, pt, ct, *ttft_ms);
         }
     }
 }
@@ -99,6 +100,7 @@ mod tests {
 
         let start_event = MetricEvent::RequestStart {
             provider: "omlx".into(),
+            model: "gpt-4".into(),
             timestamp: std::time::Instant::now(),
         };
         process_event(&start_event, &global, &provider_stats);
@@ -109,6 +111,7 @@ mod tests {
 
         let end_event = MetricEvent::RequestEnd {
             provider: "omlx".into(),
+            model: "gpt-4".into(),
             duration: Duration::from_millis(150),
             ttft_ms: Some(100),
             success: true,
@@ -124,7 +127,7 @@ mod tests {
         assert_eq!(snap.success_requests, 1);
 
         let psnap = provider_stats.snapshot();
-        assert_eq!(psnap["omlx"].request_count, 1);
-        assert_eq!(psnap["omlx"].prompt_tokens, 10);
+        assert_eq!(psnap["omlx:gpt-4"].request_count, 1);
+        assert_eq!(psnap["omlx:gpt-4"].prompt_tokens, 10);
     }
 }

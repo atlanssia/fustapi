@@ -36,11 +36,13 @@ pub enum MetricEvent {
     /// A new request has started processing.
     RequestStart {
         provider: String,
+        model: String,
         timestamp: Instant,
     },
     /// A request has completed.
     RequestEnd {
         provider: String,
+        model: String,
         duration: Duration,
         success: bool,
         tokens: Option<TokenUsage>,
@@ -65,10 +67,11 @@ impl MetricsEmitter {
     }
 
     /// Convenience: emit a request start event and return the start time.
-    pub fn request_start(&self, provider: &str) -> Instant {
+    pub fn request_start(&self, provider: &str, model: &str) -> Instant {
         let now = Instant::now();
         self.emit(MetricEvent::RequestStart {
             provider: provider.to_string(),
+            model: model.to_string(),
             timestamp: now,
         });
         now
@@ -78,6 +81,7 @@ impl MetricsEmitter {
     pub fn request_end(
         &self,
         provider: &str,
+        model: &str,
         start: Instant,
         success: bool,
         tokens: Option<TokenUsage>,
@@ -85,6 +89,7 @@ impl MetricsEmitter {
     ) {
         self.emit(MetricEvent::RequestEnd {
             provider: provider.to_string(),
+            model: model.to_string(),
             duration: start.elapsed(),
             success,
             tokens,
@@ -98,6 +103,7 @@ impl MetricsEmitter {
 pub struct StreamTracker {
     pub emitter: MetricsEmitter,
     pub provider: String,
+    pub model: String,
     pub start: Instant,
     pub success: bool,
     pub ttft_ms: Option<u64>,
@@ -105,10 +111,11 @@ pub struct StreamTracker {
 }
 
 impl StreamTracker {
-    pub fn new(emitter: MetricsEmitter, provider: String, start: Instant) -> Self {
+    pub fn new(emitter: MetricsEmitter, provider: String, model: String, start: Instant) -> Self {
         Self {
             emitter,
             provider,
+            model,
             start,
             success: true,
             ttft_ms: None,
@@ -135,6 +142,7 @@ impl Drop for StreamTracker {
     fn drop(&mut self) {
         self.emitter.request_end(
             &self.provider,
+            &self.model,
             self.start,
             self.success,
             self.tokens.clone(),
@@ -192,12 +200,14 @@ mod tests {
         // Fill it
         emitter.emit(MetricEvent::RequestStart {
             provider: "test".into(),
+            model: "gpt-4".into(),
             timestamp: Instant::now(),
         });
 
         // This should not block or panic — event is silently dropped
         emitter.emit(MetricEvent::RequestStart {
             provider: "test2".into(),
+            model: "gpt-4".into(),
             timestamp: Instant::now(),
         });
     }

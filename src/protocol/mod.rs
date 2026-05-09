@@ -42,11 +42,12 @@ pub async fn dispatch_request(
     router: &dyn Router,
     emitter: crate::metrics::MetricsEmitter,
     provider: String,
+    model: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     match protocol {
-        Protocol::OpenAI => openai_handler(body, router, emitter, provider, start).await,
-        Protocol::Anthropic => anthropic_handler(body, router, emitter, provider, start).await,
+        Protocol::OpenAI => openai_handler(body, router, emitter, provider, model, start).await,
+        Protocol::Anthropic => anthropic_handler(body, router, emitter, provider, model, start).await,
     }
 }
 
@@ -56,26 +57,28 @@ async fn openai_handler(
     router: &dyn Router,
     emitter: crate::metrics::MetricsEmitter,
     provider: String,
+    model: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     let unified_req = openai::parse_chat_request(&body).map_err(|e| ProtocolError::Parse {
         message: e.to_string(),
         protocol: Protocol::OpenAI,
     })?;
-    let model = unified_req.model.clone();
+    let model_name = model.clone();
     let provider_req = unified_req.clone();
 
     if is_streaming(&body) {
-        let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
-        forward_streaming(router, provider_req, &model, Protocol::OpenAI, tracker).await
+        let tracker = crate::metrics::StreamTracker::new(emitter, provider, model, start);
+        forward_streaming(router, provider_req, &model_name, Protocol::OpenAI, tracker).await
     } else {
         collect_non_streaming(
             router,
             provider_req,
-            &model,
+            &model_name,
             Protocol::OpenAI,
             emitter,
             provider,
+            model,
             start,
         )
         .await
@@ -419,6 +422,7 @@ async fn collect_non_streaming(
     protocol: Protocol,
     emitter: crate::metrics::MetricsEmitter,
     provider: String,
+    model_name: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
@@ -548,7 +552,7 @@ async fn collect_non_streaming(
         })?,
     };
 
-    emitter.request_end(&provider, start, true, final_usage, first_token_ms);
+    emitter.request_end(&provider, &model_name, start, true, final_usage, first_token_ms);
 
     Ok((
         StatusCode::OK,
@@ -563,6 +567,7 @@ async fn anthropic_handler(
     router: &dyn Router,
     emitter: crate::metrics::MetricsEmitter,
     provider: String,
+    model: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
     let unified_req =
@@ -571,19 +576,20 @@ async fn anthropic_handler(
             protocol: Protocol::Anthropic,
         })?;
 
-    let model = unified_req.model.clone();
+    let model_name = model.clone();
 
     if is_streaming(&body) {
-        let tracker = crate::metrics::StreamTracker::new(emitter, provider, start);
-        forward_streaming(router, unified_req, &model, Protocol::Anthropic, tracker).await
+        let tracker = crate::metrics::StreamTracker::new(emitter, provider, model, start);
+        forward_streaming(router, unified_req, &model_name, Protocol::Anthropic, tracker).await
     } else {
         collect_non_streaming(
             router,
             unified_req,
-            &model,
+            &model_name,
             Protocol::Anthropic,
             emitter,
             provider,
+            model,
             start,
         )
         .await

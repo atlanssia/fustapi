@@ -107,10 +107,11 @@ impl ProviderStatsMap {
         }
     }
 
-    /// Record a completed request for a provider (called by aggregator only).
+    /// Record a completed request for a provider+model (called by aggregator only).
     pub fn record(
         &self,
         provider: &str,
+        model: &str,
         success: bool,
         latency_ms: u64,
         prompt_tokens: u32,
@@ -118,7 +119,8 @@ impl ProviderStatsMap {
         ttft_ms: Option<u64>,
     ) {
         let mut map = self.inner.write().expect("provider stats lock poisoned");
-        let entry = map.entry(provider.to_string()).or_default();
+        let key = format!("{}:{}", provider, model);
+        let entry = map.entry(key).or_default();
         entry.request_count += 1;
         if !success {
             entry.failure_count += 1;
@@ -136,10 +138,11 @@ impl ProviderStatsMap {
         }
     }
 
-    /// Record a fallback event for a provider (called by aggregator only).
-    pub fn record_fallback(&self, provider: &str) {
+    /// Record a fallback event for a provider+model (called by aggregator only).
+    pub fn record_fallback(&self, provider: &str, model: &str) {
         let mut map = self.inner.write().expect("provider stats lock poisoned");
-        let entry = map.entry(provider.to_string()).or_default();
+        let key = format!("{}:{}", provider, model);
+        let entry = map.entry(key).or_default();
         entry.fallback_count += 1;
     }
 
@@ -175,15 +178,15 @@ mod tests {
     #[test]
     fn test_provider_stats_record_and_snapshot() {
         let stats = ProviderStatsMap::new();
-        stats.record("omlx", true, 150, 10, 20, Some(50));
-        stats.record("omlx", false, 300, 5, 0, None);
-        stats.record("lmstudio", true, 100, 8, 15, Some(30));
-        stats.record_fallback("lmstudio");
+        stats.record("omlx", "gpt-4", true, 150, 10, 20, Some(50));
+        stats.record("omlx", "gpt-4", false, 300, 5, 0, None);
+        stats.record("lmstudio", "llama3", true, 100, 8, 15, Some(30));
+        stats.record_fallback("lmstudio", "llama3");
 
         let snap = stats.snapshot();
         assert_eq!(snap.len(), 2);
 
-        let omlx = &snap["omlx"];
+        let omlx = &snap["omlx:gpt-4"];
         assert_eq!(omlx.request_count, 2);
         assert_eq!(omlx.failure_count, 1);
         assert_eq!(omlx.total_latency_ms, 450);
@@ -194,7 +197,7 @@ mod tests {
         assert_eq!(omlx.total_generation_time_ms, 100);
         assert_eq!(omlx.generation_tokens, 20);
 
-        let lms = &snap["lmstudio"];
+        let lms = &snap["lmstudio:llama3"];
         assert_eq!(lms.request_count, 1);
         assert_eq!(lms.fallback_count, 1);
     }

@@ -187,8 +187,8 @@ async fn chat_completions_handler(
     let current_router = router.load_full();
 
     // Resolve provider name for metrics (best-effort)
-    let provider_name = resolve_provider_name(&body, current_router.as_ref());
-    let start = emitter.request_start(&provider_name);
+    let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());
+    let start = emitter.request_start(&provider_name, &model_name);
 
     match protocol::dispatch_request(
         proto,
@@ -196,13 +196,14 @@ async fn chat_completions_handler(
         current_router.as_ref(),
         emitter.clone(),
         provider_name.clone(),
+        model_name.clone(),
         start,
     )
     .await
     {
         Ok(response) => response, // StreamTracker/collector handles emitting request_end
         Err(e) => {
-            emitter.request_end(&provider_name, start, false, None, None);
+            emitter.request_end(&provider_name, &model_name, start, false, None, None);
             e.into_response()
         }
     }
@@ -218,8 +219,8 @@ async fn messages_handler(
     let proto = protocol::detect_protocol("/v1/messages", &headers);
     let current_router = router.load_full();
 
-    let provider_name = resolve_provider_name(&body, current_router.as_ref());
-    let start = emitter.request_start(&provider_name);
+    let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());
+    let start = emitter.request_start(&provider_name, &model_name);
 
     match protocol::dispatch_request(
         proto,
@@ -227,25 +228,27 @@ async fn messages_handler(
         current_router.as_ref(),
         emitter.clone(),
         provider_name.clone(),
+        model_name.clone(),
         start,
     )
     .await
     {
         Ok(response) => response,
         Err(e) => {
-            emitter.request_end(&provider_name, start, false, None, None);
+            emitter.request_end(&provider_name, &model_name, start, false, None, None);
             e.into_response()
         }
     }
 }
 
 /// Extract model name from body and resolve to provider name (best-effort).
-fn resolve_provider_name(body: &str, router: &dyn crate::router::Router) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
+fn resolve_provider_and_model(body: &str, router: &dyn crate::router::Router) -> (String, String) {
+    let model = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("model")?.as_str().map(String::from))
-        .and_then(|model| router.resolve(&model).ok())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let provider = router.resolve(&model).ok().unwrap_or_else(|| "unknown".to_string());
+    (provider, model)
 }
 
 /// GET /v1/models — returns a list of available models.

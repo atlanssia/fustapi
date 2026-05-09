@@ -31,10 +31,11 @@ pub struct TimeseriesPoint {
     pub error_count: u64,
 }
 
-/// Per-provider stats for the dashboard.
+/// Per-provider+model stats for the dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderStats {
     pub name: String,
+    pub model: String,
     pub request_count: u64,
     pub failure_count: u64,
     pub fallback_count: u64,
@@ -145,7 +146,10 @@ impl SnapshotBuilder {
         // Build provider stats
         let mut provider_stats: Vec<ProviderStats> = provider_map
             .iter()
-            .map(|(name, c)| {
+            .map(|(key, c)| {
+                let (provider_name, model) = key.split_once(':')
+                    .map(|(p, m)| (p.to_string(), m.to_string()))
+                    .unwrap_or((key.clone(), "-".to_string()));
                 let psr = if c.request_count > 0 {
                     (c.request_count - c.failure_count) as f64 / c.request_count as f64 * 100.0
                 } else {
@@ -167,7 +171,8 @@ impl SnapshotBuilder {
                     0.0
                 };
                 ProviderStats {
-                    name: name.clone(),
+                    name: provider_name,
+                    model,
                     request_count: c.request_count,
                     failure_count: c.failure_count,
                     fallback_count: c.fallback_count,
@@ -249,7 +254,7 @@ mod tests {
         };
         let mut providers = HashMap::new();
         providers.insert(
-            "omlx".to_string(),
+            "omlx:gpt-4".to_string(),
             ProviderCounters {
                 request_count: 60,
                 failure_count: 3,
@@ -264,7 +269,7 @@ mod tests {
             },
         );
         providers.insert(
-            "lmstudio".to_string(),
+            "lmstudio:llama3".to_string(),
             ProviderCounters {
                 request_count: 40,
                 failure_count: 2,
@@ -285,6 +290,7 @@ mod tests {
         assert_eq!(snap.provider_stats.len(), 2);
         // Provider with more requests should be first
         assert_eq!(snap.provider_stats[0].name, "omlx");
+        assert_eq!(snap.provider_stats[0].model, "gpt-4");
         assert_eq!(snap.timeseries.len(), 1);
     }
 

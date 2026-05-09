@@ -997,6 +997,7 @@
                 <thead>
                   <tr>
                     <th scope="col">Provider</th>
+                    <th scope="col">Model</th>
                     <th scope="col">Requests</th>
                     <th scope="col">Success Rate</th>
                     <th scope="col">Avg Latency</th>
@@ -1006,7 +1007,7 @@
                   </tr>
                 </thead>
                 <tbody id="dashboard-providers-tbody">
-                  <tr><td colspan="7" class="state" style="padding: 1rem;">No data yet.</td></tr>
+                  <tr><td colspan="8" class="state" style="padding: 1rem;">No data yet.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1859,12 +1860,13 @@
 
       const tbody = byId("dashboard-providers-tbody");
       if (!m.provider_stats || m.provider_stats.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="state" style="padding: 1rem;">No data yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="state" style="padding: 1rem;">No data yet.</td></tr>';
       } else {
         tbody.innerHTML = m.provider_stats.map(p => `
           <tr>
             <td><strong>${escapeHtml(p.name)}</strong></td>
-            <td>${p.request_count} ${p.failure_count > 0 ? `<span style="color:var(--danger)">(${p.failure_count} err)</span>` : ''}</td>
+            <td><code>${escapeHtml(p.model)}</code></td>
+            <td>${p.request_count} ${p.failure_count > 0 ? '<span style="color:var(--danger)">(' + p.failure_count + ' err)</span>' : ''}</td>
             <td>${p.success_rate.toFixed(1)}%</td>
             <td>${Math.round(p.avg_latency_ms)}ms</td>
             <td>${Math.round(p.avg_ttft_ms || 0)}ms</td>
@@ -1881,46 +1883,89 @@
     function drawChart(canvasId, timeseries, dataKey, color) {
       const canvas = byId(canvasId);
       if (!canvas || !timeseries || timeseries.length === 0) return;
-      
+
       const ctx = canvas.getContext("2d");
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      
+
       if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
         canvas.width = rect.width * dpr;
         canvas.height = rect.height * dpr;
         ctx.scale(dpr, dpr);
       }
-      
+
+      const padLeft = 42;
+      const padRight = 8;
+      const padTop = 8;
+      const padBottom = 4;
       const width = rect.width;
       const height = rect.height;
+      const plotW = width - padLeft - padRight;
+      const plotH = height - padTop - padBottom;
+
       ctx.clearRect(0, 0, width, height);
 
       const maxVal = Math.max(...timeseries.map(t => t[dataKey]), 1);
-      
+
+      // Y-axis labels (3 ticks)
+      ctx.fillStyle = "#888";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i <= 2; i++) {
+        const val = (maxVal * (2 - i) / 2);
+        const y = padTop + (plotH * i / 2);
+        const label = dataKey === "avg_latency_ms" ? Math.round(val) + "" : val.toFixed(1);
+        ctx.fillText(label, padLeft - 6, y);
+      }
+
+      // Grid lines
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 2; i++) {
+        const y = padTop + (plotH * i / 2);
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(width - padRight, y);
+        ctx.stroke();
+      }
+
+      // Data line
       ctx.beginPath();
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
 
       for (let i = 0; i < timeseries.length; i++) {
-        const x = (i / Math.max(timeseries.length - 1, 1)) * width;
-        const y = height - (timeseries[i][dataKey] / maxVal) * (height - 10) - 5;
+        const x = padLeft + (i / Math.max(timeseries.length - 1, 1)) * plotW;
+        const y = padTop + plotH - (timeseries[i][dataKey] / maxVal) * plotH;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
 
       // Draw area under curve
-      ctx.lineTo(width, height);
-      ctx.lineTo(0, height);
-      
+      const lastX = padLeft + plotW;
+      ctx.lineTo(lastX, padTop + plotH);
+      ctx.lineTo(padLeft, padTop + plotH);
+
       let fillStyle = color;
       if (color === "#22c55e") fillStyle = "rgba(34, 197, 94, 0.15)";
       else if (color === "#60a5fa") fillStyle = "rgba(96, 165, 250, 0.15)";
-      
+
       ctx.fillStyle = fillStyle;
       ctx.fill();
+
+      // Current value badge (top-right)
+      const current = timeseries[timeseries.length - 1][dataKey];
+      const display = dataKey === "avg_latency_ms"
+        ? Math.round(current) + "ms"
+        : current.toFixed(2);
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = color;
+      ctx.fillText(display, width - padRight, padTop + 2);
     }
 
     function setupEvents() {

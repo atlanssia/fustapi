@@ -117,6 +117,11 @@ impl OpenAIProvider {
         let mut body =
             serde_json::json!({ "model": model, "messages": messages, "stream": request.stream });
 
+        // Request usage data in streaming responses.
+        if request.stream {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
@@ -171,9 +176,15 @@ impl OpenAIProvider {
                 }
             }
 
+            let usage = response.usage.as_ref().map(|u| {
+                crate::metrics::TokenUsage {
+                    prompt_tokens: u.prompt_tokens as u32,
+                    completion_tokens: u.completion_tokens as u32,
+                }
+            });
             chunks.push(LLMChunk {
                 reasoning_content: None,
-                usage: None,
+                usage,
                 content: None,
                 tool_call: None,
                 done: true,
@@ -249,6 +260,20 @@ pub fn parse_openai_sse_stream(
     let s = stream::unfold(
         (stream, buffer, tool_id, tool_name, tool_args),
         |(mut stream, mut buffer, mut tool_id, mut tool_name, mut tool_args)| async move {
+            fn extract_usage(v: &serde_json::Value) -> Option<crate::metrics::TokenUsage> {
+                v.get("usage").and_then(|u| {
+                    let pt = u.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
+                    let ct = u.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
+                    if pt > 0 || ct > 0 {
+                        Some(crate::metrics::TokenUsage {
+                            prompt_tokens: pt,
+                            completion_tokens: ct,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            }
             loop {
                 if let Some(pos) = buffer.find('\n') {
                     let line = buffer[..pos].trim().to_string();
@@ -289,10 +314,32 @@ pub fn parse_openai_sse_stream(
                         }
                         if !data.is_empty()
                             && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
-                            && let Some(choices) = v.get("choices")
-                            && let Some(choice) = choices.get(0)
-                            && let Some(delta) = choice.get("delta")
                         {
+                            // Handle usage-only chunk (sent when stream_options.include_usage is set).
+                            // This arrives as a chunk with an empty choices array and a populated usage field.
+                            if let Some(usage) = extract_usage(&v) {
+                                // Only emit a separate chunk if there's no content/toolcall delta.
+                                let has_choices = v.get("choices")
+                                    .and_then(|c| c.as_array())
+                                    .is_some_and(|a| !a.is_empty());
+                                if !has_choices {
+                                    return Some((
+                                        Ok(crate::streaming::LLMChunk {
+                                            reasoning_content: None,
+                                            usage: Some(usage),
+                                            content: None,
+                                            tool_call: None,
+                                            done: false,
+                                        }),
+                                        (stream, buffer, tool_id, tool_name, tool_args),
+                                    ));
+                                }
+                            }
+
+                            let Some(choices) = v.get("choices") else { continue };
+                            let Some(choice) = choices.get(0) else { continue };
+                            let Some(delta) = choice.get("delta") else { continue };
+                            let chunk_usage = extract_usage(&v);
                             // Distinguish reasoning_content from content —
                             // DeepSeek requires reasoning_content to be echoed back.
                             let reasoning_str = delta
@@ -318,7 +365,7 @@ pub fn parse_openai_sse_stream(
                             if let Some(content) = content_str {
                                 return Some((
                                     Ok(crate::streaming::LLMChunk {
-                                        usage: None,
+                                        usage: chunk_usage,
                                         content: Some(content.to_string()),
                                         reasoning_content: None,
                                         tool_call: None,
