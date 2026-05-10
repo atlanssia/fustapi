@@ -10,11 +10,11 @@
       color-scheme: dark;
       --bg: #0a0a1a;
       --bg-gradient: linear-gradient(135deg, #0a0a1a 0%, #111133 30%, #0d1122 60%, #0a0a1a 100%);
-      --surface: rgba(255, 255, 255, 0.03);
-      --surface-hover: rgba(255, 255, 255, 0.06);
-      --surface-strong: rgba(255, 255, 255, 0.08);
-      --border: rgba(255, 255, 255, 0.06);
-      --border-strong: rgba(255, 255, 255, 0.12);
+      --surface: rgba(255, 255, 255, 0.05);
+      --surface-hover: rgba(255, 255, 255, 0.08);
+      --surface-strong: rgba(255, 255, 255, 0.10);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
       --blur: blur(24px);
       --blur-light: blur(12px);
       --text: #F8FAFC;
@@ -29,7 +29,7 @@
       --danger: #F87171;
       --danger-soft: rgba(248, 113, 113, 0.15);
       --shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
-      --radius: 12px;
+      --radius: 16px;
       --font-heading: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
       --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
     }
@@ -184,11 +184,14 @@
     .status-pill.err { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 
     .badge {
-      display: inline-block;
-      padding: 0.2em 0.6em;
+      display: inline-flex;
+      align-items: center;
+      padding: 0.25em 0.65em;
       border-radius: 999px;
       font-size: 0.75rem;
       font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
     }
 
     .badge.ok {
@@ -232,7 +235,7 @@
       background: var(--surface-strong);
       color: var(--text);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 10px;
       font-size: 0.875rem;
       font-weight: 600;
       transition: all 0.15s ease;
@@ -612,7 +615,7 @@
       padding: 0.65rem 0.75rem;
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 10px;
       color: var(--text);
       font-size: 0.9rem;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -637,7 +640,7 @@
       max-height: 220px;
       overflow: auto;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 0.65rem;
       background: var(--surface-muted);
     }
@@ -834,7 +837,7 @@
       padding: 0.75rem 1rem;
       background: var(--surface-muted);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 10px;
       cursor: pointer;
       transition: all 200ms ease;
       position: relative;
