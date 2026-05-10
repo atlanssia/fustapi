@@ -1046,7 +1046,7 @@
             <button class="btn small" title="Copy /v1/models" data-copy-path="/v1/models">
               <span class="method get">GET</span> /v1/models
             </button>
-            <span style="font-size:0.75rem;color:var(--muted);margin-left:0.5rem">Base: <code id="base-url-display" style="cursor:pointer" title="Click to copy">http://localhost:8000/v1</code></span>
+            <span style="font-size:0.75rem;color:var(--muted);margin-left:0.5rem">Base: <code id="base-url-display" style="cursor:pointer" title="Click to copy">http://localhost:8800/v1</code></span>
           </div>
 
           <!-- Charts (2-up) -->
@@ -1221,7 +1221,7 @@
             <div class="form-field">
               <label for="provider-endpoint">Endpoint</label>
               <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url" required
-                placeholder="http://localhost:8000/v1">
+                placeholder="http://localhost:8800/v1">
               <p class="help">Full API base path (e.g. including /v1 if required).</p>
               <p class="error" id="provider-endpoint-error"></p>
             </div>
@@ -1978,7 +1978,7 @@
       byId("metric-latency").textContent = Math.round(m.avg_latency_ms) + "ms";
       byId("metric-inflight").textContent = m.in_flight;
       byId("metric-total-requests").textContent = m.total_requests;
-      byId("metric-success-rate").textContent = m.success_rate.toFixed(1) + "%";
+      byId("metric-success-rate").textContent = (m.total_requests === 0 ? 100 : m.success_rate).toFixed(1) + "%";
       
       const formatTime = (s) => {
         if (s < 60) return s + "s";
