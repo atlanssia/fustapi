@@ -30,7 +30,7 @@ pub struct ServerConfig {
     pub addr: SocketAddr,
     /// The router instance for provider dispatch.
     pub router: Arc<RealRouter>,
-    /// Path to the SQLite database.
+    /// Path to the `SQLite` database.
     pub db_path: PathBuf,
 }
 
@@ -107,16 +107,40 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         .route("/api/balance", get(web::balance_api_handler))
         // API routes
         .route("/health", get(health_handler))
-        .route(
-            "/v1/chat/completions",
-            post({
-                let router = router_store.clone();
-                let emitter = metrics_emitter.clone();
-                move |headers, body| chat_completions_handler(headers, body, router, emitter)
-            }),
+        // ── OpenAI / Anthropic compatible endpoints ─────────────────
+        // Nested under both /v1 and /v1/v1 so clients that include /v1 in
+        // their base URL (e.g. OPENAI_BASE_URL=http://host/v1) still work.
+        .nest(
+            "/v1/v1",
+            Router::new()
+                .route(
+                    "/chat/completions",
+                    post({
+                        let router = router_store.clone();
+                        let emitter = metrics_emitter.clone();
+                        move |headers, body| {
+                            chat_completions_handler(headers, body, router, emitter)
+                        }
+                    }),
+                )
+                .route(
+                    "/messages",
+                    post({
+                        let router = router_store.clone();
+                        let emitter = metrics_emitter.clone();
+                        move |headers, body| messages_handler(headers, body, router, emitter)
+                    }),
+                )
+                .route(
+                    "/models",
+                    get({
+                        let router = router_store.clone();
+                        move |headers| models_handler(headers, router)
+                    }),
+                ),
         )
         .route(
-            "/v1/v1/chat/completions",
+            "/v1/chat/completions",
             post({
                 let router = router_store.clone();
                 let emitter = metrics_emitter.clone();
@@ -132,22 +156,7 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
             }),
         )
         .route(
-            "/v1/v1/messages",
-            post({
-                let router = router_store.clone();
-                let emitter = metrics_emitter.clone();
-                move |headers, body| messages_handler(headers, body, router, emitter)
-            }),
-        )
-        .route(
             "/v1/models",
-            get({
-                let router = router_store.clone();
-                move |headers| models_handler(headers, router)
-            }),
-        )
-        .route(
-            "/v1/v1/models",
             get({
                 let router = router_store.clone();
                 move |headers| models_handler(headers, router)
@@ -249,7 +258,10 @@ fn resolve_provider_and_model(body: &str, router: &dyn crate::router::Router) ->
         .ok()
         .and_then(|v| v.get("model")?.as_str().map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
-    let provider = router.resolve(&model).ok().unwrap_or_else(|| "unknown".to_string());
+    let provider = router
+        .resolve(&model)
+        .ok()
+        .unwrap_or_else(|| "unknown".to_string());
     (provider, model)
 }
 
@@ -347,8 +359,8 @@ async fn shutdown_signal() {
     };
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 
     info!("Shutdown signal received");

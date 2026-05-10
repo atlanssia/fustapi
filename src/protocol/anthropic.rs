@@ -25,7 +25,7 @@ pub struct AnthropicRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub tools: Option<Vec<AnthropicTool>>,
-    /// Capture all other request parameters (top_p, top_k, stop_sequences, etc.) for passthrough.
+    /// Capture all other request parameters (`top_p`, `top_k`, `stop_sequences`, etc.) for passthrough.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -54,8 +54,7 @@ where
             }
         }
         Some(other) => Err(de::Error::custom(format!(
-            "expected string or array for system, got {}",
-            other
+            "expected string or array for system, got {other}"
         ))),
     }
 }
@@ -434,7 +433,7 @@ impl AnthropicMessageExt for AnthropicMessage {
                     ..Default::default()
                 }]
             }
-            AnthropicMessage::MultiPart { content, .. } => content.to_vec(),
+            AnthropicMessage::MultiPart { content, .. } => content.clone(),
         }
     }
 }
@@ -494,7 +493,7 @@ pub fn serialize_response(
         for (i, tc) in tcs.into_iter().enumerate() {
             content_outs.push(AnthropicContentOut {
                 kind: "tool_use".to_string(),
-                id: Some(tc.id.clone().unwrap_or_else(|| format!("toolu_{}", i))),
+                id: Some(tc.id.clone().unwrap_or_else(|| format!("toolu_{i}"))),
                 text: None,
                 input: Some(tc.arguments),
                 name: Some(tc.name),
@@ -507,18 +506,19 @@ pub fn serialize_response(
         role: "assistant".to_string(),
         content: content_outs,
         model: model.to_string(),
-        stop_reason: stop_reason.map(|s| s.to_string()),
+        stop_reason: stop_reason.map(std::string::ToString::to_string),
         stop_sequence: None,
     };
     serde_json::to_string(&resp).map_err(SerializeError::Json)
 }
 
-/// Serialize an LLMChunk to Anthropic SSE event format string.
+/// Serialize an `LLMChunk` to Anthropic SSE event format string.
 ///
 /// `need_block_start` indicates whether a `content_block_start` event should
 /// precede the first text delta for this content block.
 /// `stop_reason` is the Anthropic stop reason to use when `chunk.done` is true
 /// (e.g., `"end_turn"` for text, `"tool_use"` for tool calls).
+#[must_use]
 pub fn serialize_stream_event(
     chunk: &LLMChunk,
     _id: &str,
@@ -586,7 +586,7 @@ pub fn serialize_stream_event(
     }
 
     if let Some(tc) = &chunk.tool_call {
-        let tool_id = tc.id.clone().unwrap_or_else(|| format!("toolu_{}", index));
+        let tool_id = tc.id.clone().unwrap_or_else(|| format!("toolu_{index}"));
         let start = AnthropicStreamEvent {
             event_type: "content_block_start".to_string(),
             message: None,
@@ -648,6 +648,7 @@ pub fn serialize_stream_event(
     s
 }
 
+#[must_use]
 pub fn serialize_message_start(id: &str, model: &str) -> String {
     // Build the message_start event manually to include the usage object
     // that Claude Code expects.
@@ -673,6 +674,7 @@ pub fn serialize_message_start(id: &str, model: &str) -> String {
     )
 }
 
+#[must_use]
 pub fn serialize_message_stop() -> String {
     "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string()
 }
@@ -750,8 +752,15 @@ mod tests {
 
     #[test]
     fn test_serialize_response_text() {
-        let json = serialize_response("msg_1", "claude-3", Some("Hello!"), None, Some("end_turn"), None)
-            .expect("serialize should succeed");
+        let json = serialize_response(
+            "msg_1",
+            "claude-3",
+            Some("Hello!"),
+            None,
+            Some("end_turn"),
+            None,
+        )
+        .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["id"], "msg_1");
         assert_eq!(value["type"], "message");
@@ -849,11 +858,17 @@ mod tests {
         assert_eq!(result.messages.len(), 4);
         // First tool message
         assert_eq!(result.messages[2].role, Role::Tool);
-        assert_eq!(result.messages[2].tool_call_id, Some("toolu_01".to_string()));
+        assert_eq!(
+            result.messages[2].tool_call_id,
+            Some("toolu_01".to_string())
+        );
         assert_eq!(result.messages[2].content, "result1");
         // Second tool message
         assert_eq!(result.messages[3].role, Role::Tool);
-        assert_eq!(result.messages[3].tool_call_id, Some("toolu_02".to_string()));
+        assert_eq!(
+            result.messages[3].tool_call_id,
+            Some("toolu_02".to_string())
+        );
         assert_eq!(result.messages[3].content, "result2");
     }
 
@@ -876,7 +891,10 @@ mod tests {
         // user + assistant + 1 tool = 3 messages
         assert_eq!(result.messages.len(), 3);
         assert_eq!(result.messages[2].role, Role::Tool);
-        assert_eq!(result.messages[2].tool_call_id, Some("toolu_01".to_string()));
+        assert_eq!(
+            result.messages[2].tool_call_id,
+            Some("toolu_01".to_string())
+        );
         assert_eq!(result.messages[2].content, "result1");
     }
 }

@@ -1,6 +1,6 @@
 //! Protocol dispatch layer.
 //!
-//! Routes incoming requests to the appropriate protocol parser (OpenAI or Anthropic).
+//! Routes incoming requests to the appropriate protocol parser (`OpenAI` or Anthropic).
 
 pub mod anthropic;
 pub mod openai;
@@ -20,6 +20,7 @@ pub enum Protocol {
 }
 
 /// Detect protocol from request path and headers.
+#[must_use]
 pub fn detect_protocol(path: &str, headers: &axum::http::HeaderMap) -> Protocol {
     if path.starts_with("/v1/messages") || headers.get("anthropic-version").is_some() {
         Protocol::Anthropic
@@ -31,8 +32,7 @@ pub fn detect_protocol(path: &str, headers: &axum::http::HeaderMap) -> Protocol 
 /// Check if request wants streaming.
 fn is_streaming(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
-        .map(|v| v.get("stream").is_some_and(|s| s.as_bool() == Some(true)))
-        .unwrap_or(false)
+        .is_ok_and(|v| v.get("stream").is_some_and(|s| s.as_bool() == Some(true)))
 }
 
 /// Dispatch a request to the appropriate protocol handler.
@@ -47,7 +47,9 @@ pub async fn dispatch_request(
 ) -> Result<Response, ProtocolError> {
     match protocol {
         Protocol::OpenAI => openai_handler(body, router, emitter, provider, model, start).await,
-        Protocol::Anthropic => anthropic_handler(body, router, emitter, provider, model, start).await,
+        Protocol::Anthropic => {
+            anthropic_handler(body, router, emitter, provider, model, start).await
+        }
     }
 }
 
@@ -103,11 +105,13 @@ fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenUsage
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
             && let Some(usage) = v.get("usage")
         {
-            let pt = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
-                as u32;
+            let pt = usage
+                .get("prompt_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32;
             let ct = usage
                 .get("completion_tokens")
-                .and_then(|t| t.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as u32;
             if pt > 0 || ct > 0 {
                 return Some(crate::metrics::TokenUsage {
@@ -157,7 +161,7 @@ async fn forward_streaming(
             let mut has_tool_calls = false;
             // Tracks whether the initial role chunk has been sent (OpenAI protocol).
             let mut sent_role = false;
-            let model_name_start = model_name.to_string();
+            let model_name_start = model_name.clone();
 
             let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
                 match chunk_result {
@@ -179,8 +183,7 @@ async fn forward_streaming(
                                 // different block type. When chunk.done,
                                 // serialize_stream_event handles content_block_stop.
                                 let needs_close = (reasoning_block_open
-                                    && (chunk.content.is_some()
-                                        || chunk.tool_call.is_some()))
+                                    && (chunk.content.is_some() || chunk.tool_call.is_some()))
                                     || (text_block_open && chunk.tool_call.is_some());
                                 if needs_close {
                                     let block_stop = serde_json::json!({
@@ -234,7 +237,7 @@ async fn forward_streaming(
                                     reasoning_block_open = false;
                                 }
 
-                                format!("{}{}", prefix, s)
+                                format!("{prefix}{s}")
                             }
                         };
                         Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
@@ -248,8 +251,7 @@ async fn forward_streaming(
                             }
                         });
                         Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
-                            "data: {}\n\n",
-                            err_json
+                            "data: {err_json}\n\n"
                         )))
                     }
                 }
@@ -280,7 +282,12 @@ async fn forward_streaming(
                     .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
                     .header("cache-control", "no-cache")
                     .body(axum::body::Body::from_stream(combined))
-                    .unwrap();
+                    .unwrap_or_else(|_| {
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(axum::body::Body::empty())
+                            .unwrap()
+                    });
                 return Ok(response);
             }
 
@@ -289,7 +296,12 @@ async fn forward_streaming(
                 .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
                 .header("cache-control", "no-cache")
                 .body(axum::body::Body::from_stream(body_stream))
-                .unwrap();
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                });
 
             Ok(response)
         }
@@ -326,8 +338,7 @@ async fn forward_streaming(
                             }
                         });
                         Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
-                            "data: {}\n\n",
-                            err_json
+                            "data: {err_json}\n\n"
                         )))
                     }
                 });
@@ -350,7 +361,7 @@ async fn forward_streaming(
     }
 }
 
-/// Create an SSE-formatted chunk from an LLMChunk.
+/// Create an SSE-formatted chunk from an `LLMChunk`.
 fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String {
     let ts = current_timestamp();
     let mut lines = Vec::new();
@@ -367,7 +378,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
                 "finish_reason": null
             }]
         });
-        lines.push(format!("data: {}", role_data));
+        lines.push(format!("data: {role_data}"));
     }
 
     if let Some(ref content) = chunk.content
@@ -384,7 +395,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
                 "finish_reason": null
             }]
         });
-        lines.push(format!("data: {}", data));
+        lines.push(format!("data: {data}"));
     }
 
     if let Some(ref reasoning) = chunk.reasoning_content
@@ -401,7 +412,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
                 "finish_reason": null
             }]
         });
-        lines.push(format!("data: {}", data));
+        lines.push(format!("data: {data}"));
     }
 
     if let Some(ref tc) = chunk.tool_call {
@@ -431,7 +442,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
                 "finish_reason": null
             }]
         });
-        lines.push(format!("data: {}", data));
+        lines.push(format!("data: {data}"));
     }
 
     if chunk.done {
@@ -446,7 +457,7 @@ fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String
                 "finish_reason": "stop"
             }]
         });
-        lines.push(format!("data: {}", data));
+        lines.push(format!("data: {data}"));
         lines.push("data: [DONE]".to_string());
     }
 
@@ -523,14 +534,12 @@ async fn collect_non_streaming(
     let content = chunks
         .iter()
         .filter_map(|c| c.content.clone())
-        .collect::<Vec<_>>()
-        .join("");
+        .collect::<String>();
 
     let reasoning_content = chunks
         .iter()
         .filter_map(|c| c.reasoning_content.clone())
-        .collect::<Vec<_>>()
-        .join("");
+        .collect::<String>();
 
     let tool_calls: Vec<_> = chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
 
@@ -540,22 +549,21 @@ async fn collect_non_streaming(
         Some(tool_calls.clone())
     };
 
-    let finish_reason = if !tool_calls.is_empty() {
-        match protocol {
-            Protocol::OpenAI => "tool_calls",
-            Protocol::Anthropic => "tool_use",
-        }
-    } else {
+    let finish_reason = if tool_calls.is_empty() {
         match protocol {
             Protocol::OpenAI => "stop",
             Protocol::Anthropic => "end_turn",
         }
+    } else {
+        match protocol {
+            Protocol::OpenAI => "tool_calls",
+            Protocol::Anthropic => "tool_use",
+        }
     };
 
-    let (prompt_tokens, completion_tokens) = final_usage
-        .as_ref()
-        .map(|u| (u.prompt_tokens as usize, u.completion_tokens as usize))
-        .unwrap_or((0, 0));
+    let (prompt_tokens, completion_tokens) = final_usage.as_ref().map_or((0, 0), |u| {
+        (u.prompt_tokens as usize, u.completion_tokens as usize)
+    });
 
     let response_body = match protocol {
         Protocol::OpenAI => openai::serialize_response(
@@ -605,11 +613,10 @@ async fn collect_non_streaming(
 
     emitter.request_end(&provider, model, start, true, final_usage, first_token_ms);
 
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::from_str::<serde_json::Value>(&response_body).unwrap()),
-    )
-        .into_response())
+    let body: serde_json::Value = serde_json::from_str(&response_body).unwrap_or_else(
+        |e| serde_json::json!({"error": {"message": format!("serialization error: {}", e)}}),
+    );
+    Ok((StatusCode::OK, Json(body)).into_response())
 }
 
 /// Handle an Anthropic-format request. Forwards to the appropriate provider.
@@ -631,7 +638,14 @@ async fn anthropic_handler(
 
     if is_streaming(&body) {
         let tracker = crate::metrics::StreamTracker::new(emitter, provider, model, start);
-        forward_streaming(router, unified_req, &model_name, Protocol::Anthropic, tracker).await
+        forward_streaming(
+            router,
+            unified_req,
+            &model_name,
+            Protocol::Anthropic,
+            tracker,
+        )
+        .await
     } else {
         collect_non_streaming(
             router,

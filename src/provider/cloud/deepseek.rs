@@ -1,13 +1,13 @@
-//! DeepSeek cloud provider adapter.
+//! `DeepSeek` cloud provider adapter.
 //!
-//! Fallback adapter for the DeepSeek API.
+//! Fallback adapter for the `DeepSeek` API.
 
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 
-/// DeepSeek provider configuration.
+/// `DeepSeek` provider configuration.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeepSeekConfig {
@@ -19,14 +19,14 @@ pub struct DeepSeekConfig {
 impl Default for DeepSeekConfig {
     fn default() -> Self {
         Self {
-            endpoint: "https://api.deepseek.com/v1".to_string(),
+            endpoint: "https://api.deepseek.com".to_string(),
             api_key: String::new(),
             model: None,
         }
     }
 }
 
-/// DeepSeek provider implementation.
+/// `DeepSeek` provider implementation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeepSeekProvider {
@@ -35,6 +35,7 @@ pub struct DeepSeekProvider {
 }
 
 impl DeepSeekProvider {
+    #[must_use]
     pub fn new(config: DeepSeekConfig) -> Self {
         let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
@@ -78,17 +79,17 @@ impl Provider for DeepSeekProvider {
     async fn balance(&self) -> Result<Option<String>, ProviderError> {
         use tracing::debug;
         let client = reqwest::Client::new();
-        let url = format!("{}/user/balance", self.config.endpoint.trim_end_matches('/'));
+        let url = format!(
+            "{}/user/balance",
+            self.config.endpoint.trim_end_matches('/')
+        );
 
         debug!(url = %url, has_key = !self.config.api_key.is_empty(), "deepseek balance query");
 
-        let mut builder = client
-            .get(&url)
-            .header("Accept", "application/json");
+        let mut builder = client.get(&url).header("Accept", "application/json");
 
         if !self.config.api_key.is_empty() {
-            builder = builder
-                .header("Authorization", format!("Bearer {}", self.config.api_key));
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
         }
 
         let resp = builder
@@ -103,24 +104,31 @@ impl Provider for DeepSeekProvider {
             let err_text = resp.text().await.unwrap_or_default();
             debug!(status = %status, err = %err_text, "deepseek balance failed");
             return Err(ProviderError::Request(format!(
-                "balance query failed {}: {}",
-                status, err_text
+                "balance query failed {status}: {err_text}"
             )));
         }
 
         let resp_text = resp.text().await.unwrap_or_default();
         debug!(body = %resp_text, "deepseek balance raw response");
 
-        let body: DeepSeekBalanceResponse = serde_json::from_str(&resp_text)
-            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+        let body: DeepSeekBalanceResponse =
+            serde_json::from_str(&resp_text).map_err(|e| ProviderError::Internal(e.to_string()))?;
 
-        debug!(is_available = body.is_available, infos = body.balance_infos.len(), "deepseek balance parsed");
+        debug!(
+            is_available = body.is_available,
+            infos = body.balance_infos.len(),
+            "deepseek balance parsed"
+        );
 
         if body.is_available
             && let Some(info) = body.balance_infos.first()
         {
             let balance = info.total_balance.parse::<f64>().unwrap_or(0.0);
-            let status = if balance <= 0.0 { "Insufficient" } else { "Available" };
+            let status = if balance <= 0.0 {
+                "Insufficient"
+            } else {
+                "Available"
+            };
             return Ok(Some(format!(
                 "{} {} ({})",
                 info.currency, info.total_balance, status
@@ -138,7 +146,7 @@ impl Provider for DeepSeekProvider {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "deepseek"
     }
 }

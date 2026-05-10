@@ -1,9 +1,9 @@
-//! Configuration loading and SQLite persistence.
+//! Configuration loading and `SQLite` persistence.
 //!
 //! Architecture:
 //! - Bootstrap parameters (host, port, data-dir) come from CLI flags + env vars
-//! - Runtime data (providers, routes) lives exclusively in SQLite
-//! - **Hard rule: the request path NEVER touches SQLite.**
+//! - Runtime data (providers, routes) lives exclusively in `SQLite`
+//! - **Hard rule: the request path NEVER touches `SQLite`.**
 
 pub mod db;
 
@@ -15,7 +15,7 @@ use tracing::info;
 
 // ── Config Types ──────────────────────────────────────────────────────
 
-/// Runtime configuration loaded from SQLite.
+/// Runtime configuration loaded from `SQLite`.
 /// Contains only business data — no server/bootstrap parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -37,7 +37,7 @@ pub struct ProviderConfig {
     pub r#type: String,
 }
 
-fn default_type() -> String {
+pub(crate) fn default_type() -> String {
     "openai".to_string()
 }
 
@@ -66,7 +66,8 @@ impl Default for BootstrapConfig {
 }
 
 impl BootstrapConfig {
-    /// Path to the SQLite database within data_dir.
+    /// Path to the `SQLite` database within `data_dir`.
+    #[must_use]
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("fustapi.db")
     }
@@ -81,7 +82,8 @@ fn default_data_dir() -> PathBuf {
 
 // ── Defaults ──────────────────────────────────────────────────────────
 
-/// Return a default AppConfig with no providers or routes.
+/// Return a default `AppConfig` with no providers or routes.
+#[must_use]
 pub fn default_config() -> AppConfig {
     AppConfig {
         router: HashMap::new(),
@@ -118,7 +120,7 @@ impl std::error::Error for ConfigError {
 
 // ── Database Loading ──────────────────────────────────────────────────
 
-/// Load configuration from SQLite database.
+/// Load configuration from `SQLite` database.
 pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
     use db::{load_providers, load_routes};
     let conn = db::init_db(db_path).map_err(ConfigError::DbError)?;
@@ -150,61 +152,90 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
 
 // ── Provider Factory ──────────────────────────────────────────────────
 
+/// Return the default API base URL for a provider type, if one exists.
+#[must_use]
+pub fn default_endpoint(provider_type: &str) -> Option<&'static str> {
+    match provider_type {
+        "deepseek" => Some("https://api.deepseek.com"),
+        "glm" => Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        "z.ai" => Some("https://api.z.ai/api/paas/v4"),
+        "openai" => Some("https://api.openai.com/v1"),
+        "omlx" => Some("http://localhost:8000/v1"),
+        "lmstudio" => Some("http://localhost:1234/v1"),
+        "sglang" => Some("http://localhost:30000/v1"),
+        _ => None,
+    }
+}
+
 /// Create a provider instance from a provider config entry.
 pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::provider::Provider> {
+    let endpoint = if cfg.endpoint.is_empty() {
+        default_endpoint(&cfg.r#type).unwrap_or("").to_string()
+    } else {
+        cfg.endpoint.clone()
+    };
     match cfg.r#type.as_str() {
         "omlx" => Box::new(crate::provider::omlx::OmlxProvider::new(
             crate::provider::omlx::OmlxConfig {
-                endpoint: cfg.endpoint.clone(),
+                endpoint,
                 model: cfg.model.clone(),
             },
         )),
         "lmstudio" => Box::new(crate::provider::lmstudio::LmStudioProvider::new(
             crate::provider::lmstudio::LmStudioConfig {
-                endpoint: cfg.endpoint.clone(),
+                endpoint,
                 model: cfg.model.clone(),
             },
         )),
         "sglang" => Box::new(crate::provider::sglang::SglProvider::new(
             crate::provider::sglang::SglConfig {
-                endpoint: cfg.endpoint.clone(),
+                endpoint,
+                model: cfg.model.clone(),
+            },
+        )),
+        "glm" | "z.ai" => Box::new(crate::provider::cloud::glm::GlmProvider::new(
+            crate::provider::cloud::glm::GlmConfig {
+                endpoint,
+                api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
             },
         )),
         "deepseek" => Box::new(crate::provider::cloud::deepseek::DeepSeekProvider::new(
             crate::provider::cloud::deepseek::DeepSeekConfig {
-                endpoint: cfg.endpoint.clone(),
+                endpoint,
                 api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
             },
         )),
-        "openai" => {
-            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-                crate::provider::cloud::openai::OpenAIConfig {
-                    endpoint: cfg.endpoint.clone(),
-                    api_key: cfg.api_key.clone().unwrap_or_default(),
-                    model: cfg.model.clone(),
-                    stream_options: true,
-                },
-            ))
+        "openai" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
+                endpoint,
+                api_key: cfg.api_key.clone().unwrap_or_default(),
+                model: cfg.model.clone(),
+                stream_options: true,
+            },
+        )),
+        "openai-compatible" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
+                endpoint,
+                api_key: cfg.api_key.clone().unwrap_or_default(),
+                model: cfg.model.clone(),
+                stream_options: false,
+            },
+        )),
+        _ => {
+            tracing::warn!(
+                r#type = %cfg.r#type,
+                "Unknown provider type — falling back to omlx default"
+            );
+            Box::new(crate::provider::omlx::OmlxProvider::default_provider())
         }
-        "openai-compatible" => {
-            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-                crate::provider::cloud::openai::OpenAIConfig {
-                    endpoint: cfg.endpoint.clone(),
-                    api_key: cfg.api_key.clone().unwrap_or_default(),
-                    model: cfg.model.clone(),
-                    stream_options: false,
-                },
-            ))
-        }
-        _ => Box::new(crate::provider::omlx::OmlxProvider::default_provider()),
     }
 }
 
 // ── Persistence (Control Plane Write Path) ────────────────────────────
 
-/// Save current in-memory config back to SQLite database.
+/// Save current in-memory config back to `SQLite` database.
 pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError> {
     use db::{init_db, upsert_provider, upsert_route};
     if let Some(parent) = db_path.parent() {

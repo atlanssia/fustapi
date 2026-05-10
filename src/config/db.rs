@@ -1,11 +1,11 @@
-//! SQLite database layer for control plane storage.
+//! `SQLite` database layer for control plane storage.
 //!
 //! **Hard rule: this module is NEVER called from the request path.**
-//! All data is loaded into memory at startup and served from ArcSwap.
+//! All data is loaded into memory at startup and served from `ArcSwap`.
 //!
 //! Schema:
-//! - `providers` — provider definitions (id, type, base_url, api_key, is_local)
-//! - `routes` — model-to-provider routing rules (model, provider_ids as JSON array)
+//! - `providers` — provider definitions (id, type, `base_url`, `api_key`, `is_local`)
+//! - `routes` — model-to-provider routing rules (model, `provider_ids` as JSON array)
 
 use rusqlite::{Connection, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ pub struct RouteRecord {
     pub provider_ids: Vec<String>,
 }
 
-const SCHEMA_SQL: &str = r#"
+const SCHEMA_SQL: &str = r"
 CREATE TABLE IF NOT EXISTS providers (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS routes (
     provider_ids TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_routes_model ON routes(model);
-"#;
+";
 
 /// Initialize the database at the given path. Enables WAL mode.
 pub fn init_db(db_path: &Path) -> Result<Connection> {

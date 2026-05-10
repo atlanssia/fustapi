@@ -81,8 +81,7 @@ fn process_event(event: &MetricEvent, global: &GlobalCounters, provider_stats: &
             let latency_ms = duration.as_millis() as u64;
             let (pt, ct) = tokens
                 .as_ref()
-                .map(|t| (t.prompt_tokens, t.completion_tokens))
-                .unwrap_or((0, 0));
+                .map_or((0, 0), |t| (t.prompt_tokens, t.completion_tokens));
             provider_stats.record(&super::counters::RequestSample {
                 provider,
                 model,

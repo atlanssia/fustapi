@@ -9,7 +9,7 @@ use serde_json::Value;
 /// A completed tool call from the LLM.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCall {
-    /// The ID of the tool call (e.g., "call_abc123"). Must be preserved for
+    /// The ID of the tool call (e.g., "`call_abc123`"). Must be preserved for
     /// tool result messages to reference back via `tool_call_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -99,7 +99,7 @@ pub fn parse_tool_call_from_text(text: &str) -> Result<Option<ToolCall>, ParseEr
 fn parse_json_tool_call(json_str: &str) -> Result<Option<ToolCall>, ParseError> {
     // Find the first '{' to locate JSON object.
     let start = json_str.find('{').unwrap_or(0);
-    let end = json_str.rfind('}').map(|i| i + 1).unwrap_or(json_str.len());
+    let end = json_str.rfind('}').map_or(json_str.len(), |i| i + 1);
     let trimmed = json_str[start..end].trim();
     if trimmed.is_empty() || !trimmed.starts_with('{') {
         return Ok(None);
@@ -132,6 +132,7 @@ fn parse_json_tool_call(json_str: &str) -> Result<Option<ToolCall>, ParseError> 
 ///
 /// # Returns
 /// The enhanced system prompt with tool schemas appended
+#[must_use]
 pub fn inject_tool_schemas(system_prompt: &str, tools: &[ToolDefinition]) -> String {
     if tools.is_empty() {
         return system_prompt.to_string();
@@ -158,6 +159,7 @@ pub struct ToolEmulationStream {
 }
 
 impl ToolEmulationStream {
+    #[must_use]
     pub fn new(inner: crate::streaming::LLMStream) -> Self {
         Self {
             inner,
@@ -188,27 +190,24 @@ impl tokio_stream::Stream for ToolEmulationStream {
                     self.flushed = true;
                     if self.is_buffering && !self.buffer.is_empty() {
                         // EOF while buffering. Try to parse tool call.
-                        match parse_tool_call_from_text(&self.buffer) {
-                            Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: None,
-                                    tool_call: Some(tc),
-                                    done: true,
-                                })));
-                            }
-                            _ => {
-                                // Fallback to plain text
-                                let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: Some(content),
-                                    tool_call: None,
-                                    done: true,
-                                })));
-                            }
+                        if let Ok(Some(tc)) = parse_tool_call_from_text(&self.buffer) {
+                            return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                reasoning_content: None,
+                                usage: None,
+                                content: None,
+                                tool_call: Some(tc),
+                                done: true,
+                            })));
+                        } else {
+                            // Fallback to plain text
+                            let content = std::mem::take(&mut self.buffer);
+                            return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                reasoning_content: None,
+                                usage: None,
+                                content: Some(content),
+                                tool_call: None,
+                                done: true,
+                            })));
                         }
                     }
                     return Poll::Ready(None);
@@ -222,87 +221,77 @@ impl tokio_stream::Stream for ToolEmulationStream {
             };
 
             if let Some(content) = chunk.content {
-                if !self.is_buffering {
-                    if content.trim_start().starts_with('{')
-                        || content.trim_start().starts_with("<tool_use>")
-                    {
-                        self.is_buffering = true;
-                        self.buffer.push_str(&content);
-                        continue;
+                if self.is_buffering {
+                    self.buffer.push_str(&content);
+                    if chunk.done || self.buffer.len() > 32 * 1024 {
+                        self.flushed = chunk.done;
+                        if let Ok(Some(tc)) = parse_tool_call_from_text(&self.buffer) {
+                            self.buffer.clear();
+                            return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                reasoning_content: None,
+                                usage: None,
+                                content: None,
+                                tool_call: Some(tc),
+                                done: chunk.done,
+                            })));
+                        } else {
+                            // Fallback to plain text if done or exceeded size
+                            let content = std::mem::take(&mut self.buffer);
+                            self.is_buffering = false; // Stop buffering if not done
+                            return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                                reasoning_content: None,
+                                usage: None,
+                                content: Some(content),
+                                tool_call: None,
+                                done: chunk.done,
+                            })));
+                        }
+                    }
+                    continue;
+                } else if content.trim_start().starts_with('{')
+                    || content.trim_start().starts_with("<tool_use>")
+                {
+                    self.is_buffering = true;
+                    self.buffer.push_str(&content);
+                    continue;
+                } else {
+                    // Normal text passthrough
+                    let done = chunk.done;
+                    return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                        reasoning_content: None,
+                        usage: None,
+                        content: Some(content),
+                        tool_call: None,
+                        done,
+                    })));
+                }
+            }
+            // If it doesn't have content (e.g. done chunk), just pass it through or handle flush
+            if chunk.done {
+                self.flushed = true;
+                if self.is_buffering {
+                    if let Ok(Some(tc)) = parse_tool_call_from_text(&self.buffer) {
+                        return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
+                            reasoning_content: None,
+                            usage: None,
+                            content: None,
+                            tool_call: Some(tc),
+                            done: true,
+                        })));
                     } else {
-                        // Normal text passthrough
-                        let done = chunk.done;
+                        let content = std::mem::take(&mut self.buffer);
                         return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
                             reasoning_content: None,
                             usage: None,
                             content: Some(content),
                             tool_call: None,
-                            done,
+                            done: true,
                         })));
-                    }
-                } else {
-                    self.buffer.push_str(&content);
-                    if chunk.done || self.buffer.len() > 32 * 1024 {
-                        self.flushed = chunk.done;
-                        match parse_tool_call_from_text(&self.buffer) {
-                            Ok(Some(tc)) => {
-                                self.buffer.clear();
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: None,
-                                    tool_call: Some(tc),
-                                    done: chunk.done,
-                                })));
-                            }
-                            _ => {
-                                // Fallback to plain text if done or exceeded size
-                                let content = std::mem::take(&mut self.buffer);
-                                self.is_buffering = false; // Stop buffering if not done
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: Some(content),
-                                    tool_call: None,
-                                    done: chunk.done,
-                                })));
-                            }
-                        }
-                    }
-                    continue;
-                }
-            } else {
-                // If it doesn't have content (e.g. done chunk), just pass it through or handle flush
-                if chunk.done {
-                    self.flushed = true;
-                    if self.is_buffering {
-                        match parse_tool_call_from_text(&self.buffer) {
-                            Ok(Some(tc)) => {
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: None,
-                                    tool_call: Some(tc),
-                                    done: true,
-                                })));
-                            }
-                            _ => {
-                                let content = std::mem::take(&mut self.buffer);
-                                return Poll::Ready(Some(Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: Some(content),
-                                    tool_call: None,
-                                    done: true,
-                                })));
-                            }
-                        }
-                    } else {
-                        return Poll::Ready(Some(Ok(chunk)));
                     }
                 }
                 return Poll::Ready(Some(Ok(chunk)));
             }
+            return Poll::Ready(Some(Ok(chunk)));
         }
     }
 }

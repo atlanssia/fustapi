@@ -1,7 +1,7 @@
-//! FustAPI CLI entry point.
+//! `FustAPI` CLI entry point.
 //!
 //! Bootstrap parameters come from CLI flags + environment variables.
-//! All runtime data (providers, routes) lives in SQLite.
+//! All runtime data (providers, routes) lives in `SQLite`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "fustapi", version, about = "Local-first LLM API gateway")]
 struct Cli {
-    /// Data directory for SQLite storage.
+    /// Data directory for `SQLite` storage.
     #[arg(long, global = true, env = "FUSTAPI_DATA_DIR")]
     data_dir: Option<PathBuf>,
 
@@ -55,12 +55,12 @@ enum ProvidersCommand {
     Add {
         /// Provider name (unique identifier).
         name: String,
-        /// Provider type (omlx, lmstudio, sglang, openai, deepseek).
+        /// Provider type (omlx, lmstudio, sglang, openai, openai-compatible, deepseek, glm, z.ai).
         #[arg(long, rename_all = "lower")]
         r#type: String,
-        /// Provider endpoint URL (include version path, e.g. /v1).
+        /// Provider endpoint URL (include version path, e.g. /v1). Defaults to the provider's well-known base URL if omitted.
         #[arg(long)]
-        endpoint: String,
+        endpoint: Option<String>,
         /// API key (for cloud providers).
         #[arg(long)]
         api_key: Option<String>,
@@ -181,13 +181,37 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
             api_key,
             upstream_model,
         } => {
+            let valid_types = [
+                "omlx",
+                "lmstudio",
+                "sglang",
+                "openai",
+                "openai-compatible",
+                "deepseek",
+                "glm",
+                "z.ai",
+            ];
+            if !valid_types.contains(&r#type.as_str()) {
+                eprintln!(
+                    "Unknown provider type '{}'. Valid types: {}",
+                    r#type,
+                    valid_types.join(", ")
+                );
+                std::process::exit(1);
+            }
+            let endpoint = endpoint.unwrap_or_else(|| {
+                fustapi::config::default_endpoint(&r#type)
+                    .map(String::from)
+                    .unwrap_or_default()
+            });
+            if endpoint.is_empty() {
+                eprintln!("No default endpoint for type '{type}'. Provide --endpoint.");
+                std::process::exit(1);
+            }
             let mut config = fustapi::config::load_from_db(&db_path)
                 .unwrap_or_else(|_| fustapi::config::default_config());
             if config.providers.contains_key(&name) {
-                eprintln!(
-                    "Provider '{}' already exists. Use the Web UI to update.",
-                    name
-                );
+                eprintln!("Provider '{name}' already exists. Use the Web UI to update.");
                 std::process::exit(1);
             }
             config.providers.insert(
@@ -203,7 +227,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                 eprintln!("Failed to save: {e}");
                 std::process::exit(1);
             }
-            println!("Provider '{}' added.", name);
+            println!("Provider '{name}' added.");
         }
     }
 }
@@ -241,7 +265,7 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
                 eprintln!("Failed to save: {e}");
                 std::process::exit(1);
             }
-            println!("Route '{}' saved.", model);
+            println!("Route '{model}' saved.");
         }
     }
 }

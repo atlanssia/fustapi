@@ -1,6 +1,6 @@
 //! OpenAI-compatible protocol parsing.
 //!
-//! Handles request/response formats for the OpenAI API specification,
+//! Handles request/response formats for the `OpenAI` API specification,
 //! including `/v1/chat/completions` and `/v1/models`.
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct OpenAIRequest {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub tools: Option<Vec<OpenAITool>>,
-    /// Capture all other request parameters (top_p, stop, n, etc.) for passthrough.
+    /// Capture all other request parameters (`top_p`, stop, n, etc.) for passthrough.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -37,7 +37,7 @@ pub struct OpenAIMessage {
     pub tool_calls: Option<Vec<OpenAIToolCallIn>>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
-    /// DeepSeek thinking mode: internal reasoning content that must be echoed back.
+    /// `DeepSeek` thinking mode: internal reasoning content that must be echoed back.
     #[serde(default)]
     pub reasoning_content: Option<String>,
 }
@@ -100,7 +100,7 @@ fn empty_object() -> Value {
 
 // ── Local types for message content parsing ─────────────────────────
 
-/// Parsed message content from OpenAI requests.
+/// Parsed message content from `OpenAI` requests.
 enum OpenAIContent {
     /// Simple text content.
     Text(String),
@@ -453,7 +453,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: Some(text.to_string()),
-                reasoning_content: reasoning_content.map(|s| s.to_string()),
+                reasoning_content: reasoning_content.map(std::string::ToString::to_string),
                 tool_calls: None,
             },
             finish_reason: Some(finish_reason),
@@ -463,7 +463,7 @@ pub fn serialize_response(
         for (i, tc) in tcs.iter().enumerate() {
             tc_outs.push(OpenAIToolCallOut {
                 index: i,
-                id: tc.id.clone().unwrap_or_else(|| format!("call_{}", i)),
+                id: tc.id.clone().unwrap_or_else(|| format!("call_{i}")),
                 kind: "function",
                 function: OpenAIFunctionCall {
                     name: tc.name.clone(),
@@ -476,7 +476,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: None,
-                reasoning_content: reasoning_content.map(|s| s.to_string()),
+                reasoning_content: reasoning_content.map(std::string::ToString::to_string),
                 tool_calls: Some(tc_outs),
             },
             finish_reason: Some(finish_reason),
@@ -488,7 +488,7 @@ pub fn serialize_response(
             message: OpenAIMessageOut {
                 role: "assistant",
                 content: None,
-                reasoning_content: reasoning_content.map(|s| s.to_string()),
+                reasoning_content: reasoning_content.map(std::string::ToString::to_string),
                 tool_calls: None,
             },
             finish_reason: Some(finish_reason),
@@ -510,6 +510,7 @@ pub fn serialize_response(
     serde_json::to_string(&response).map_err(SerializeError::Json)
 }
 
+#[must_use]
 pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &usize) -> String {
     if chunk.done {
         return "data:[DONE]\n\n".to_string();
@@ -523,7 +524,7 @@ pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &u
     if let Some(tc) = &chunk.tool_call {
         delta.tool_calls = Some(vec![OpenAIStreamToolCall {
             index: *index,
-            id: Some(tc.id.clone().unwrap_or_else(|| format!("call_{}", index))),
+            id: Some(tc.id.clone().unwrap_or_else(|| format!("call_{index}"))),
             kind: Some("function"),
             function: Some(OpenAIStreamFunction {
                 name: Some(tc.name.clone()),
@@ -543,9 +544,10 @@ pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &u
         model: model.to_string(),
         choices: vec![choice],
     };
-    serde_json::to_string(&response)
-        .map(|s| format!("data:{}\n\n", s))
-        .unwrap_or_else(|_| format!("data:{}\n\n", "{{\"error\":\"serialization failed\"}}"))
+    serde_json::to_string(&response).map_or_else(
+        |_| format!("data:{}\n\n", "{{\"error\":\"serialization failed\"}}"),
+        |s| format!("data:{s}\n\n"),
+    )
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ pub struct OmlxConfig {
 impl Default for OmlxConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:5000/v1".to_string(), // default to 5000 from previous codebase
+            endpoint: "http://localhost:8000/v1".to_string(),
             model: None,
         }
     }
@@ -32,6 +32,7 @@ pub struct OmlxProvider {
 
 impl OmlxProvider {
     /// Create a new omlx provider with the given config.
+    #[must_use]
     pub fn new(config: OmlxConfig) -> Self {
         let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
@@ -48,6 +49,7 @@ impl OmlxProvider {
     }
 
     /// Create a new omlx provider with default config.
+    #[must_use]
     pub fn default_provider() -> Self {
         Self::new(OmlxConfig::default())
     }
@@ -76,7 +78,7 @@ impl Provider for OmlxProvider {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "omlx"
     }
 }

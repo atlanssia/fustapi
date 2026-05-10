@@ -32,6 +32,7 @@ pub struct LmStudioProvider {
 
 impl LmStudioProvider {
     /// Create a new LM Studio provider with the given config.
+    #[must_use]
     pub fn new(config: LmStudioConfig) -> Self {
         let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
@@ -48,6 +49,7 @@ impl LmStudioProvider {
     }
 
     /// Create a new LM Studio provider with default config.
+    #[must_use]
     pub fn default_provider() -> Self {
         Self::new(LmStudioConfig::default())
     }
@@ -73,7 +75,7 @@ impl Provider for LmStudioProvider {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "lmstudio"
     }
 }

@@ -84,6 +84,7 @@ impl std::fmt::Debug for RealRouter {
 
 impl RealRouter {
     /// Create a new real router from config.
+    #[must_use]
     pub fn from_config(config: &config::AppConfig) -> Self {
         let mut providers = HashMap::new();
         let mut routes = HashMap::new();

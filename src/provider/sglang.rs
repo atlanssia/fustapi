@@ -1,14 +1,14 @@
-//! SGLang adapter — high-performance local streaming provider.
+//! `SGLang` adapter — high-performance local streaming provider.
 
 use async_trait::async_trait;
 
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 
-/// SGLang provider configuration.
+/// `SGLang` provider configuration.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SglConfig {
-    /// The base URL of the SGLang server.
+    /// The base URL of the `SGLang` server.
     pub endpoint: String,
     pub model: Option<String>,
 }
@@ -16,13 +16,13 @@ pub struct SglConfig {
 impl Default for SglConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:3000/v1".to_string(),
+            endpoint: "http://localhost:30000/v1".to_string(),
             model: None,
         }
     }
 }
 
-/// SGLang provider implementation.
+/// `SGLang` provider implementation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SglProvider {
@@ -31,14 +31,15 @@ pub struct SglProvider {
 }
 
 impl SglProvider {
-    /// Create a new SGLang provider with the given config.
+    /// Create a new `SGLang` provider with the given config.
+    #[must_use]
     pub fn new(config: SglConfig) -> Self {
         let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
                 api_key: "sglang".to_string(),
                 model: config.model.clone(),
-                stream_options: true,
+                stream_options: false,
             },
         );
         Self {
@@ -47,7 +48,8 @@ impl SglProvider {
         }
     }
 
-    /// Create a new SGLang provider with default config.
+    /// Create a new `SGLang` provider with default config.
+    #[must_use]
     pub fn default_provider() -> Self {
         Self::new(SglConfig::default())
     }
@@ -74,7 +76,7 @@ impl Provider for SglProvider {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "sglang"
     }
 }

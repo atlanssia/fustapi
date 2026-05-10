@@ -1,4 +1,4 @@
-//! Embedded Web UI for the FustAPI control plane.
+//! Embedded Web UI for the `FustAPI` control plane.
 //!
 //! Serves a single-page application embedded at compile time via
 //! `include_bytes!`. No external dependencies or build tools required.
@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// HTML content embedded at compile time.
+#[must_use]
 pub fn ui_html() -> &'static [u8] {
     include_bytes!("../ui/index.html")
 }
@@ -50,6 +51,7 @@ pub struct ProviderInfo {
 #[derive(Deserialize)]
 pub struct ProviderForm {
     pub name: String,
+    #[serde(default)]
     pub endpoint: String,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -60,7 +62,7 @@ pub struct ProviderForm {
 }
 
 fn default_type() -> String {
-    "openai".to_string()
+    crate::config::default_type()
 }
 
 #[derive(Serialize)]
@@ -144,7 +146,13 @@ fn provider_config_from_form(
     };
 
     crate::config::ProviderConfig {
-        endpoint: form.endpoint,
+        endpoint: if form.endpoint.trim().is_empty() {
+            crate::config::default_endpoint(&form.provider_type)
+                .map(String::from)
+                .unwrap_or_default()
+        } else {
+            form.endpoint
+        },
         api_key,
         model,
         r#type: form.provider_type,
@@ -162,16 +170,24 @@ fn validate_provider_form(form: &ProviderForm) -> Result<(), &'static str> {
     if form.name.trim().is_empty() {
         return Err("Provider name is required");
     }
-    if reqwest::Url::parse(&form.endpoint)
-        .ok()
-        .filter(|url| matches!(url.scheme(), "http" | "https"))
-        .is_none()
+    let has_default = crate::config::default_endpoint(&form.provider_type).is_some();
+    if (!form.endpoint.trim().is_empty() || !has_default)
+        && reqwest::Url::parse(&form.endpoint)
+            .ok()
+            .is_none_or(|url| !matches!(url.scheme(), "http" | "https"))
     {
         return Err("Provider endpoint must be a valid http or https URL");
     }
     if !matches!(
         form.provider_type.as_str(),
-        "omlx" | "lmstudio" | "sglang" | "openai" | "deepseek"
+        "omlx"
+            | "lmstudio"
+            | "sglang"
+            | "openai"
+            | "openai-compatible"
+            | "deepseek"
+            | "glm"
+            | "z.ai"
     ) {
         return Err("Provider type is not supported");
     }
@@ -186,11 +202,9 @@ fn provider_info_from_config(
         name,
         endpoint: cfg.map(|c| c.endpoint.clone()).unwrap_or_default(),
         api_key: None,
-        has_key: cfg.map(|c| c.api_key.is_some()).unwrap_or(false),
+        has_key: cfg.is_some_and(|c| c.api_key.is_some()),
         upstream_model: cfg.and_then(|c| c.model.clone()),
-        provider_type: cfg
-            .map(|c| c.r#type.clone())
-            .unwrap_or_else(|| "openai".to_string()),
+        provider_type: cfg.map_or_else(|| "openai".to_string(), |c| c.r#type.clone()),
     }
 }
 // ── GET Handlers ────────────────────────────────────────────────────
@@ -252,7 +266,7 @@ pub async fn create_provider(
         return (
             StatusCode::CONFLICT,
             Json(MessageResponse {
-                message: format!("Provider '{}' already exists", name),
+                message: format!("Provider '{name}' already exists"),
             }),
         )
             .into_response();
@@ -269,7 +283,7 @@ pub async fn create_provider(
     (
         StatusCode::CREATED,
         Json(MessageResponse {
-            message: format!("Provider '{}' created", name),
+            message: format!("Provider '{name}' created"),
         }),
     )
         .into_response()
@@ -303,7 +317,7 @@ pub async fn create_route(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(MessageResponse {
-                    message: format!("Provider '{}' not found", p),
+                    message: format!("Provider '{p}' not found"),
                 }),
             )
                 .into_response();
@@ -356,7 +370,7 @@ pub async fn update_provider(
         return (
             StatusCode::NOT_FOUND,
             Json(MessageResponse {
-                message: format!("Provider '{}' not found", id),
+                message: format!("Provider '{id}' not found"),
             }),
         )
             .into_response();
@@ -377,7 +391,7 @@ pub async fn update_provider(
         for providers in config.router.values_mut() {
             for provider in providers {
                 if provider == &id {
-                    *provider = form.name.clone();
+                    provider.clone_from(&form.name);
                 }
             }
         }
@@ -394,7 +408,7 @@ pub async fn update_provider(
     (
         StatusCode::OK,
         Json(MessageResponse {
-            message: format!("Provider '{}' updated", name),
+            message: format!("Provider '{name}' updated"),
         }),
     )
         .into_response()
@@ -414,7 +428,7 @@ pub async fn delete_provider(
         return (
             StatusCode::NOT_FOUND,
             Json(MessageResponse {
-                message: format!("Provider '{}' not found", id),
+                message: format!("Provider '{id}' not found"),
             }),
         )
             .into_response();
@@ -435,7 +449,7 @@ pub async fn delete_provider(
     (
         StatusCode::OK,
         Json(MessageResponse {
-            message: format!("Provider '{}' deleted", id),
+            message: format!("Provider '{id}' deleted"),
         }),
     )
         .into_response()
@@ -453,7 +467,7 @@ pub async fn delete_route(
         return (
             StatusCode::NOT_FOUND,
             Json(MessageResponse {
-                message: format!("Route '{}' not found", model),
+                message: format!("Route '{model}' not found"),
             }),
         )
             .into_response();
@@ -466,7 +480,7 @@ pub async fn delete_route(
     (
         StatusCode::OK,
         Json(MessageResponse {
-            message: format!("Route '{}' deleted", model),
+            message: format!("Route '{model}' deleted"),
         }),
     )
         .into_response()
@@ -475,9 +489,7 @@ pub async fn delete_route(
 // ── Balance Handler ──────────────────────────────────────────────────
 
 /// GET /api/balance — query account balance for all providers that support it.
-pub async fn balance_api_handler(
-    Extension(db_path): Extension<Arc<PathBuf>>,
-) -> impl IntoResponse {
+pub async fn balance_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) -> impl IntoResponse {
     let config = load_config(&db_path);
 
     let tasks: Vec<_> = config
@@ -498,7 +510,9 @@ pub async fn balance_api_handler(
                     balance,
                     error,
                 };
-                match tokio::time::timeout(std::time::Duration::from_secs(10), provider.balance()).await {
+                match tokio::time::timeout(std::time::Duration::from_secs(10), provider.balance())
+                    .await
+                {
                     Ok(Ok(Some(balance))) => entry(Some(balance), None),
                     Ok(Ok(None)) => entry(None, None),
                     Ok(Err(e)) => entry(None, Some(e.to_string())),

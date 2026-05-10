@@ -14,7 +14,7 @@ pub struct LLMChunk {
     /// The text content delta (may be empty for tool calls).
     #[serde(default)]
     pub content: Option<String>,
-    /// DeepSeek reasoning/thinking content (must be echoed back in multi-turn conversations).
+    /// `DeepSeek` reasoning/thinking content (must be echoed back in multi-turn conversations).
     #[serde(default)]
     pub reasoning_content: Option<String>,
     /// Tool call if this chunk contains one.
@@ -37,7 +37,7 @@ pub type ByteStream =
 
 /// Dual-mode stream output from the gateway.
 pub enum StreamMode {
-    /// Normalized stream using the LLMChunk pipeline (supports capability transformations).
+    /// Normalized stream using the `LLMChunk` pipeline (supports capability transformations).
     Normalized(LLMStream),
     /// Zero-parse passthrough stream of raw bytes directly from the provider.
     Passthrough(ByteStream),

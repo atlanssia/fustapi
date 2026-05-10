@@ -25,6 +25,7 @@ impl Default for GlobalCounters {
 }
 
 impl GlobalCounters {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             total_requests: AtomicU64::new(0),
@@ -112,6 +113,7 @@ impl Default for ProviderStatsMap {
 }
 
 impl ProviderStatsMap {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: std::sync::RwLock::new(HashMap::new()),
@@ -128,22 +130,22 @@ impl ProviderStatsMap {
             entry.failure_count += 1;
         }
         entry.total_latency_ms += sample.latency_ms;
-        entry.prompt_tokens += sample.prompt_tokens as u64;
-        entry.completion_tokens += sample.completion_tokens as u64;
+        entry.prompt_tokens += u64::from(sample.prompt_tokens);
+        entry.completion_tokens += u64::from(sample.completion_tokens);
 
         if let Some(t) = sample.ttft_ms {
             entry.total_ttft_ms += t;
             entry.ttft_samples += 1;
             let gen_time = sample.latency_ms.saturating_sub(t);
             entry.total_generation_time_ms += gen_time;
-            entry.generation_tokens += sample.completion_tokens as u64;
+            entry.generation_tokens += u64::from(sample.completion_tokens);
         }
     }
 
     /// Record a fallback event for a provider+model (called by aggregator only).
     pub fn record_fallback(&self, provider: &str, model: &str) {
         let mut map = self.inner.write().expect("provider stats lock poisoned");
-        let key = format!("{}:{}", provider, model);
+        let key = format!("{provider}:{model}");
         let entry = map.entry(key).or_default();
         entry.fallback_count += 1;
     }
@@ -180,9 +182,33 @@ mod tests {
     #[test]
     fn test_provider_stats_record_and_snapshot() {
         let stats = ProviderStatsMap::new();
-        stats.record(&RequestSample { provider: "omlx", model: "gpt-4", success: true, latency_ms: 150, prompt_tokens: 10, completion_tokens: 20, ttft_ms: Some(50) });
-        stats.record(&RequestSample { provider: "omlx", model: "gpt-4", success: false, latency_ms: 300, prompt_tokens: 5, completion_tokens: 0, ttft_ms: None });
-        stats.record(&RequestSample { provider: "lmstudio", model: "llama3", success: true, latency_ms: 100, prompt_tokens: 8, completion_tokens: 15, ttft_ms: Some(30) });
+        stats.record(&RequestSample {
+            provider: "omlx",
+            model: "gpt-4",
+            success: true,
+            latency_ms: 150,
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            ttft_ms: Some(50),
+        });
+        stats.record(&RequestSample {
+            provider: "omlx",
+            model: "gpt-4",
+            success: false,
+            latency_ms: 300,
+            prompt_tokens: 5,
+            completion_tokens: 0,
+            ttft_ms: None,
+        });
+        stats.record(&RequestSample {
+            provider: "lmstudio",
+            model: "llama3",
+            success: true,
+            latency_ms: 100,
+            prompt_tokens: 8,
+            completion_tokens: 15,
+            ttft_ms: Some(30),
+        });
         stats.record_fallback("lmstudio", "llama3");
 
         let snap = stats.snapshot();

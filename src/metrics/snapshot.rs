@@ -79,7 +79,7 @@ impl Default for MetricsSnapshot {
     }
 }
 
-/// Builds and updates MetricsSnapshot from raw counters.
+/// Builds and updates `MetricsSnapshot` from raw counters.
 pub struct SnapshotBuilder {
     start_time: u64,
     timeseries: Vec<TimeseriesPoint>,
@@ -94,6 +94,7 @@ impl Default for SnapshotBuilder {
 }
 
 impl SnapshotBuilder {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             start_time: now_secs(),
@@ -147,7 +148,8 @@ impl SnapshotBuilder {
         let mut provider_stats: Vec<ProviderStats> = provider_map
             .iter()
             .map(|(key, c)| {
-                let (provider_name, model) = key.split_once(':')
+                let (provider_name, model) = key
+                    .split_once(':')
                     .map(|(p, m)| (p.to_string(), m.to_string()))
                     .unwrap_or((key.clone(), "-".to_string()));
                 let psr = if c.request_count > 0 {

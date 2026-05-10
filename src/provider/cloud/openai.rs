@@ -1,6 +1,6 @@
-//! OpenAI cloud provider adapter.
+//! `OpenAI` cloud provider adapter.
 //!
-//! Forwards requests to any OpenAI-compatible API (local LLM, OpenAI, etc.).
+//! Forwards requests to any OpenAI-compatible API (local LLM, `OpenAI`, etc.).
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 use crate::streaming::{LLMChunk, LLMStream};
 
-/// OpenAI provider configuration.
+/// `OpenAI` provider configuration.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
@@ -17,7 +17,7 @@ pub struct OpenAIConfig {
     pub api_key: String,
     pub model: Option<String>,
     /// Whether to send `stream_options.include_usage` in streaming requests.
-    /// Disable for providers that don't support this OpenAI extension (e.g. GLM).
+    /// Disable for providers that don't support this `OpenAI` extension (e.g. GLM).
     pub stream_options: bool,
 }
 
@@ -32,7 +32,7 @@ impl Default for OpenAIConfig {
     }
 }
 
-/// OpenAI provider implementation.
+/// `OpenAI` provider implementation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OpenAIProvider {
@@ -41,6 +41,7 @@ pub struct OpenAIProvider {
 }
 
 impl OpenAIProvider {
+    #[must_use]
     pub fn new(config: OpenAIConfig) -> Self {
         Self {
             config,
@@ -48,7 +49,8 @@ impl OpenAIProvider {
         }
     }
 
-    /// Build the OpenAI-compatible request body from a UnifiedRequest.
+    /// Build the OpenAI-compatible request body from a `UnifiedRequest`.
+    #[must_use]
     pub fn build_request_body(&self, request: &UnifiedRequest) -> serde_json::Value {
         let messages = request.messages.iter().map(|msg| {
             let mut m = serde_json::json!({ "role": msg.role });
@@ -68,7 +70,7 @@ impl OpenAIProvider {
 
                     let mime = img.mime_type.clone();
 
-                    let url = if source.starts_with("data:") { source } else { format!("data:{};base64,{}", mime, source) };
+                    let url = if source.starts_with("data:") { source } else { format!("data:{mime};base64,{source}") };
 
                     parts.push(serde_json::json!({ "type": "image_url", "image_url": { "url": url } }));
                 }
@@ -90,7 +92,7 @@ impl OpenAIProvider {
 
             if let Some(tcs) = &msg.tool_calls {
                 let calls = tcs.iter().enumerate().map(|(i, tc)| serde_json::json!({
-                    "id": tc.id.clone().unwrap_or_else(|| format!("call_{}", i)),
+                    "id": tc.id.clone().unwrap_or_else(|| format!("call_{i}")),
                     "type": "function",
                     "function": { "name": tc.name.clone(), "arguments": tc.arguments.to_string() }
                 })).collect::<Vec<_>>();
@@ -148,7 +150,8 @@ impl OpenAIProvider {
         body
     }
 
-    /// Parse a non-streaming response into LLMChunks.
+    /// Parse a non-streaming response into `LLMChunks`.
+    #[must_use]
     pub fn parse_response(response: &OpenAIChatResponse) -> Vec<LLMChunk> {
         let mut chunks = Vec::new();
 
@@ -164,7 +167,7 @@ impl OpenAIProvider {
             }
 
             if let Some(tool_calls) = &choice.message.tool_calls {
-                for tc in tool_calls.iter() {
+                for tc in tool_calls {
                     chunks.push(LLMChunk {
                         reasoning_content: None,
                         usage: None,
@@ -180,11 +183,9 @@ impl OpenAIProvider {
                 }
             }
 
-            let usage = response.usage.as_ref().map(|u| {
-                crate::metrics::TokenUsage {
-                    prompt_tokens: u.prompt_tokens as u32,
-                    completion_tokens: u.completion_tokens as u32,
-                }
+            let usage = response.usage.as_ref().map(|u| crate::metrics::TokenUsage {
+                prompt_tokens: u.prompt_tokens as u32,
+                completion_tokens: u.completion_tokens as u32,
             });
             chunks.push(LLMChunk {
                 reasoning_content: None,
@@ -266,8 +267,14 @@ pub fn parse_openai_sse_stream(
         |(mut stream, mut buffer, mut tool_id, mut tool_name, mut tool_args)| async move {
             fn extract_usage(v: &serde_json::Value) -> Option<crate::metrics::TokenUsage> {
                 v.get("usage").and_then(|u| {
-                    let pt = u.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
-                    let ct = u.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
+                    let pt = u
+                        .get("prompt_tokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32;
+                    let ct = u
+                        .get("completion_tokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32;
                     if pt > 0 || ct > 0 {
                         Some(crate::metrics::TokenUsage {
                             prompt_tokens: pt,
@@ -323,7 +330,8 @@ pub fn parse_openai_sse_stream(
                             // This arrives as a chunk with an empty choices array and a populated usage field.
                             if let Some(usage) = extract_usage(&v) {
                                 // Only emit a separate chunk if there's no content/toolcall delta.
-                                let has_choices = v.get("choices")
+                                let has_choices = v
+                                    .get("choices")
                                     .and_then(|c| c.as_array())
                                     .is_some_and(|a| !a.is_empty());
                                 if !has_choices {
@@ -340,9 +348,15 @@ pub fn parse_openai_sse_stream(
                                 }
                             }
 
-                            let Some(choices) = v.get("choices") else { continue };
-                            let Some(choice) = choices.get(0) else { continue };
-                            let Some(delta) = choice.get("delta") else { continue };
+                            let Some(choices) = v.get("choices") else {
+                                continue;
+                            };
+                            let Some(choice) = choices.get(0) else {
+                                continue;
+                            };
+                            let Some(delta) = choice.get("delta") else {
+                                continue;
+                            };
                             let chunk_usage = extract_usage(&v);
                             // Distinguish reasoning_content from content —
                             // DeepSeek requires reasoning_content to be echoed back.
@@ -498,8 +512,7 @@ impl Provider for OpenAIProvider {
                 let status = resp.status();
                 let err_text = resp.text().await.unwrap_or_default();
                 return Err(ProviderError::Request(format!(
-                    "provider error {}: {}",
-                    status, err_text
+                    "provider error {status}: {err_text}"
                 )));
             }
 
@@ -525,8 +538,7 @@ impl Provider for OpenAIProvider {
                 let status = resp_body.status();
                 let err_text = resp_body.text().await.unwrap_or_default();
                 return Err(ProviderError::Request(format!(
-                    "provider error {}: {}",
-                    status, err_text
+                    "provider error {status}: {err_text}"
                 )));
             }
 
@@ -553,7 +565,7 @@ impl Provider for OpenAIProvider {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "openai"
     }
 }

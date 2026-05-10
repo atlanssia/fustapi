@@ -326,6 +326,7 @@
     .tab svg { width: 20px; height: 20px; flex-shrink: 0; }
 
     main {
+      flex: 1;
       min-width: 0;
     }
 
@@ -476,7 +477,6 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 0.75rem 0;
-      max-height: 320px;
       overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: rgba(255,255,255,0.1) transparent;
@@ -520,6 +520,7 @@
       display: flex;
       flex-direction: column;
       gap: 1rem;
+      height: 300px;
     }
 
     .chart-card {
@@ -530,6 +531,14 @@
       border-radius: var(--radius);
       padding: 1rem;
       flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chart-card canvas {
+      flex: 1;
+      width: 100%;
+      min-height: 80px;
     }
 
     .chart-card h3 {
@@ -919,6 +928,7 @@
 
       .status-row { grid-template-columns: 1fr; }
       .dashboard-split { grid-template-columns: 1fr; }
+      .charts-stack { height: auto; }
       .balance-list { max-height: none; }
 
       .desktop-table { display: none; }
@@ -964,11 +974,11 @@
             Dashboard
           </button>
           <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="false" aria-controls="providers-panel" data-tab="providers" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
             Providers
           </button>
           <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false" aria-controls="routes-panel" data-tab="routes" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 10a6 6 0 0 1 6-6h3"/><path d="M6 14a6 6 0 0 0 6 6h3"/></svg>
             Routes
           </button>
         </div>
@@ -1018,11 +1028,11 @@
             <div class="charts-stack">
               <div class="chart-card">
                 <h3>Requests / sec</h3>
-                <canvas id="chart-qps" height="120" style="width:100%"></canvas>
+                <canvas id="chart-qps" style="width:100%"></canvas>
               </div>
               <div class="chart-card">
                 <h3>Latency (ms)</h3>
-                <canvas id="chart-latency" height="120" style="width:100%"></canvas>
+                <canvas id="chart-latency" style="width:100%"></canvas>
               </div>
             </div>
           </div>
@@ -1148,13 +1158,16 @@
                 <option value="lmstudio">LM Studio</option>
                 <option value="sglang">SGLang</option>
                 <option value="openai">OpenAI</option>
+                <option value="openai-compatible">OpenAI Compatible</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="glm">GLM (ZhipuAI)</option>
+                <option value="z.ai">z.ai (ZhipuAI Global)</option>
               </select>
               <p class="error" id="provider-type-error"></p>
             </div>
             <div class="form-field">
               <label for="provider-endpoint">Endpoint</label>
-              <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url" required
+              <input id="provider-endpoint" name="endpoint" autocomplete="url" inputmode="url"
                 placeholder="http://localhost:8800/v1">
               <p class="help">Full API base path (e.g. including /v1 if required).</p>
               <p class="error" id="provider-endpoint-error"></p>
@@ -1256,9 +1269,6 @@
       confirmAction: null,
       balances: [],
     };
-
-    const localProviderTypes = new Set(["omlx", "lmstudio", "sglang"]);
-    const cloudProviderTypes = new Set(["openai", "deepseek"]);
 
     function byId(id) {
       return document.getElementById(id);
@@ -1551,6 +1561,16 @@
       });
     }
 
+    const DEFAULT_ENDPOINTS = {
+      "omlx": "http://localhost:8000/v1",
+      "lmstudio": "http://localhost:1234/v1",
+      "sglang": "http://localhost:30000/v1",
+      "openai": "https://api.openai.com/v1",
+      "deepseek": "https://api.deepseek.com",
+      "glm": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "z.ai": "https://api.z.ai/api/paas/v4",
+    };
+
     function openProviderModal(name = "") {
       clearErrors("provider-form");
       const provider = state.providers.find((item) => item.name === name);
@@ -1559,6 +1579,7 @@
       byId("provider-original-name").value = provider?.name || "";
       byId("provider-name").value = provider?.name || "";
       byId("provider-type").value = provider?.type || "";
+      byId("provider-type").dispatchEvent(new Event("change"));
       byId("provider-endpoint").value = provider?.endpoint || "";
       byId("provider-upstream-model").value = provider?.upstream_model || "";
       byId("provider-api-key").value = "";
@@ -1583,12 +1604,15 @@
         setFieldError("provider-type", "Select a provider type.");
         valid = false;
       }
-      try {
-        const url = new URL(endpoint);
-        if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid protocol");
-      } catch (_) {
-        setFieldError("provider-endpoint", "Enter a valid http or https endpoint.");
-        valid = false;
+      // Allow empty endpoint when the type has a default
+      if (endpoint || !DEFAULT_ENDPOINTS[type]) {
+        try {
+          const url = new URL(endpoint);
+          if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid protocol");
+        } catch (_) {
+          setFieldError("provider-endpoint", "Enter a valid http or https endpoint.");
+          valid = false;
+        }
       }
       if (!valid) {
         const firstInvalid = byId("provider-form").querySelector("[aria-invalid='true']");
@@ -2013,6 +2037,12 @@
       byId("add-provider-panel").addEventListener("click", () => openProviderModal());
       byId("refresh-providers").addEventListener("click", fetchProviders);
       byId("provider-form").addEventListener("submit", submitProvider);
+      byId("provider-type").addEventListener("change", function () {
+        const ep = byId("provider-endpoint");
+        const def = DEFAULT_ENDPOINTS[this.value];
+        ep.placeholder = def || "http://localhost:8800/v1";
+        ep.required = !def;
+      });
       byId("add-route-panel").addEventListener("click", () => openRouteModal());
       byId("refresh-routes").addEventListener("click", fetchModels);
       byId("route-form").addEventListener("submit", submitRoute);

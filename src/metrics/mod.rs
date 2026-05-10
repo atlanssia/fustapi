@@ -1,4 +1,4 @@
-//! Metrics collection system for FustAPI.
+//! Metrics collection system for `FustAPI`.
 //!
 //! Architecture:
 //! - Request path emits events via `try_send()` — fire-and-forget, never blocks
@@ -67,6 +67,7 @@ impl MetricsEmitter {
     }
 
     /// Convenience: emit a request start event and return the start time.
+    #[must_use]
     pub fn request_start(&self, provider: &str, model: &str) -> Instant {
         let now = Instant::now();
         self.emit(MetricEvent::RequestStart {
@@ -98,7 +99,7 @@ impl MetricsEmitter {
     }
 }
 
-/// A tracker that automatically emits request_end when dropped.
+/// A tracker that automatically emits `request_end` when dropped.
 /// This is used to track stream lifetimes lock-free.
 pub struct StreamTracker {
     pub emitter: MetricsEmitter,
@@ -111,6 +112,7 @@ pub struct StreamTracker {
 }
 
 impl StreamTracker {
+    #[must_use]
     pub fn new(emitter: MetricsEmitter, provider: String, model: String, start: Instant) -> Self {
         Self {
             emitter,
@@ -159,6 +161,7 @@ pub struct MetricsReader {
 
 impl MetricsReader {
     /// Load the current metrics snapshot. Lock-free, zero-copy Arc load.
+    #[must_use]
     pub fn snapshot(&self) -> Arc<MetricsSnapshot> {
         self.snapshot.load_full()
     }
@@ -166,6 +169,7 @@ impl MetricsReader {
 
 /// Initialize the metrics system. Returns the emitter (for hot path)
 /// and reader (for dashboard), and spawns the background aggregator.
+#[must_use]
 pub fn init() -> (MetricsEmitter, MetricsReader) {
     let (sender, receiver) = mpsc::channel(CHANNEL_CAPACITY);
     let global_counters = Arc::new(GlobalCounters::new());
