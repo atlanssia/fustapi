@@ -11,6 +11,7 @@
       --bg: #0a0a1a;
       --bg-gradient: linear-gradient(135deg, #0a0a1a 0%, #111133 30%, #0d1122 60%, #0a0a1a 100%);
       --surface: rgba(255, 255, 255, 0.05);
+      --surface-muted: rgba(255, 255, 255, 0.03);
       --surface-hover: rgba(255, 255, 255, 0.08);
       --surface-strong: rgba(255, 255, 255, 0.10);
       --border: rgba(255, 255, 255, 0.08);
@@ -766,152 +767,6 @@
       white-space: nowrap;
     }
 
-    .api-reference-card {
-      margin-bottom: 1.5rem;
-      padding: 1.25rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      position: relative;
-      overflow: hidden;
-    }
-
-    .api-header {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      margin-bottom: 1rem;
-    }
-
-    .api-icon {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 48px;
-      height: 48px;
-      border-radius: 12px;
-      background: var(--surface-strong);
-      font-size: 1.5rem;
-      border: 1px solid var(--border-strong);
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-    }
-
-    .api-header h3 {
-      margin: 0;
-      font-size: 1.15rem;
-      font-family: var(--font-body);
-    }
-
-    .api-header p {
-      margin: 0.2rem 0 0;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-
-    .api-header code {
-      font-family: var(--font-heading);
-      background: var(--surface-strong);
-      padding: 0.15rem 0.35rem;
-      border-radius: 4px;
-      color: var(--text);
-      border: 1px solid var(--border);
-      cursor: pointer;
-      transition: all 150ms ease;
-    }
-
-    .api-header code:hover {
-      border-color: var(--primary);
-      background: var(--primary-soft);
-    }
-
-    .api-endpoints {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 0.75rem;
-    }
-
-    .endpoint-card {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      padding: 0.75rem 1rem;
-      background: var(--surface-muted);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      cursor: pointer;
-      transition: all 200ms ease;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .endpoint-card:hover {
-      transform: translateY(-2px);
-      border-color: var(--primary);
-      box-shadow: 0 6px 15px rgba(34, 197, 94, 0.1);
-    }
-
-    .endpoint-card::after {
-      content: "Copy";
-      position: absolute;
-      right: 0.85rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: var(--primary);
-      opacity: 0;
-      transform: translateX(10px);
-      transition: all 200ms ease;
-    }
-
-    .endpoint-card:hover::after {
-      opacity: 1;
-      transform: translateX(0);
-    }
-
-    .endpoint-card:hover .protocol {
-      opacity: 0;
-    }
-
-    .endpoint-card .method {
-      font-family: var(--font-heading);
-      font-size: 0.75rem;
-      font-weight: 700;
-      padding: 0.2rem 0.4rem;
-      border-radius: 4px;
-    }
-
-    .endpoint-card .method.post {
-      color: #34d399;
-      background: rgba(52, 211, 153, 0.15);
-    }
-
-    .endpoint-card .method.get {
-      color: #60a5fa;
-      background: rgba(96, 165, 250, 0.15);
-    }
-
-    .endpoint-card .path {
-      font-family: var(--font-heading);
-      font-size: 0.85rem;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .endpoint-card .protocol {
-      margin-left: auto;
-      font-size: 0.65rem;
-      color: var(--muted);
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      transition: opacity 200ms ease;
-      background: var(--bg);
-      padding: 0.2rem 0.5rem;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-    }
-
     @media (max-width: 768px) {
       .layout { flex-direction: column; }
 
@@ -994,10 +849,6 @@
           <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false" aria-controls="routes-panel" data-tab="routes" tabindex="-1">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
             Routes
-          </button>
-          <button class="btn tab" type="button" role="tab" id="tab-health" aria-selected="false" aria-controls="health-panel" data-tab="health" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            Health
           </button>
         </div>
       </nav>
@@ -1116,7 +967,6 @@
                       <th scope="col">Type</th>
                       <th scope="col">Endpoint</th>
                       <th scope="col">API key</th>
-                      <th scope="col">Balance</th>
                       <th scope="col">Actions</th>
                     </tr>
                   </thead>
@@ -1167,22 +1017,6 @@
           </div>
         </section>
 
-        <section id="health-panel" class="panel" role="tabpanel" tabindex="0" aria-labelledby="tab-health" hidden
-          aria-hidden="true">
-          <div class="panel-header">
-            <div class="panel-title">
-              <h2>Health</h2>
-              <p>Gateway status only. Provider health requires a dedicated backend API.</p>
-            </div>
-            <button class="btn" type="button" id="refresh-health">Check health</button>
-          </div>
-          <div class="card">
-            <div class="card-head">
-              <h3>Gateway</h3>
-            </div>
-            <div id="health-state" class="state" role="status" aria-live="polite">Health has not been checked yet.</div>
-          </div>
-        </section>
       </main>
     </div>
   </div>
@@ -1427,8 +1261,7 @@
         panel.setAttribute("aria-hidden", String(!active));
       });
       if (updateHash) history.replaceState(null, "", `#${tabName}`);
-      if (tabName === "health") fetchHealth();
-      
+
       // Handle metrics polling
       if (state.metricsInterval) {
         clearInterval(state.metricsInterval);
@@ -1457,7 +1290,8 @@
         });
       });
       const initial = location.hash.replace("#", "");
-      if (["dashboard", "providers", "routes", "health"].includes(initial)) activateTab(initial, false);
+      if (initial === "health") activateTab("dashboard", false);
+      else if (["dashboard", "providers", "routes"].includes(initial)) activateTab(initial, false);
       else activateTab("dashboard", false);
     }
 
@@ -1581,12 +1415,6 @@
       setStateText("providers-state", "", true);
       byId("providers-content").hidden = false;
       byId("providers-tbody").innerHTML = state.providers.map((provider) => {
-        const bal = state.balances.find((b) => b.name === provider.name);
-        let balHtml = '<span style="color:var(--muted)">-</span>';
-        if (bal) {
-          if (bal.error) balHtml = '<span style="color:var(--danger)">' + escapeHtml(bal.error) + '</span>';
-          else if (bal.balance) balHtml = '<span class="badge ok">' + escapeHtml(bal.balance) + '</span>';
-        }
         return '<tr>' +
           '<td><strong>' + escapeHtml(provider.name) + '</strong></td>' +
           '<td><span class="badge type">' + escapeHtml(provider.type || "openai") + '</span></td>' +
@@ -1595,7 +1423,6 @@
             (provider.has_key ? '<span class="badge ok">Key Set</span>' : '<span class="badge warn">No key</span>') +
             (provider.upstream_model ? '<br><span class="help" style="font-size: 0.75rem">Model: ' + escapeHtml(provider.upstream_model) + '</span>' : '') +
           '</td>' +
-          '<td>' + balHtml + '</td>' +
           '<td><div class="actions">' +
             '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
             '<button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(provider.name) + '">Delete</button>' +
@@ -1603,12 +1430,6 @@
         '</tr>';
       }).join("");
       byId("providers-mobile").innerHTML = state.providers.map((provider) => {
-        const bal = state.balances.find((b) => b.name === provider.name);
-        let balHtml = '<span style="color:var(--muted)">-</span>';
-        if (bal) {
-          if (bal.error) balHtml = '<span style="color:var(--danger)">' + escapeHtml(bal.error) + '</span>';
-          else if (bal.balance) balHtml = '<span class="badge ok">' + escapeHtml(bal.balance) + '</span>';
-        }
         return '<article class="record">' +
           '<h3>' + escapeHtml(provider.name) + '</h3>' +
           '<dl>' +
@@ -1616,7 +1437,6 @@
             '<div><dt>Endpoint</dt><dd>' + escapeHtml(provider.endpoint) + '</dd></div>' +
             '<div><dt>API key</dt><dd>' + (provider.has_key ? "Set" : "Not set") + '</dd></div>' +
             (provider.upstream_model ? '<div><dt>Upstream Model</dt><dd>' + escapeHtml(provider.upstream_model) + '</dd></div>' : '') +
-            '<div><dt>Balance</dt><dd>' + balHtml + '</dd></div>' +
           '</dl>' +
           '<div class="actions">' +
             '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
@@ -1942,20 +1762,17 @@
     }
 
     async function fetchHealth() {
-      setStateText("health-state", "Checking gateway health");
       const pill = byId("gateway-pill");
       pill.className = "status-pill";
       pill.innerHTML = "<span class=\"dot\"></span>Checking gateway";
       try {
         const data = await api("/health");
         const status = data.status === "ok" ? "ok" : "unknown";
-        setStateHtml("health-state", `<strong>Gateway status: ${escapeHtml(status)}</strong>The health endpoint responded successfully.`);
         const dh = byId("dashboard-health-state");
         if (dh) { dh.innerHTML = '<span class="dot ok" style="display:inline-block;margin-right:0.5rem"></span><strong style="color:var(--success)">Gateway OK</strong>'; }
         pill.className = "status-pill ok";
         pill.innerHTML = "<span class=\"dot\"></span>Gateway OK";
       } catch (error) {
-        setStateHtml("health-state", `<strong>Gateway health check failed.</strong>${escapeHtml(error.message)}`);
         const dh = byId("dashboard-health-state");
         if (dh) { dh.innerHTML = '<span class="dot error" style="display:inline-block;margin-right:0.5rem"></span><strong style="color:var(--danger)">' + escapeHtml(error.message) + '</strong>'; }
         pill.className = "status-pill err";
@@ -2107,7 +1924,6 @@
       byId("add-route-panel").addEventListener("click", () => openRouteModal());
       byId("refresh-routes").addEventListener("click", fetchModels);
       byId("route-form").addEventListener("submit", submitRoute);
-      byId("refresh-health").addEventListener("click", fetchHealth);
       const dashboardHealthBtn = byId("refresh-health-dashboard");
       if (dashboardHealthBtn) dashboardHealthBtn.addEventListener("click", fetchHealth);
       byId("confirm-action").addEventListener("click", () => {
