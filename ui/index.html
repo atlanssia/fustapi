@@ -1485,24 +1485,7 @@
               <button class="btn small" type="button" id="refresh-providers">Refresh</button>
             </div>
             <div id="providers-state" class="state" role="status" aria-live="polite">Loading providers</div>
-            <div id="providers-content" hidden>
-              <div class="table-wrap desktop-table">
-                <table>
-                  <caption>Configured FustAPI providers</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Name</th>
-                      <th scope="col">Type</th>
-                      <th scope="col">Endpoint</th>
-                      <th scope="col">API key</th>
-                      <th scope="col">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="providers-tbody"></tbody>
-                </table>
-              </div>
-              <div id="providers-mobile" class="mobile-list" aria-label="Configured providers"></div>
-            </div>
+            <div id="providers-content" hidden style="padding:0.75rem"></div>
           </div>
         </section>
 
@@ -2221,48 +2204,84 @@
       }
       setStateText("providers-state", "", true);
       byId("providers-content").hidden = false;
-      byId("providers-tbody").innerHTML = state.providers.map((provider) => {
-        return '<tr>' +
-          '<td><strong>' + escapeHtml(provider.name) + '</strong></td>' +
-          '<td><span class="badge type">' + escapeHtml(provider.type || "openai") + '</span></td>' +
-          '<td class="endpoint">' + escapeHtml(provider.endpoint) + '</td>' +
-          '<td>' +
-            (provider.has_key ? '<span class="badge ok">Key Set</span>' : '<span class="badge warn">No key</span>') +
-            (provider.upstream_model ? '<br><span class="help" style="font-size: 0.75rem">Model: ' + escapeHtml(provider.upstream_model) + '</span>' : '') +
-          '</td>' +
-          '<td><div class="actions">' +
-            '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
-            '<button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(provider.name) + '">Delete</button>' +
-          '</div></td>' +
-        '</tr>';
-      }).join("");
-      byId("providers-mobile").innerHTML = state.providers.map((provider) => {
-        return '<article class="record">' +
-          '<h3>' + escapeHtml(provider.name) + '</h3>' +
-          '<dl>' +
-            '<div><dt>Type</dt><dd>' + escapeHtml(provider.type || "openai") + '</dd></div>' +
-            '<div><dt>Endpoint</dt><dd>' + escapeHtml(provider.endpoint) + '</dd></div>' +
-            '<div><dt>API key</dt><dd>' + (provider.has_key ? "Set" : "Not set") + '</dd></div>' +
-            (provider.upstream_model ? '<div><dt>Upstream Model</dt><dd>' + escapeHtml(provider.upstream_model) + '</dd></div>' : '') +
-          '</dl>' +
-          '<div class="actions">' +
-            '<button class="btn small" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(provider.name) + '">Edit</button>' +
-            '<button class="btn small danger" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(provider.name) + '">Delete</button>' +
+
+      // Build card-based provider list
+      var cardsHtml = state.providers.map(function(provider) {
+        var name = provider.name;
+        var type = provider.type || 'openai';
+        var brandCls = getBrandClass(name);
+        var initial = name.charAt(0).toUpperCase();
+        var pillCls = getPillClass(name);
+
+        // Find balance info for this provider
+        var balEntry = state.balances.find(function(b) { return b.name === name; });
+        var isOffline = balEntry && balEntry.error;
+        var offCls = isOffline ? ' offline' : '';
+
+        // Status indicator
+        var statusHtml = '';
+        if (balEntry) {
+          var sc = getStatusClass(balEntry);
+          if (sc === 'online') statusHtml = '<span class="badge ok" style="font-size:0.55rem">Online</span>';
+          else if (sc === 'offline') statusHtml = '<span class="badge danger" style="font-size:0.55rem">Offline</span>';
+          else if (sc === 'warn') statusHtml = '<span class="badge warn" style="font-size:0.55rem">Warn</span>';
+        }
+
+        // Key mask
+        var keyMask = provider.has_key ? 'sk-****' : 'No key';
+
+        // Row 2 detail text
+        var row2Parts = [escapeHtml(provider.endpoint)];
+        if (provider.upstream_model) row2Parts.push('Model: ' + escapeHtml(provider.upstream_model));
+        row2Parts.push(provider.has_key ? 'Key configured' : 'No key');
+
+        return '<div class="config-provider-card' + offCls + '">' +
+          '<div class="cpc-row1">' +
+            '<div class="config-provider-icon ' + brandCls + '">' + escapeHtml(initial) + '</div>' +
+            '<span class="p-name">' + escapeHtml(name) + '</span>' +
+            '<span class="p-pill ' + pillCls + '">' + escapeHtml(type) + '</span>' +
+            statusHtml +
+            '<div class="config-provider-actions">' +
+              '<button class="config-action-btn" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(name) + '" title="Edit">&#9998;</button>' +
+              '<button class="config-action-btn" type="button" data-provider-action="test" data-provider-name="' + escapeHtml(name) + '" title="Test connection">&#128268;</button>' +
+              '<button class="config-action-btn delete" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(name) + '" title="Delete">&#128465;</button>' +
+            '</div>' +
           '</div>' +
-        '</article>';
-      }).join("");
+          '<div class="cpc-row2">' + row2Parts.join(' &middot; ') + '</div>' +
+        '</div>';
+      }).join('');
+
+      byId("providers-content").innerHTML = cardsHtml;
       bindProviderActions();
     }
 
     function bindProviderActions() {
-      document.querySelectorAll("[data-provider-action]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const name = button.dataset.providerName || "";
+      document.querySelectorAll("[data-provider-action]").forEach(function(button) {
+        button.addEventListener("click", function() {
+          var name = button.dataset.providerName || "";
           if (button.dataset.providerAction === "add") openProviderModal();
           if (button.dataset.providerAction === "edit") openProviderModal(name);
           if (button.dataset.providerAction === "delete") confirmDeleteProvider(name);
+          if (button.dataset.providerAction === "test") testProviderConnection(name);
         });
       });
+    }
+
+    async function testProviderConnection(name) {
+      try {
+        var data = await api("/api/balance");
+        var balances = Array.isArray(data.balances) ? data.balances : [];
+        var found = balances.find(function(b) { return b.name === name; });
+        if (found && found.balance && found.balance.status === 'online') {
+          showToast(name + ': connection OK', 'success');
+        } else if (found && found.error) {
+          showToast(name + ': ' + found.error, 'error');
+        } else {
+          showToast(name + ': no balance data', 'warning');
+        }
+      } catch (err) {
+        showToast(name + ': test failed - ' + err.message, 'error');
+      }
     }
 
     const DEFAULT_ENDPOINTS = {
