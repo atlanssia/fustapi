@@ -560,6 +560,26 @@
     .status-pill.ok { color: var(--success); border-color: var(--success); background: var(--success-soft); }
     .status-pill.err { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 
+    /* Gateway status panel in topbar */
+    .gw-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.05rem;
+      padding: 0.3rem 0.6rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-width: 180px;
+    }
+    .gw-row1, .gw-row2 { display: flex; align-items: center; gap: 0.35rem; }
+    .gw-row1 { font-size: 0.7rem; font-weight: 600; }
+    .gw-row2 { font-size: 0.55rem; color: var(--muted); }
+    .gw-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .gw-dot.ok { background: var(--success); }
+    .gw-dot.err { background: var(--danger); }
+    .gw-version { margin-left: auto; font-size: 0.55rem; color: var(--muted); font-weight: 400; font-family: var(--font-heading); }
+    .gw-sep { color: var(--border); }
+
     .badge {
       display: inline-flex;
       align-items: center;
@@ -1310,7 +1330,10 @@
         <div class="topbar-actions">
           <code id="topbar-base-url" style="font-size:0.6rem;color:var(--muted);cursor:pointer;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;user-select:all" title="Click to copy">http://localhost:8800/v1</code>
           <div id="topbar-balance" class="balance-dots" aria-label="Provider balances"></div>
-          <span id="gateway-pill" class="status-pill" aria-live="polite"><span class="dot"></span>Checking</span>
+          <div id="gateway-panel" class="gw-panel">
+            <div class="gw-row1"><span id="gw-dot" class="gw-dot"></span><span id="gw-status">Checking</span><span id="gw-version" class="gw-version">v—</span></div>
+            <div class="gw-row2"><span id="gw-uptime">—</span><span class="gw-sep">·</span><span id="gw-providers">—</span></div>
+          </div>
         </div>
       </div>
     </header>
@@ -1801,6 +1824,21 @@
         var title = b.name + ': ' + (b.error ? b.error : b.balance ? b.balance.status : 'no data');
         return '<span class="balance-dot ' + cls + '" title="' + escapeHtml(title) + '" role="status" aria-label="' + escapeHtml(title) + '"></span>';
       }).join('');
+
+      // Update provider summary in gateway panel
+      var online = 0, warning = 0, off = 0;
+      state.balances.forEach(function(b) {
+        if (b.error) { off++; }
+        else if (b.balance && b.balance.alerts && b.balance.alerts.length > 0) { warning++; }
+        else { online++; }
+      });
+      var gwProviders = byId("gw-providers");
+      if (gwProviders) {
+        var parts = [online + ' online'];
+        if (warning > 0) parts.push(warning + ' warn');
+        if (off > 0) parts.push(off + ' off');
+        gwProviders.textContent = state.balances.length + ' prov · ' + parts.join(', ');
+      }
     }
 
     function renderDashboardBalance() {
@@ -2527,20 +2565,19 @@
     }
 
     async function fetchHealth() {
-      const pill = byId("gateway-pill");
-      pill.className = "status-pill";
-      pill.innerHTML = "<span class=\"dot\"></span>Checking gateway";
+      var dot = byId("gw-dot");
+      var status = byId("gw-status");
+      var version = byId("gw-version");
+      if (dot) dot.className = "gw-dot";
+      if (status) status.textContent = "Checking";
       try {
-        await api("/health");
-        const dh = byId("dashboard-health-state");
-        if (dh) { dh.innerHTML = '<span style="color:var(--success)">● OK</span>'; }
-        pill.className = "status-pill ok";
-        pill.innerHTML = "<span class=\"dot\"></span>Gateway OK";
+        var data = await api("/health");
+        if (dot) dot.className = "gw-dot ok";
+        if (status) status.textContent = "Gateway OK";
+        if (version && data.version) version.textContent = "v" + data.version;
       } catch (error) {
-        const dh = byId("dashboard-health-state");
-        if (dh) { dh.innerHTML = '<span style="color:var(--danger)">● Error</span>'; }
-        pill.className = "status-pill err";
-        pill.innerHTML = "<span class=\"dot\"></span>Gateway error";
+        if (dot) dot.className = "gw-dot err";
+        if (status) status.textContent = "Gateway error";
       }
     }
 
@@ -2571,6 +2608,8 @@
       };
       const uptimeSub = byId("dashboard-uptime-sub");
       if (uptimeSub) uptimeSub.textContent = "Uptime " + formatTime(m.uptime_secs);
+      const gwUptime = byId("gw-uptime");
+      if (gwUptime) gwUptime.textContent = formatTime(m.uptime_secs);
 
       const tbody = byId("dashboard-providers-tbody");
       if (!m.provider_stats || m.provider_stats.length === 0) {

@@ -54,6 +54,7 @@ impl Default for ServerConfig {
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+    version: &'static str,
 }
 
 /// Model info for /v1/models endpoint.
@@ -184,7 +185,7 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
 
 /// GET /health — returns {"status": "ok"}.
 async fn health_handler() -> impl IntoResponse {
-    (StatusCode::OK, Json(HealthResponse { status: "ok" }))
+    (StatusCode::OK, Json(HealthResponse { status: "ok", version: env!("CARGO_PKG_VERSION") }))
 }
 
 /// POST /v1/chat/completions — OpenAI-compatible chat completions endpoint.
