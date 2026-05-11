@@ -107,10 +107,10 @@ pub trait Provider: Send + Sync {
         Ok(())
     }
 
-    /// Query the provider account balance (returns display string, e.g. "¥1.60 CNY").
+    /// Query the provider account balance (returns structured data).
     ///
     /// Default: `Ok(None)` — most local providers won't implement this.
-    async fn balance(&self) -> Result<Option<String>, ProviderError> {
+    async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         Ok(None)
     }
 }
