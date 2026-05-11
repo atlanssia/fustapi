@@ -4,6 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0a1a">
   <title>FustAPI Control Plane</title>
   <style>
     :root {
@@ -52,6 +53,7 @@
       font: 16px/1.5 var(--font-body);
       position: relative;
       z-index: 0;
+      touch-action: manipulation;
     }
 
     body::before {
@@ -105,6 +107,380 @@
       cursor: not-allowed;
       opacity: 0.55;
     }
+
+    /* ── Providers Redesign ─────────────────────────────────────────── */
+
+    /* Split panel layout */
+    .providers-panel {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      height: 420px;
+      overflow: hidden;
+      background: var(--surface);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+    }
+    .providers-list {
+      width: 42%;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+    }
+    .providers-detail {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.8rem;
+    }
+
+    /* Panel header and search */
+    .providers-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .providers-header h3 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin: 0;
+    }
+    .providers-header .stats {
+      font-size: 0.65rem;
+      color: var(--muted);
+      display: flex;
+      gap: 0.6rem;
+    }
+    .providers-search {
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .providers-search input {
+      width: 100%;
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.65rem;
+      padding: 0.35rem 0.5rem;
+    }
+
+    /* List items (two-row compact cards) */
+    .provider-item {
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      margin: 0.15rem 0.3rem;
+      cursor: pointer;
+      background: var(--surface-muted);
+      border: 1px solid transparent;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .provider-item:hover {
+      background: var(--surface-hover);
+    }
+    .provider-item.selected {
+      background: rgba(99, 102, 241, 0.1);
+      border-color: var(--primary);
+    }
+    .provider-item.offline {
+      opacity: 0.7;
+    }
+    .provider-item-row1 {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-bottom: 0.15rem;
+    }
+    .provider-item-row2 {
+      padding-left: 1rem;
+      font-size: 0.55rem;
+      color: var(--muted);
+      display: flex;
+      gap: 0.3rem;
+    }
+
+    /* Status dots */
+    .p-status {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .p-status.online { background: var(--success); }
+    .p-status.warn { background: var(--warning); }
+    .p-status.offline { background: var(--danger); }
+    .p-status.no_data { background: var(--muted); }
+
+    /* Name and pills */
+    .p-name {
+      font-weight: 600;
+      font-size: 0.72rem;
+    }
+    .p-pill {
+      font-size: 0.5rem;
+      padding: 0.04rem 0.2rem;
+      border-radius: 2px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .p-pill.glm { background: rgba(99, 102, 241, 0.2); color: #6366f1; }
+    .p-pill.deepseek { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .p-pill.openai { background: rgba(5, 150, 105, 0.2); color: #059669; }
+    .p-pill.zai { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+    .p-pill.omlx { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+    .p-pill.lmstudio { background: rgba(244, 63, 94, 0.2); color: #f43f5e; }
+    .p-pill.sglang { background: rgba(249, 115, 22, 0.2); color: #f97316; }
+    .p-pill.credit { background: var(--surface-strong); color: var(--muted); }
+
+    /* Mini progress bar */
+    .p-mini-bar {
+      width: 36px;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+    }
+    .p-mini-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+    }
+    .p-mini-bar-fill.ok { background: var(--success); }
+    .p-mini-bar-fill.warn { background: var(--warning); }
+    .p-mini-bar-fill.critical { background: var(--danger); }
+
+    /* Detail panel */
+    .detail-overview {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      height: 100%;
+      color: var(--muted);
+      text-align: center;
+    }
+    .detail-overview .detail-stats {
+      display: flex;
+      gap: 0.6rem;
+      margin-top: 1rem;
+    }
+    .detail-stat {
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      text-align: center;
+    }
+    .detail-stat .num {
+      font-family: var(--font-heading);
+      font-size: 1.2rem;
+      font-weight: 700;
+      display: block;
+    }
+    .detail-stat .lbl {
+      font-size: 0.6rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .detail-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.5rem;
+      margin-bottom: 0.8rem;
+    }
+    .detail-metric-card {
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+    }
+    .detail-metric-card .dmc-label {
+      font-size: 0.6rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.3rem;
+    }
+    .detail-metric-card .dmc-value {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .detail-metric-card .dmc-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .detail-metric-card .dmc-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+    }
+    .detail-metric-card .dmc-bar-fill.ok { background: var(--success); }
+    .detail-metric-card .dmc-bar-fill.warn { background: var(--warning); }
+    .detail-metric-card .dmc-bar-fill.critical { background: var(--danger); }
+
+    .detail-section {
+      margin-bottom: 0.8rem;
+    }
+    .detail-section h5 {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 0 0 0.4rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-section table {
+      font-size: 0.7rem;
+    }
+    .detail-section td {
+      padding: 0.3rem 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .detail-alerts {
+      margin-bottom: 0.8rem;
+    }
+    .detail-alert-item {
+      padding: 0.3rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      margin-bottom: 0.2rem;
+    }
+    .detail-alert-item.warn {
+      background: var(--warning-soft);
+      color: var(--warning);
+    }
+    .detail-alert-item.critical {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .detail-provider-header {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding-bottom: 0.6rem;
+      margin-bottom: 0.8rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-provider-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: #fff;
+    }
+    .detail-provider-header .dph-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+    .detail-provider-header .dph-type {
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+
+    .detail-config {
+      margin-top: 0.8rem;
+    }
+    .detail-config-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.25rem 0;
+      font-size: 0.7rem;
+    }
+    .detail-config-row .dcr-key {
+      color: var(--muted);
+    }
+    .detail-config-row .dcr-val {
+      font-weight: 600;
+    }
+
+    /* Config panel cards */
+    .config-provider-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      overflow: hidden;
+      background: var(--surface-muted);
+    }
+    .config-provider-card.offline {
+      opacity: 0.7;
+    }
+    .config-provider-card .cpc-row1 {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.7rem;
+    }
+    .config-provider-card .cpc-row2 {
+      padding: 0.3rem 0.7rem 0.5rem;
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+    .config-provider-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.65rem;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .config-provider-actions {
+      display: flex;
+      gap: 0.2rem;
+      margin-left: auto;
+    }
+    .config-action-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 0.7rem;
+      min-height: unset;
+      padding: 0;
+      color: var(--text);
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .config-action-btn:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-strong);
+    }
+    .config-action-btn.delete {
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .config-action-btn.delete:hover {
+      background: var(--danger-soft);
+      border-color: var(--danger);
+    }
+
+    /* Brand gradient classes */
+    .brand-glm { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+    .brand-deepseek { background: linear-gradient(135deg, #10b981, #34d399); }
+    .brand-openai { background: linear-gradient(135deg, #059669, #34d399); }
+    .brand-zai { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
+    .brand-omlx { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+    .brand-lmstudio { background: linear-gradient(135deg, #f43f5e, #fb7185); }
+    .brand-sglang { background: linear-gradient(135deg, #f97316, #ef4444); }
+    .brand-default { background: linear-gradient(135deg, #6b7280, #9ca3af); }
+
+    /* ── End Providers Redesign ─────────────────────────────────────── */
 
     a:focus-visible,
     button:focus-visible,
@@ -239,7 +615,7 @@
       border-radius: 10px;
       font-size: 0.875rem;
       font-weight: 600;
-      transition: all 0.15s ease;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
       min-height: unset;
       white-space: nowrap;
       text-decoration: none;
@@ -308,7 +684,7 @@
       border-left: 3px solid transparent;
       font-size: 0.9rem;
       text-align: left;
-      transition: all 0.15s ease;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       min-height: unset;
     }
 
@@ -461,25 +837,18 @@
       margin-top: 0.15rem;
     }
 
-    /* Dashboard: provider list + charts side-by-side */
-    .dashboard-split {
-      display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 1rem;
-      margin-bottom: 1rem;
-      align-items: stretch;
-    }
-
+    /* Dashboard: balance card (full width) */
     .balance-list {
       background: var(--surface);
       backdrop-filter: var(--blur);
       -webkit-backdrop-filter: var(--blur);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 0.75rem 0;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(255,255,255,0.1) transparent;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 0.75rem;
     }
 
     .balance-list-title {
@@ -488,39 +857,96 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       font-weight: 600;
-      padding: 0 1rem;
+      margin-bottom: 0.5rem;
+      grid-column: 1 / -1;
+    }
+
+    .balance-card {
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+    }
+
+    .balance-card .bc-name {
+      font-weight: 700;
+      font-size: 0.95rem;
       margin-bottom: 0.5rem;
     }
 
-    .balance-entry {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0.5rem 1rem;
-      border-bottom: 1px solid rgba(255,255,255,0.03);
+    .balance-card .bc-plan {
+      font-size: 0.7rem;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
 
-    .balance-entry:last-child { border-bottom: none; }
-
-    .balance-entry .name {
-      font-weight: 600;
-      font-size: 0.9rem;
-    }
-
-    .balance-entry .status {
-      font-size: 0.82rem;
+    .balance-card .bc-pct {
+      font-family: var(--font-heading);
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 0.3rem 0;
       font-variant-numeric: tabular-nums;
     }
 
-    .balance-entry .status.ok { color: var(--success); }
-    .balance-entry .status.warn { color: var(--warning); }
-    .balance-entry .status.error { color: var(--danger); }
+    .balance-card .bc-pct.ok { color: var(--success); }
+    .balance-card .bc-pct.warn { color: var(--warning); }
+    .balance-card .bc-pct.full { color: var(--danger); }
 
-    .charts-stack {
+    .balance-card .bc-bar {
+      height: 6px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 3px;
+      margin: 0.5rem 0;
+      overflow: hidden;
+    }
+
+    .balance-card .bc-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+
+    .balance-card .bc-bar-fill.ok { background: var(--success); }
+    .balance-card .bc-bar-fill.warn { background: var(--warning); }
+    .balance-card .bc-bar-fill.full { background: var(--danger); }
+
+    .balance-card .bc-detail {
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .balance-card .bc-countdown {
+      font-family: var(--font-heading);
+      font-size: 0.82rem;
+      color: var(--warning);
+      margin-top: 0.4rem;
+    }
+
+    .balance-card .bc-models {
+      margin-top: 0.5rem;
+      font-size: 0.7rem;
+      color: var(--muted);
       display: flex;
-      flex-direction: column;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+
+    .balance-card .bc-model-tag {
+      padding: 0.15em 0.5em;
+      border-radius: 999px;
+      background: var(--surface-strong);
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+
+    /* Charts row */
+    .charts-stack {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 1rem;
-      height: 300px;
+      margin-bottom: 1rem;
     }
 
     .chart-card {
@@ -530,7 +956,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 1rem;
-      flex: 1;
+      height: 220px;
       display: flex;
       flex-direction: column;
     }
@@ -581,6 +1007,7 @@
       text-align: left;
       padding: 0.75rem 1rem;
       color: var(--muted);
+      background: var(--surface-muted);
       font-weight: 600;
       font-size: 0.75rem;
       text-transform: uppercase;
@@ -593,21 +1020,11 @@
       padding: 0.75rem 1rem;
       border-bottom: 1px solid rgba(255, 255, 255, 0.03);
       vertical-align: middle;
+      font-size: 0.92rem;
     }
 
     tbody tr:hover td {
       background: var(--surface-hover);
-    }
-
-    th {
-      color: var(--muted);
-      background: var(--surface-muted);
-      font-size: 0.82rem;
-      font-weight: 750;
-    }
-
-    td {
-      font-size: 0.92rem;
     }
 
     tr:last-child td {
@@ -681,6 +1098,7 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.2s ease;
+      overscroll-behavior: contain;
     }
 
     .modal-overlay.active {
@@ -927,9 +1345,8 @@
       .metrics:has(.card) { grid-template-columns: 1fr; }
 
       .status-row { grid-template-columns: 1fr; }
-      .dashboard-split { grid-template-columns: 1fr; }
-      .charts-stack { height: auto; }
-      .balance-list { max-height: none; }
+      .charts-stack { grid-template-columns: 1fr; }
+      .balance-list { grid-template-columns: 1fr; }
 
       .desktop-table { display: none; }
       .mobile-list { display: block; }
@@ -970,15 +1387,15 @@
       <nav class="sidebar" aria-label="Control plane sections">
         <div class="tabs" role="tablist" aria-label="Control plane sections">
           <button class="btn tab" type="button" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="dashboard-panel" data-tab="dashboard" tabindex="0">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
             Dashboard
           </button>
           <button class="btn tab" type="button" role="tab" id="tab-providers" aria-selected="false" aria-controls="providers-panel" data-tab="providers" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
             Providers
           </button>
           <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false" aria-controls="routes-panel" data-tab="routes" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 10a6 6 0 0 1 6-6h3"/><path d="M6 14a6 6 0 0 0 6 6h3"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 10a6 6 0 0 1 6-6h3"/><path d="M6 14a6 6 0 0 0 6 6h3"/></svg>
             Routes
           </button>
         </div>
@@ -1017,23 +1434,23 @@
             <div class="metric"><span>In-Flight</span><strong id="metric-inflight">0</strong></div>
           </div>
 
-          <!-- Provider balance list (left) + Charts (right) -->
-          <div class="dashboard-split">
-            <div class="balance-list" id="dashboard-balance-list">
-              <div class="balance-list-title">Providers</div>
-              <div id="dashboard-balance-entries">
-                <div class="balance-entry"><span class="name" style="color:var(--muted)">Loading...</span></div>
-              </div>
+          <!-- Provider balance cards (full width) -->
+          <div class="balance-list" id="dashboard-balance-list">
+            <div class="balance-list-title">Providers</div>
+            <div id="dashboard-balance-entries" style="display:contents">
+              <div class="balance-card"><span class="bc-name" style="color:var(--muted)">Loading…</span></div>
             </div>
-            <div class="charts-stack">
-              <div class="chart-card">
-                <h3>Requests / sec</h3>
-                <canvas id="chart-qps" style="width:100%"></canvas>
-              </div>
-              <div class="chart-card">
-                <h3>Latency (ms)</h3>
-                <canvas id="chart-latency" style="width:100%"></canvas>
-              </div>
+          </div>
+
+          <!-- Charts row -->
+          <div class="charts-stack">
+            <div class="chart-card">
+              <h3>Requests / sec</h3>
+              <canvas id="chart-qps" style="width:100%" role="img" aria-label="Requests per second chart. Auto-refreshes every second."></canvas>
+            </div>
+            <div class="chart-card">
+              <h3>Latency (ms)</h3>
+              <canvas id="chart-latency" style="width:100%" role="img" aria-label="Latency chart in milliseconds. Auto-refreshes every second."></canvas>
             </div>
           </div>
 
@@ -1147,7 +1564,7 @@
             <input type="hidden" id="provider-original-name" name="original_name">
             <div class="form-field">
               <label for="provider-name">Name</label>
-              <input id="provider-name" name="name" autocomplete="off" required>
+              <input id="provider-name" name="name" autocomplete="off" spellcheck="false" required>
               <p class="error" id="provider-name-error"></p>
             </div>
             <div class="form-field">
@@ -1491,15 +1908,105 @@
     function renderDashboardBalance() {
       const container = byId("dashboard-balance-entries");
       if (!state.balances.length) {
-        container.innerHTML = '<div class="balance-entry"><span class="name" style="color:var(--muted)">No balance data.</span></div>';
+        container.innerHTML = '<div class="balance-card"><span class="bc-name" style="color:var(--muted)">No balance data.</span></div>';
         return;
       }
       container.innerHTML = state.balances.map((b) => {
+        // Try to parse structured JSON balance (GLM format)
+        let glmData = null;
+        if (b.balance) {
+          try { glmData = JSON.parse(b.balance); } catch (_) {}
+        }
+
+        if (glmData && glmData.limits) {
+          return renderGlmBalanceCard(b.name, glmData);
+        }
+
+        // Default simple balance card
         let cls = 'warn', text = 'No data';
         if (b.error) { cls = 'error'; text = b.error; }
         else if (b.balance) { cls = 'ok'; text = b.balance; }
-        return '<div class="balance-entry"><span class="name">' + escapeHtml(b.name) + '</span><span class="status ' + cls + '">' + escapeHtml(text) + '</span></div>';
+        else if (!b.has_key) { text = 'Not configured'; }
+
+        return '<div class="balance-card">' +
+          '<div class="bc-name">' + escapeHtml(b.name) + '</div>' +
+          '<div class="bc-detail">' + escapeHtml(text) + '</div>' +
+          '</div>';
       }).join('');
+    }
+
+    function renderGlmBalanceCard(name, data) {
+      const planLabel = data.plan ? data.plan.toUpperCase() : '';
+      const isCoding = data.is_coding_plan;
+
+      let parts = [];
+      let countdownHtml = '';
+
+      for (const limit of (data.limits || [])) {
+        const pct = limit.pct || 0;
+        var barCls = pct >= 100 ? 'full' : pct >= 80 ? 'warn' : 'ok';
+        var pctCls = pct >= 100 ? 'full' : pct >= 80 ? 'warn' : 'ok';
+        var typeLabel = limit.type === 'TOKENS_LIMIT' ? 'Tokens' : 'Time';
+
+        var detail = '';
+        if (limit.remaining != null) {
+          detail = escapeHtml(String(limit.remaining)) + ' remaining';
+          if (limit.total != null) detail += ' / ' + escapeHtml(String(limit.total));
+        }
+        if (isCoding && limit.type === 'TOKENS_LIMIT' && limit.number != null) {
+          detail = 'Coding plan · ' + escapeHtml(String(limit.number)) + ' quota' + (limit.unit ? ' (unit ' + limit.unit + ')' : '');
+        }
+
+        parts.push('<div style="margin-bottom:0.6rem">' +
+          '<div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:0.2rem">' +
+            '<span style="color:var(--muted)">' + typeLabel + '</span>' +
+            '<span style="font-size:0.8rem;font-weight:700" class="bc-pct ' + pctCls + '">' + pct.toFixed(0) + '%</span>' +
+          '</div>' +
+          '<div class="bc-bar"><div class="bc-bar-fill ' + barCls + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
+          (detail ? '<div style="font-size:0.7rem;color:var(--muted);margin-top:0.15rem">' + detail + '</div>' : '') +
+          '</div>');
+
+        // Per-model usage breakdown
+        if (limit.usage_details && limit.usage_details.length > 0) {
+          var tags = limit.usage_details.map(function(d) {
+            return '<span class="bc-model-tag">' + escapeHtml(d.model || '?') + ': ' + (d.usage || 0) + '</span>';
+          }).join('');
+          parts.push('<div class="bc-models">' + tags + '</div>');
+        }
+
+        // Countdown timer for exhausted limits
+        if (pct >= 100 && limit.reset_at_ms) {
+          var resetId = 'countdown-' + name.replace(/[^a-z0-9]/gi, '') + '-' + (limit.type || '');
+          countdownHtml += '<div class="bc-countdown" id="' + resetId + '">Resets in ...</div>';
+          // Schedule countdown
+          window.setTimeout(function() { startCountdown(resetId, limit.reset_at_ms); }, 100);
+        }
+      }
+
+      return '<div class="balance-card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">' +
+          '<div class="bc-name">' + escapeHtml(name) + '</div>' +
+          (planLabel ? '<span class="bc-plan">' + escapeHtml(planLabel) + (isCoding ? ' coding' : '') + '</span>' : '') +
+        '</div>' +
+        parts.join('') +
+        countdownHtml +
+        '</div>';
+    }
+
+    function startCountdown(elId, resetAtMs) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      function tick() {
+        var now = Date.now();
+        var remain = resetAtMs - now;
+        if (remain <= 0) { el.textContent = 'Reset now'; return; }
+        var h = Math.floor(remain / 3600000);
+        var m = Math.floor((remain % 3600000) / 60000);
+        var s = Math.floor((remain % 60000) / 1000);
+        el.textContent = 'Resets in ' + h + 'h ' + m + 'm ' + s + 's';
+        if (remain > 0) setTimeout(tick, 1000);
+      }
+      tick();
     }
 
     function renderProviders() {
