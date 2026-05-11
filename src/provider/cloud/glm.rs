@@ -6,9 +6,11 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::provider::{Provider, ProviderBalance, ProviderError, UnifiedRequest,
-    BalanceStatus, PlanType, Metric, MetricKind, MetricStatus,
-    Alert, AlertLevel, BreakdownItem, ResetSchedule, ConfigSummary};
+use crate::provider::{
+    Alert, AlertLevel, BalanceStatus, BreakdownItem, ConfigSummary, Metric, MetricKind,
+    MetricStatus, PlanType, Provider, ProviderBalance, ProviderError, ResetSchedule,
+    UnifiedRequest,
+};
 
 /// GLM provider configuration.
 #[derive(Debug, Clone)]
@@ -95,7 +97,11 @@ fn build_provider_balance(
         });
 
         if pct >= 80.0 {
-            let alert_level = if pct >= 95.0 { AlertLevel::Critical } else { AlertLevel::Warn };
+            let alert_level = if pct >= 95.0 {
+                AlertLevel::Critical
+            } else {
+                AlertLevel::Warn
+            };
             alerts.push(Alert {
                 level: alert_level,
                 message: format!("{} quota {:.0}% used", type_label, pct),
@@ -123,8 +129,16 @@ fn build_provider_balance(
     ProviderBalance {
         provider_name: name.to_string(),
         status: BalanceStatus::Online,
-        plan: if level.is_empty() { None } else { Some(level.to_string()) },
-        plan_type: if is_coding { Some(PlanType::Coding) } else { Some(PlanType::Token) },
+        plan: if level.is_empty() {
+            None
+        } else {
+            Some(level.to_string())
+        },
+        plan_type: if is_coding {
+            Some(PlanType::Coding)
+        } else {
+            Some(PlanType::Token)
+        },
         alerts,
         metrics,
         breakdown,
@@ -162,17 +176,21 @@ struct QuotaLimit {
     /// Usage percentage (0–100).
     percentage: Option<f64>,
     /// Remaining quota amount (regular plan).
+    #[allow(dead_code)]
     remaining: Option<f64>,
     /// Total quota (regular plan).
+    #[allow(dead_code)]
     #[serde(default)]
     usage: Option<f64>,
     /// Used amount (regular plan).
+    #[allow(dead_code)]
     #[serde(rename = "currentValue", default)]
     current_value: Option<f64>,
     /// Quota unit (coding plan, e.g. 3 = tokens).
     #[serde(default)]
     unit: Option<u32>,
     /// Quota number (coding plan, e.g. 5).
+    #[allow(dead_code)]
     #[serde(default)]
     number: Option<u32>,
     /// Next reset time as Unix millis.
@@ -241,7 +259,13 @@ impl Provider for GlmProvider {
         let model = self.config.model.clone();
         let has_key = !self.config.api_key.is_empty();
 
-        Ok(Some(build_provider_balance("glm", &data, &host, has_key, model.as_deref())))
+        Ok(Some(build_provider_balance(
+            "glm",
+            &data,
+            &host,
+            has_key,
+            model.as_deref(),
+        )))
     }
 
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
@@ -274,8 +298,14 @@ mod tests {
                 number: Some(5),
                 next_reset_time: Some(1778499600000),
                 usage_details: Some(vec![
-                    UsageDetail { model_code: Some("glm-4".into()), usage: Some(1240) },
-                    UsageDetail { model_code: Some("coder-1".into()), usage: Some(580) },
+                    UsageDetail {
+                        model_code: Some("glm-4".into()),
+                        usage: Some(1240),
+                    },
+                    UsageDetail {
+                        model_code: Some("coder-1".into()),
+                        usage: Some(580),
+                    },
                 ]),
             },
             QuotaLimit {
@@ -296,7 +326,8 @@ mod tests {
             limits: Some(limits),
         };
 
-        let result = build_provider_balance("glm", &data, "open.bigmodel.cn", true, Some("glm-4-plus"));
+        let result =
+            build_provider_balance("glm", &data, "open.bigmodel.cn", true, Some("glm-4-plus"));
 
         assert_eq!(result.provider_name, "glm");
         assert_eq!(result.status, BalanceStatus::Online);
@@ -314,19 +345,17 @@ mod tests {
 
     #[test]
     fn glm_balance_alerts_on_high_usage() {
-        let limits = vec![
-            QuotaLimit {
-                limit_type: Some("TOKENS_LIMIT".into()),
-                percentage: Some(85.0),
-                remaining: Some(15.0),
-                usage: Some(100.0),
-                current_value: Some(85.0),
-                unit: Some(3),
-                number: Some(5),
-                next_reset_time: None,
-                usage_details: None,
-            },
-        ];
+        let limits = vec![QuotaLimit {
+            limit_type: Some("TOKENS_LIMIT".into()),
+            percentage: Some(85.0),
+            remaining: Some(15.0),
+            usage: Some(100.0),
+            current_value: Some(85.0),
+            unit: Some(3),
+            number: Some(5),
+            next_reset_time: None,
+            usage_details: None,
+        }];
 
         let data = QuotaData {
             level: Some("plus".into()),

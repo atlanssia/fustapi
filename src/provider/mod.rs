@@ -280,23 +280,24 @@ mod balance_struct_tests {
                 level: AlertLevel::Warn,
                 message: "Token quota 72% used".into(),
             }],
-            metrics: vec![
-                Metric {
-                    label: "Tokens".into(),
-                    kind: MetricKind::Percentage,
-                    value: 72.0,
-                    total: Some(100.0),
-                    unit: Some("%".into()),
-                    percentage: Some(72.0),
-                    status: MetricStatus::Ok,
-                },
-            ],
-            breakdown: vec![
-                BreakdownItem { label: "glm-4".into(), value: 1240.0, unit: "requests".into() },
-            ],
-            resets: vec![
-                ResetSchedule { label: "Token quota".into(), resets_at_ms: 1778499600000 },
-            ],
+            metrics: vec![Metric {
+                label: "Tokens".into(),
+                kind: MetricKind::Percentage,
+                value: 72.0,
+                total: Some(100.0),
+                unit: Some("%".into()),
+                percentage: Some(72.0),
+                status: MetricStatus::Ok,
+            }],
+            breakdown: vec![BreakdownItem {
+                label: "glm-4".into(),
+                value: 1240.0,
+                unit: "requests".into(),
+            }],
+            resets: vec![ResetSchedule {
+                label: "Token quota".into(),
+                resets_at_ms: 1778499600000,
+            }],
             config_summary: ConfigSummary {
                 provider_type: "cloud".into(),
                 endpoint: "open.bigmodel.cn".into(),
@@ -343,10 +344,22 @@ mod balance_struct_tests {
 
     #[test]
     fn balance_status_enum_values() {
-        assert_eq!(serde_json::to_string(&BalanceStatus::Online).unwrap(), "\"online\"");
-        assert_eq!(serde_json::to_string(&BalanceStatus::Offline).unwrap(), "\"offline\"");
-        assert_eq!(serde_json::to_string(&BalanceStatus::Error).unwrap(), "\"error\"");
-        assert_eq!(serde_json::to_string(&BalanceStatus::NoData).unwrap(), "\"no_data\"");
+        assert_eq!(
+            serde_json::to_string(&BalanceStatus::Online).unwrap(),
+            "\"online\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BalanceStatus::Offline).unwrap(),
+            "\"offline\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BalanceStatus::Error).unwrap(),
+            "\"error\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BalanceStatus::NoData).unwrap(),
+            "\"no_data\""
+        );
     }
 
     #[test]

@@ -5,9 +5,10 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::provider::{Provider, ProviderBalance, ProviderError, UnifiedRequest,
-    BalanceStatus, PlanType, Metric, MetricKind, MetricStatus,
-    Alert, AlertLevel, ConfigSummary};
+use crate::provider::{
+    Alert, AlertLevel, BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, PlanType,
+    Provider, ProviderBalance, ProviderError, UnifiedRequest,
+};
 
 /// `DeepSeek` provider configuration.
 #[allow(dead_code)]
@@ -61,7 +62,11 @@ fn build_balance_from_credit(
     endpoint: &str,
     has_key: bool,
 ) -> ProviderBalance {
-    let status = if balance <= 0.0 { MetricStatus::Critical } else { MetricStatus::Ok };
+    let status = if balance <= 0.0 {
+        MetricStatus::Critical
+    } else {
+        MetricStatus::Ok
+    };
 
     let mut alerts = Vec::new();
     if balance <= 0.0 {
@@ -173,7 +178,11 @@ impl Provider for DeepSeekProvider {
             let endpoint = self.config.endpoint.clone();
 
             return Ok(Some(build_balance_from_credit(
-                "deepseek", balance, &info.currency, &endpoint, has_key,
+                "deepseek",
+                balance,
+                &info.currency,
+                &endpoint,
+                has_key,
             )));
         }
 
@@ -216,6 +225,11 @@ mod tests {
     fn deepseek_balance_alerts_on_zero() {
         let result = build_balance_from_credit("deepseek", 0.0, "CNY", "api.deepseek.com", true);
         assert_eq!(result.metrics[0].status, MetricStatus::Critical);
-        assert!(result.alerts.iter().any(|a| a.level == AlertLevel::Critical));
+        assert!(
+            result
+                .alerts
+                .iter()
+                .any(|a| a.level == AlertLevel::Critical)
+        );
     }
 }

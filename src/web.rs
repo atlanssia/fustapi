@@ -778,7 +778,9 @@ mod tests {
 
     #[test]
     fn unified_balance_entry_serializes() {
-        use crate::provider::{ProviderBalance, BalanceStatus, Metric, MetricKind, MetricStatus, ConfigSummary};
+        use crate::provider::{
+            BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, ProviderBalance,
+        };
         let entry = UnifiedBalanceEntry {
             name: "glm".into(),
             provider_type: "cloud".into(),
@@ -811,7 +813,9 @@ mod tests {
             error: None,
         };
 
-        let resp = BalanceResponse { balances: vec![entry] };
+        let resp = BalanceResponse {
+            balances: vec![entry],
+        };
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"provider_name\":\"glm\""));
         assert!(json.contains("\"metrics\""));
