@@ -186,6 +186,7 @@ struct QuotaLimit {
     #[serde(rename = "currentValue", default)]
     current_value: Option<f64>,
     /// Quota unit (coding plan, e.g. 3 = tokens).
+    #[allow(dead_code)]
     #[serde(default)]
     unit: Option<u32>,
     /// Quota number (coding plan, e.g. 5).
@@ -325,8 +326,13 @@ mod tests {
             limits: Some(limits),
         };
 
-        let result =
-            build_provider_balance("glm", &data, "https://open.bigmodel.cn/api/coding/paas/v4", true, Some("glm-4-plus"));
+        let result = build_provider_balance(
+            "glm",
+            &data,
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+            true,
+            Some("glm-4-plus"),
+        );
 
         assert_eq!(result.provider_name, "glm");
         assert_eq!(result.status, BalanceStatus::Online);
@@ -362,7 +368,13 @@ mod tests {
             limits: Some(limits),
         };
 
-        let result = build_provider_balance("glm", &data, "https://open.bigmodel.cn/api/coding/paas/v4", true, None);
+        let result = build_provider_balance(
+            "glm",
+            &data,
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+            true,
+            None,
+        );
         assert!(result.alerts.iter().any(|a| a.message.contains("85")));
     }
 }
