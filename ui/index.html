@@ -1434,11 +1434,11 @@
             <div class="metric"><span>In-Flight</span><strong id="metric-inflight">0</strong></div>
           </div>
 
-          <!-- Provider balance cards (full width) -->
-          <div class="balance-list" id="dashboard-balance-list">
-            <div class="balance-list-title">Providers</div>
-            <div id="dashboard-balance-entries" style="display:contents">
-              <div class="balance-card"><span class="bc-name" style="color:var(--muted)">Loading…</span></div>
+          <!-- Provider balance split panel (full width) -->
+          <div id="dashboard-balance-list">
+            <div class="balance-list-title" style="font-size:0.7rem;color:var(--primary);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:0.5rem">Providers</div>
+            <div id="dashboard-balance-entries">
+              <div style="color:var(--muted);padding:1rem;text-align:center">Loading...</div>
             </div>
           </div>
 
@@ -1685,6 +1685,8 @@
       routeProviders: [],
       confirmAction: null,
       balances: [],
+      selectedProvider: null,
+      providerSearch: '',
     };
 
     function byId(id) {
@@ -1897,10 +1899,9 @@
       const el = byId("topbar-balance");
       if (!state.balances.length) { el.innerHTML = ''; return; }
       el.innerHTML = state.balances.map((b) => {
-        let cls = 'muted';
-        let title = b.name + ': not configured';
-        if (b.error) { cls = 'error'; title = b.name + ': ' + b.error; }
-        else if (b.balance) { cls = 'ok'; title = b.name + ': ' + b.balance; }
+        var sc = getStatusClass(b);
+        var cls = sc === 'online' ? 'ok' : sc === 'offline' ? 'error' : sc === 'warn' ? 'warn' : 'muted';
+        var title = b.name + ': ' + (b.error ? b.error : b.balance ? b.balance.status : 'no data');
         return '<span class="balance-dot ' + cls + '" title="' + escapeHtml(title) + '" role="status" aria-label="' + escapeHtml(title) + '"></span>';
       }).join('');
     }
@@ -1908,105 +1909,301 @@
     function renderDashboardBalance() {
       const container = byId("dashboard-balance-entries");
       if (!state.balances.length) {
-        container.innerHTML = '<div class="balance-card"><span class="bc-name" style="color:var(--muted)">No balance data.</span></div>';
+        container.innerHTML = '<div style="color:var(--muted);padding:1rem;text-align:center">No balance data.</div>';
         return;
       }
-      container.innerHTML = state.balances.map((b) => {
-        // Try to parse structured JSON balance (GLM format)
-        let glmData = null;
-        if (b.balance) {
-          try { glmData = JSON.parse(b.balance); } catch (_) {}
+
+      // Compute stats
+      var online = 0, warn = 0, offline = 0, noData = 0;
+      state.balances.forEach(function(b) {
+        var sc = getStatusClass(b);
+        if (sc === 'online') online++;
+        else if (sc === 'warn') warn++;
+        else if (sc === 'offline') offline++;
+        else noData++;
+      });
+
+      // Build list items
+      var itemsHtml = state.balances.map(function(b) {
+        var sc = getStatusClass(b);
+        var offCls = sc === 'offline' ? ' offline' : '';
+        var selCls = state.selectedProvider === b.name ? ' selected' : '';
+        var pillCls = getPillClass(b.name);
+
+        // Row 1: status dot + name + pills
+        var row1 = '<span class="p-status ' + sc + '"></span>' +
+          '<span class="p-name">' + escapeHtml(b.name) + '</span>';
+
+        if (b.balance && b.balance.plan) {
+          row1 += '<span class="p-pill ' + pillCls + '">' + escapeHtml(b.balance.plan) + '</span>';
+        }
+        if (b.balance && b.balance.plan_type) {
+          row1 += '<span class="p-pill ' + getPlanTypeClass(b.balance.plan_type) + '">' + escapeHtml(b.balance.plan_type) + '</span>';
         }
 
-        if (glmData && glmData.limits) {
-          return renderGlmBalanceCard(b.name, glmData);
+        // Mini bar for first percentage metric
+        if (b.balance && b.balance.metrics && b.balance.metrics.length > 0) {
+          var firstPct = b.balance.metrics.find(function(m) { return m.kind === 'percentage'; });
+          if (firstPct) {
+            var barStatus = firstPct.percentage >= 90 ? 'critical' : firstPct.percentage >= 70 ? 'warn' : 'ok';
+            row1 += '<span class="p-mini-bar"><span class="p-mini-bar-fill ' + barStatus + '" style="width:' + Math.min(firstPct.percentage, 100) + '%"></span></span>';
+          } else {
+            var absM = b.balance.metrics[0];
+            row1 += '<span style="font-size:0.55rem;color:var(--muted)">' + escapeHtml(String(absM.value)) + ' ' + escapeHtml(absM.unit || '') + '</span>';
+          }
         }
 
-        // Default simple balance card
-        let cls = 'warn', text = 'No data';
-        if (b.error) { cls = 'error'; text = b.error; }
-        else if (b.balance) { cls = 'ok'; text = b.balance; }
-        else if (!b.has_key) { text = 'Not configured'; }
-
-        return '<div class="balance-card">' +
-          '<div class="bc-name">' + escapeHtml(b.name) + '</div>' +
-          '<div class="bc-detail">' + escapeHtml(text) + '</div>' +
-          '</div>';
-      }).join('');
-    }
-
-    function renderGlmBalanceCard(name, data) {
-      const planLabel = data.plan ? data.plan.toUpperCase() : '';
-      const isCoding = data.is_coding_plan;
-
-      let parts = [];
-      let countdownHtml = '';
-
-      for (const limit of (data.limits || [])) {
-        const pct = limit.pct || 0;
-        var barCls = pct >= 100 ? 'full' : pct >= 80 ? 'warn' : 'ok';
-        var pctCls = pct >= 100 ? 'full' : pct >= 80 ? 'warn' : 'ok';
-        var typeLabel = limit.type === 'TOKENS_LIMIT' ? 'Tokens' : 'Time';
-
-        var detail = '';
-        if (limit.remaining != null) {
-          detail = escapeHtml(String(limit.remaining)) + ' remaining';
-          if (limit.total != null) detail += ' / ' + escapeHtml(String(limit.total));
-        }
-        if (isCoding && limit.type === 'TOKENS_LIMIT' && limit.number != null) {
-          detail = 'Coding plan · ' + escapeHtml(String(limit.number)) + ' quota' + (limit.unit ? ' (unit ' + limit.unit + ')' : '');
+        // Row 2: metrics summary or error/no data text
+        var row2 = '';
+        if (b.error) {
+          row2 = escapeHtml(truncateError(b.error));
+        } else if (b.balance && b.balance.metrics && b.balance.metrics.length > 0) {
+          row2 = b.balance.metrics.map(function(m) {
+            if (m.kind === 'percentage') return escapeHtml(m.label) + ' ' + m.percentage + '%';
+            return escapeHtml(m.label) + ' ' + m.value + ' ' + escapeHtml(m.unit || '');
+          }).join(' &middot; ');
+        } else {
+          row2 = 'No data';
         }
 
-        parts.push('<div style="margin-bottom:0.6rem">' +
-          '<div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:0.2rem">' +
-            '<span style="color:var(--muted)">' + typeLabel + '</span>' +
-            '<span style="font-size:0.8rem;font-weight:700" class="bc-pct ' + pctCls + '">' + pct.toFixed(0) + '%</span>' +
-          '</div>' +
-          '<div class="bc-bar"><div class="bc-bar-fill ' + barCls + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
-          (detail ? '<div style="font-size:0.7rem;color:var(--muted);margin-top:0.15rem">' + detail + '</div>' : '') +
-          '</div>');
-
-        // Per-model usage breakdown
-        if (limit.usage_details && limit.usage_details.length > 0) {
-          var tags = limit.usage_details.map(function(d) {
-            return '<span class="bc-model-tag">' + escapeHtml(d.model || '?') + ': ' + (d.usage || 0) + '</span>';
-          }).join('');
-          parts.push('<div class="bc-models">' + tags + '</div>');
-        }
-
-        // Countdown timer for exhausted limits
-        if (pct >= 100 && limit.reset_at_ms) {
-          var resetId = 'countdown-' + name.replace(/[^a-z0-9]/gi, '') + '-' + (limit.type || '');
-          countdownHtml += '<div class="bc-countdown" id="' + resetId + '">Resets in ...</div>';
-          // Schedule countdown
-          window.setTimeout(function() { startCountdown(resetId, limit.reset_at_ms); }, 100);
-        }
-      }
-
-      return '<div class="balance-card">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">' +
-          '<div class="bc-name">' + escapeHtml(name) + '</div>' +
-          (planLabel ? '<span class="bc-plan">' + escapeHtml(planLabel) + (isCoding ? ' coding' : '') + '</span>' : '') +
-        '</div>' +
-        parts.join('') +
-        countdownHtml +
+        return '<div class="provider-item' + offCls + selCls + '" data-provider-balance="' + escapeHtml(b.name) + '">' +
+          '<div class="provider-item-row1">' + row1 + '</div>' +
+          '<div class="provider-item-row2">' + row2 + '</div>' +
         '</div>';
+      }).join('');
+
+      // Build detail panel
+      var detailHtml = '';
+      if (state.selectedProvider) {
+        var sel = state.balances.find(function(b) { return b.name === state.selectedProvider; });
+        if (sel) {
+          detailHtml = renderProviderDetail(sel);
+        } else {
+          state.selectedProvider = null;
+          detailHtml = renderProviderOverview(online, warn, offline, noData);
+        }
+      } else {
+        detailHtml = renderProviderOverview(online, warn, offline, noData);
+      }
+
+      container.innerHTML =
+        '<div class="providers-panel">' +
+          '<div class="providers-list">' +
+            '<div class="providers-header">' +
+              '<h3>Providers <span style="font-weight:400;color:var(--muted)">(' + state.balances.length + ')</span></h3>' +
+              '<div class="stats">' +
+                '<span style="color:var(--success)">' + online + ' on</span>' +
+                (warn ? '<span style="color:var(--warning)">' + warn + ' warn</span>' : '') +
+                (offline ? '<span style="color:var(--danger)">' + offline + ' off</span>' : '') +
+              '</div>' +
+            '</div>' +
+            '<div class="providers-search"><input type="text" placeholder="Search providers..." value="' + escapeHtml(state.providerSearch) + '"></div>' +
+            '<div class="providers-list-items">' + itemsHtml + '</div>' +
+          '</div>' +
+          '<div class="providers-detail">' + detailHtml + '</div>' +
+        '</div>';
+
+      // Bind click handlers on provider items
+      container.querySelectorAll('[data-provider-balance]').forEach(function(el) {
+        el.addEventListener('click', function() {
+          state.selectedProvider = el.getAttribute('data-provider-balance');
+          renderDashboardBalance();
+        });
+      });
+
+      // Bind search handler
+      var searchInput = container.querySelector('.providers-search input');
+      if (searchInput) {
+        searchInput.addEventListener('input', function() {
+          state.providerSearch = this.value;
+          filterProviderList();
+        });
+      }
     }
 
-    function startCountdown(elId, resetAtMs) {
-      var el = document.getElementById(elId);
-      if (!el) return;
-      function tick() {
-        var now = Date.now();
-        var remain = resetAtMs - now;
-        if (remain <= 0) { el.textContent = 'Reset now'; return; }
-        var h = Math.floor(remain / 3600000);
-        var m = Math.floor((remain % 3600000) / 60000);
-        var s = Math.floor((remain % 60000) / 1000);
-        el.textContent = 'Resets in ' + h + 'h ' + m + 'm ' + s + 's';
-        if (remain > 0) setTimeout(tick, 1000);
+    function renderProviderOverview(online, warn, offline, noData) {
+      var html = '<div class="detail-overview">';
+      html += '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.4"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>';
+      html += '<p style="font-size:0.8rem;margin:0.5rem 0 0">Select a provider to view details</p>';
+      html += '<div class="detail-stats">';
+      html += '<div class="detail-stat"><span class="num" style="color:var(--success)">' + online + '</span><span class="lbl">Online</span></div>';
+      if (warn) html += '<div class="detail-stat"><span class="num" style="color:var(--warning)">' + warn + '</span><span class="lbl">Warning</span></div>';
+      if (offline) html += '<div class="detail-stat"><span class="num" style="color:var(--danger)">' + offline + '</span><span class="lbl">Offline</span></div>';
+      if (noData) html += '<div class="detail-stat"><span class="num" style="color:var(--muted)">' + noData + '</span><span class="lbl">No data</span></div>';
+      html += '</div>';
+
+      // Collect all alerts
+      var allAlerts = [];
+      state.balances.forEach(function(b) {
+        if (b.balance && b.balance.alerts) {
+          b.balance.alerts.forEach(function(a) {
+            allAlerts.push({ provider: b.name, alert: a });
+          });
+        }
+      });
+      if (allAlerts.length > 0) {
+        html += '<div class="detail-alerts" style="margin-top:1rem;width:100%;text-align:left">';
+        html += '<div style="font-size:0.6rem;text-transform:uppercase;color:var(--muted);letter-spacing:0.04em;margin-bottom:0.3rem">Alerts</div>';
+        allAlerts.forEach(function(a) {
+          var sev = a.alert.severity || 'warn';
+          html += '<div class="detail-alert-item ' + escapeHtml(sev) + '">' + escapeHtml(a.provider) + ': ' + escapeHtml(a.alert.message || '') + '</div>';
+        });
+        html += '</div>';
       }
-      tick();
+
+      html += '</div>';
+      return html;
+    }
+
+    function renderProviderDetail(b) {
+      var bal = b.balance;
+      var brandCls = getBrandClass(b.name);
+      var initial = b.name.charAt(0).toUpperCase();
+
+      var html = '<div class="detail-provider-header">';
+      html += '<div class="detail-provider-icon ' + brandCls + '">' + escapeHtml(initial) + '</div>';
+      html += '<div><div class="dph-name">' + escapeHtml(b.name) + '</div>';
+      html += '<div class="dph-type">' + escapeHtml(b.type || 'unknown');
+      if (bal && bal.config_summary && bal.config_summary.endpoint) {
+        html += ' &middot; ' + escapeHtml(bal.config_summary.endpoint);
+      }
+      html += '</div></div>';
+      if (bal && bal.status) {
+        var sCls = bal.status === 'online' ? 'color:var(--success)' : bal.status === 'offline' ? 'color:var(--danger)' : 'color:var(--warning)';
+        html += '<span style="margin-left:auto;font-size:0.65rem;font-weight:600;' + sCls + '">' + escapeHtml(bal.status) + '</span>';
+      }
+      html += '</div>';
+
+      // Metrics cards
+      if (bal && bal.metrics && bal.metrics.length > 0) {
+        html += '<div class="detail-metrics">';
+        bal.metrics.forEach(function(m) {
+          var val = m.kind === 'percentage' ? m.percentage + '%' : m.value + ' ' + (m.unit || '');
+          html += '<div class="detail-metric-card">';
+          html += '<div class="dmc-label">' + escapeHtml(m.label) + '</div>';
+          html += '<div class="dmc-value">' + escapeHtml(String(val)) + '</div>';
+          if (m.kind === 'percentage') {
+            var barSt = (m.percentage || 0) >= 90 ? 'critical' : (m.percentage || 0) >= 70 ? 'warn' : 'ok';
+            html += '<div class="dmc-bar"><div class="dmc-bar-fill ' + barSt + '" style="width:' + Math.min(m.percentage || 0, 100) + '%"></div></div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
+      // Alerts
+      if (bal && bal.alerts && bal.alerts.length > 0) {
+        html += '<div class="detail-alerts">';
+        html += '<div class="detail-section"><h5>Alerts</h5>';
+        bal.alerts.forEach(function(a) {
+          var sev = a.severity || 'warn';
+          html += '<div class="detail-alert-item ' + escapeHtml(sev) + '">' + escapeHtml(a.message || '') + '</div>';
+        });
+        html += '</div></div>';
+      }
+
+      // Breakdown
+      if (bal && bal.breakdown && bal.breakdown.length > 0) {
+        html += '<div class="detail-section"><h5>Breakdown</h5>';
+        html += '<table><tbody>';
+        bal.breakdown.forEach(function(item) {
+          html += '<tr><td>' + escapeHtml(item.label) + '</td><td style="text-align:right;font-weight:600">' + escapeHtml(String(item.value)) + ' ' + escapeHtml(item.unit || '') + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+      }
+
+      // Resets
+      if (bal && bal.resets && bal.resets.length > 0) {
+        html += '<div class="detail-section"><h5>Resets</h5>';
+        bal.resets.forEach(function(r) {
+          html += '<div class="detail-config-row"><span class="dcr-key">' + escapeHtml(r.label) + '</span><span class="dcr-val">' + escapeHtml(formatResetTime(r.resets_at_ms)) + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      // Config summary
+      if (bal && bal.config_summary) {
+        var cs = bal.config_summary;
+        html += '<div class="detail-config">';
+        html += '<div class="detail-section"><h5>Config</h5>';
+        if (cs.provider_type) html += '<div class="detail-config-row"><span class="dcr-key">Type</span><span class="dcr-val">' + escapeHtml(cs.provider_type) + '</span></div>';
+        if (cs.endpoint) html += '<div class="detail-config-row"><span class="dcr-key">Endpoint</span><span class="dcr-val">' + escapeHtml(cs.endpoint) + '</span></div>';
+        if (cs.has_key != null) html += '<div class="detail-config-row"><span class="dcr-key">API Key</span><span class="dcr-val">' + (cs.has_key ? 'Configured' : 'Not set') + '</span></div>';
+        if (cs.model) html += '<div class="detail-config-row"><span class="dcr-key">Model</span><span class="dcr-val">' + escapeHtml(cs.model) + '</span></div>';
+        html += '</div></div>';
+      }
+
+      // Error display
+      if (b.error) {
+        html += '<div class="detail-alerts"><div class="detail-alert-item critical">Error: ' + escapeHtml(b.error) + '</div></div>';
+      }
+
+      return html;
+    }
+
+    function getStatusClass(b) {
+      if (b.error) return 'offline';
+      if (!b.balance) return 'no_data';
+      if (b.balance.status === 'online') {
+        // Check for warning alerts
+        if (b.balance.alerts && b.balance.alerts.length > 0) return 'warn';
+        return 'online';
+      }
+      if (b.balance.status === 'offline') return 'offline';
+      return b.balance.status || 'no_data';
+    }
+
+    function getPillClass(name) {
+      var n = (name || '').toLowerCase();
+      if (n === 'glm') return 'glm';
+      if (n === 'deepseek') return 'deepseek';
+      if (n === 'openai') return 'openai';
+      if (n === 'z.ai' || n === 'zai') return 'zai';
+      if (n === 'omlx') return 'omlx';
+      if (n === 'lmstudio') return 'lmstudio';
+      if (n === 'sglang') return 'sglang';
+      return 'credit';
+    }
+
+    function getBrandClass(name) {
+      var n = (name || '').toLowerCase();
+      if (n === 'glm') return 'brand-glm';
+      if (n === 'deepseek') return 'brand-deepseek';
+      if (n === 'openai') return 'brand-openai';
+      if (n === 'z.ai' || n === 'zai') return 'brand-zai';
+      if (n === 'omlx') return 'brand-omlx';
+      if (n === 'lmstudio') return 'brand-lmstudio';
+      if (n === 'sglang') return 'brand-sglang';
+      return 'brand-default';
+    }
+
+    function getPlanTypeClass(pt) {
+      if (pt === 'credit') return 'credit';
+      return 'credit';
+    }
+
+    function formatResetTime(ms) {
+      if (!ms) return 'N/A';
+      var diff = ms - Date.now();
+      if (diff <= 0) return 'Now';
+      var h = Math.floor(diff / 3600000);
+      var m = Math.floor((diff % 3600000) / 60000);
+      return h + 'h ' + m + 'm';
+    }
+
+    function filterProviderList() {
+      var q = state.providerSearch.toLowerCase();
+      var items = document.querySelectorAll('.providers-list-items .provider-item');
+      items.forEach(function(el) {
+        var name = (el.getAttribute('data-provider-balance') || '').toLowerCase();
+        el.style.display = name.indexOf(q) !== -1 ? '' : 'none';
+      });
+    }
+
+    function truncateError(err) {
+      if (!err) return '';
+      if (err.length <= 50) return err;
+      return err.substring(0, 47) + '...';
     }
 
     function renderProviders() {
