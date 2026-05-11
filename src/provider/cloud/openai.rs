@@ -577,36 +577,45 @@ impl Provider for OpenAIProvider {
             || self.config.endpoint.contains("127.0.0.1")
             || self.config.endpoint.contains("::1");
 
-        if !is_local {
-            return Ok(None);
-        }
-
         let base = self
             .config
             .endpoint
             .trim_end_matches("/v1")
             .trim_end_matches('/');
 
-        // Strategy 1: Try /health endpoint (omlx returns JSON, vLLM/SGLang return empty 200)
-        let health_ok = match self.client.get(format!("{base}/health")).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                // Try to parse as JSON (omlx-style with engine_pool)
-                match resp.text().await {
-                    Ok(text) if text.trim().is_empty() => Some((true, None)),
-                    Ok(text) => {
-                        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
-                        parsed.ok().map(|v| (true, Some(v)))
+        // Strategy 1 (local only): Try /health endpoint
+        //   omlx returns rich JSON with engine_pool, vLLM/SGLang return empty 200
+        let health_ok = if is_local {
+            match self.client.get(format!("{base}/health")).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.text().await {
+                        Ok(text) if text.trim().is_empty() => Some((true, None)),
+                        Ok(text) => {
+                            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
+                            parsed.ok().map(|v| (true, Some(v)))
+                        }
+                        Err(_) => Some((true, None)),
                     }
-                    Err(_) => Some((true, None)),
                 }
+                Ok(_) => Some((false, None)),
+                Err(_) => None,
             }
-            Ok(_) => Some((false, None)),
-            Err(_) => None,
+        } else {
+            None
         };
 
-        // Strategy 2: Fallback to /v1/models for model listing (vLLM, LM Studio)
-        let models_data: Option<Vec<String>> = if health_ok.is_none() || health_ok.as_ref().map(|(ok, _)| !ok).unwrap_or(false) {
-            match self.client.get(format!("{}/v1/models", base)).send().await {
+        // Strategy 2: Try /v1/models for model listing (all endpoints)
+        //   Local: fallback when /health didn't return data
+        //   Remote: liveness check via OpenAI-compatible endpoint
+        let need_models = health_ok.is_none()
+            || health_ok.as_ref().map(|(ok, _)| !ok).unwrap_or(false);
+        let models_data: Option<Vec<String>> = if need_models {
+            let mut builder = self.client.get(format!("{}/v1/models", base));
+            if !self.config.api_key.is_empty() && !is_local {
+                builder =
+                    builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+            }
+            match builder.send().await {
                 Ok(resp) if resp.status().is_success() => resp
                     .json::<serde_json::Value>()
                     .await
@@ -614,7 +623,11 @@ impl Provider for OpenAIProvider {
                     .and_then(|v| {
                         v.get("data")?
                             .as_array()
-                            .map(|arr| arr.iter().filter_map(|m| m.get("id")?.as_str().map(String::from)).collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                                    .collect()
+                            })
                     }),
                 _ => None,
             }
@@ -669,7 +682,7 @@ impl Provider for OpenAIProvider {
             let cur_mem = pool.get("current_model_memory").and_then(|v| v.as_u64()).unwrap_or(0);
 
             let mem_pct = if max_mem > 0 {
-                cur_mem as f64 / max_mem as f64 * 100.0
+                (cur_mem as f64 / max_mem as f64 * 10000.0).round() / 100.0
             } else {
                 0.0
             };

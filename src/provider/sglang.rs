@@ -10,6 +10,7 @@ use crate::provider::{Provider, ProviderError, UnifiedRequest};
 pub struct SglConfig {
     /// The base URL of the `SGLang` server.
     pub endpoint: String,
+    pub api_key: String,
     pub model: Option<String>,
 }
 
@@ -17,6 +18,7 @@ impl Default for SglConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://localhost:30000/v1".to_string(),
+            api_key: String::new(),
             model: None,
         }
     }
@@ -37,7 +39,7 @@ impl SglProvider {
         let openai_backend = crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
                 endpoint: config.endpoint.clone(),
-                api_key: "sglang".to_string(),
+                api_key: config.api_key.clone(),
                 model: config.model.clone(),
                 stream_options: false,
             },
@@ -78,5 +80,11 @@ impl Provider for SglProvider {
 
     fn name(&self) -> &'static str {
         "sglang"
+    }
+
+    async fn balance(
+        &self,
+    ) -> Result<Option<crate::provider::ProviderBalance>, ProviderError> {
+        self.openai_backend.balance().await
     }
 }

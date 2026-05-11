@@ -184,12 +184,14 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
         "lmstudio" => Box::new(crate::provider::lmstudio::LmStudioProvider::new(
             crate::provider::lmstudio::LmStudioConfig {
                 endpoint,
+                api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
             },
         )),
         "sglang" => Box::new(crate::provider::sglang::SglProvider::new(
             crate::provider::sglang::SglConfig {
                 endpoint,
+                api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
             },
         )),

@@ -120,7 +120,7 @@ impl Provider for OmlxProvider {
         let pool = &body.engine_pool;
 
         let mem_pct = if pool.max_model_memory > 0 {
-            pool.current_model_memory as f64 / pool.max_model_memory as f64 * 100.0
+            (pool.current_model_memory as f64 / pool.max_model_memory as f64 * 10000.0).round() / 100.0
         } else {
             0.0
         };
