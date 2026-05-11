@@ -93,19 +93,19 @@ pub struct MessageResponse {
 }
 
 #[derive(Serialize)]
-pub struct BalanceEntry {
+pub struct UnifiedBalanceEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub provider_type: String,
     pub endpoint: String,
     pub has_key: bool,
-    pub balance: Option<String>,
+    pub balance: Option<crate::provider::ProviderBalance>,
     pub error: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct BalanceResponse {
-    pub balances: Vec<BalanceEntry>,
+    pub balances: Vec<UnifiedBalanceEntry>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -502,7 +502,7 @@ pub async fn balance_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) ->
             let has_key = cfg.api_key.is_some();
             let provider = crate::config::create_provider(&name, cfg);
             tokio::spawn(async move {
-                let entry = |balance, error| BalanceEntry {
+                let entry = |balance, error| UnifiedBalanceEntry {
                     name,
                     provider_type: ptype,
                     endpoint,
@@ -524,7 +524,7 @@ pub async fn balance_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) ->
 
     let mut balances = Vec::with_capacity(tasks.len());
     for handle in tasks {
-        balances.push(handle.await.unwrap_or_else(|e| BalanceEntry {
+        balances.push(handle.await.unwrap_or_else(|e| UnifiedBalanceEntry {
             name: "unknown".into(),
             provider_type: "unknown".into(),
             endpoint: String::new(),
@@ -774,5 +774,46 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"id\":\"gpt-4\""));
         assert!(json.contains("\"providers\":[\"openai\"]"));
+    }
+
+    #[test]
+    fn unified_balance_entry_serializes() {
+        use crate::provider::{ProviderBalance, BalanceStatus, Metric, MetricKind, MetricStatus, ConfigSummary};
+        let entry = UnifiedBalanceEntry {
+            name: "glm".into(),
+            provider_type: "cloud".into(),
+            endpoint: "open.bigmodel.cn".into(),
+            has_key: true,
+            balance: Some(ProviderBalance {
+                provider_name: "glm".into(),
+                status: BalanceStatus::Online,
+                plan: Some("plus".into()),
+                plan_type: None,
+                alerts: vec![],
+                metrics: vec![Metric {
+                    label: "Tokens".into(),
+                    kind: MetricKind::Percentage,
+                    value: 72.0,
+                    total: Some(100.0),
+                    unit: Some("%".into()),
+                    percentage: Some(72.0),
+                    status: MetricStatus::Ok,
+                }],
+                breakdown: vec![],
+                resets: vec![],
+                config_summary: ConfigSummary {
+                    provider_type: "cloud".into(),
+                    endpoint: "open.bigmodel.cn".into(),
+                    has_key: true,
+                    model: None,
+                },
+            }),
+            error: None,
+        };
+
+        let resp = BalanceResponse { balances: vec![entry] };
+        let json = serde_json::to_string(&resp).expect("should serialize");
+        assert!(json.contains("\"provider_name\":\"glm\""));
+        assert!(json.contains("\"metrics\""));
     }
 }
