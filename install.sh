@@ -180,4 +180,5 @@ else
 fi
 
 printf "\n${GREEN}Success:${NC} FustAPI $VERSION installed to $INSTALL_DIR/$BINARY_NAME\n"
-printf "Run '${BLUE}fustapi serve${NC}' to start the gateway.\n"
+printf "\nRun '${BLUE}fustapi serve${NC}' to start the gateway, then open:\n"
+printf "  ${BLUE}http://localhost:8800/ui${NC}\n"
