@@ -147,9 +147,212 @@ pub enum ProviderError {
     Stream(String),
 }
 
+// ── Unified Balance Types ────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BalanceStatus {
+    Online,
+    Offline,
+    Error,
+    NoData,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanType {
+    Coding,
+    Token,
+    Credit,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertLevel {
+    Warn,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricKind {
+    Percentage,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricStatus {
+    Ok,
+    Warn,
+    Critical,
+}
+
+impl MetricStatus {
+    pub fn from_percentage(pct: f64) -> Self {
+        if pct >= 95.0 {
+            Self::Critical
+        } else if pct >= 80.0 {
+            Self::Warn
+        } else {
+            Self::Ok
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Metric {
+    pub label: String,
+    pub kind: MetricKind,
+    pub value: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentage: Option<f64>,
+    pub status: MetricStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Alert {
+    pub level: AlertLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BreakdownItem {
+    pub label: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResetSchedule {
+    pub label: String,
+    pub resets_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigSummary {
+    pub provider_type: String,
+    pub endpoint: String,
+    pub has_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderBalance {
+    pub provider_name: String,
+    pub status: BalanceStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<PlanType>,
+    pub alerts: Vec<Alert>,
+    pub metrics: Vec<Metric>,
+    pub breakdown: Vec<BreakdownItem>,
+    pub resets: Vec<ResetSchedule>,
+    pub config_summary: ConfigSummary,
+}
+
 // ── Provider module exports ───────────────────────────────────────────
 
 pub mod cloud;
 pub mod lmstudio;
 pub mod omlx;
 pub mod sglang;
+
+#[cfg(test)]
+mod balance_struct_tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn provider_balance_serializes_full_example() {
+        let balance = ProviderBalance {
+            provider_name: "glm".into(),
+            status: BalanceStatus::Online,
+            plan: Some("plus".into()),
+            plan_type: Some(PlanType::Coding),
+            alerts: vec![Alert {
+                level: AlertLevel::Warn,
+                message: "Token quota 72% used".into(),
+            }],
+            metrics: vec![
+                Metric {
+                    label: "Tokens".into(),
+                    kind: MetricKind::Percentage,
+                    value: 72.0,
+                    total: Some(100.0),
+                    unit: Some("%".into()),
+                    percentage: Some(72.0),
+                    status: MetricStatus::Ok,
+                },
+            ],
+            breakdown: vec![
+                BreakdownItem { label: "glm-4".into(), value: 1240.0, unit: "requests".into() },
+            ],
+            resets: vec![
+                ResetSchedule { label: "Token quota".into(), resets_at_ms: 1778499600000 },
+            ],
+            config_summary: ConfigSummary {
+                provider_type: "cloud".into(),
+                endpoint: "open.bigmodel.cn".into(),
+                has_key: true,
+                model: Some("glm-4-plus".into()),
+            },
+        };
+
+        let json = serde_json::to_string(&balance).expect("should serialize");
+        assert!(json.contains("\"provider_name\":\"glm\""));
+        assert!(json.contains("\"status\":\"online\""));
+        assert!(json.contains("\"plan_type\":\"coding\""));
+        assert!(json.contains("\"metrics\""));
+        assert!(json.contains("\"breakdown\""));
+        assert!(json.contains("\"resets\""));
+        assert!(json.contains("\"config_summary\""));
+    }
+
+    #[test]
+    fn provider_balance_minimal_serializes() {
+        let balance = ProviderBalance {
+            provider_name: "omlx".into(),
+            status: BalanceStatus::Online,
+            plan: None,
+            plan_type: None,
+            alerts: vec![],
+            metrics: vec![],
+            breakdown: vec![],
+            resets: vec![],
+            config_summary: ConfigSummary {
+                provider_type: "local".into(),
+                endpoint: "localhost:8000".into(),
+                has_key: false,
+                model: None,
+            },
+        };
+
+        let json = serde_json::to_string(&balance).expect("should serialize");
+        assert!(json.contains("\"provider_name\":\"omlx\""));
+        assert!(json.contains("\"status\":\"online\""));
+        assert!(!json.contains("\"plan\":"));
+        assert!(!json.contains("\"plan_type\":"));
+    }
+
+    #[test]
+    fn balance_status_enum_values() {
+        assert_eq!(serde_json::to_string(&BalanceStatus::Online).unwrap(), "\"online\"");
+        assert_eq!(serde_json::to_string(&BalanceStatus::Offline).unwrap(), "\"offline\"");
+        assert_eq!(serde_json::to_string(&BalanceStatus::Error).unwrap(), "\"error\"");
+        assert_eq!(serde_json::to_string(&BalanceStatus::NoData).unwrap(), "\"no_data\"");
+    }
+
+    #[test]
+    fn metric_status_derived_from_percentage() {
+        assert_eq!(MetricStatus::from_percentage(72.0), MetricStatus::Ok);
+        assert_eq!(MetricStatus::from_percentage(80.0), MetricStatus::Warn);
+        assert_eq!(MetricStatus::from_percentage(95.0), MetricStatus::Critical);
+    }
+}
