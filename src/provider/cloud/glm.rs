@@ -67,9 +67,7 @@ fn build_provider_balance(
     let level = data.level.as_deref().unwrap_or("");
     let limits = data.limits.as_deref().unwrap_or(&[]);
 
-    let is_coding = limits
-        .iter()
-        .any(|l| l.limit_type.as_deref() == Some("TOKENS_LIMIT") && l.unit.is_some());
+    let is_coding = endpoint.contains("/coding/");
 
     let mut alerts = Vec::new();
     let mut metrics = Vec::new();
@@ -82,7 +80,7 @@ fn build_provider_balance(
 
         let type_label = match l.limit_type.as_deref() {
             Some("TOKENS_LIMIT") => "Tokens",
-            Some("TIME_LIMIT") => "Time",
+            Some("TIME_LIMIT") => "MCP",
             other => other.unwrap_or("Usage"),
         };
 
@@ -94,6 +92,7 @@ fn build_provider_balance(
             unit: Some("%".to_string()),
             percentage: Some(pct),
             status: status.clone(),
+            reset_at_ms: l.next_reset_time,
         });
 
         if pct >= 80.0 {
@@ -327,7 +326,7 @@ mod tests {
         };
 
         let result =
-            build_provider_balance("glm", &data, "open.bigmodel.cn", true, Some("glm-4-plus"));
+            build_provider_balance("glm", &data, "https://open.bigmodel.cn/api/coding/paas/v4", true, Some("glm-4-plus"));
 
         assert_eq!(result.provider_name, "glm");
         assert_eq!(result.status, BalanceStatus::Online);
@@ -337,7 +336,8 @@ mod tests {
         assert_eq!(result.metrics[0].label, "Tokens");
         assert_eq!(result.metrics[0].percentage, Some(72.0));
         assert_eq!(result.metrics[0].status, MetricStatus::Ok);
-        assert_eq!(result.metrics[1].label, "Time");
+        assert_eq!(result.metrics[0].reset_at_ms, Some(1778499600000));
+        assert_eq!(result.metrics[1].label, "MCP");
         assert_eq!(result.breakdown.len(), 2);
         assert_eq!(result.resets.len(), 1);
         assert!(result.config_summary.has_key);
@@ -362,7 +362,7 @@ mod tests {
             limits: Some(limits),
         };
 
-        let result = build_provider_balance("glm", &data, "open.bigmodel.cn", true, None);
+        let result = build_provider_balance("glm", &data, "https://open.bigmodel.cn/api/coding/paas/v4", true, None);
         assert!(result.alerts.iter().any(|a| a.message.contains("85")));
     }
 }

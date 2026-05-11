@@ -800,6 +800,7 @@ mod tests {
                     unit: Some("%".into()),
                     percentage: Some(72.0),
                     status: MetricStatus::Ok,
+                    reset_at_ms: None,
                 }],
                 breakdown: vec![],
                 resets: vec![],

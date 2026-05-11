@@ -90,6 +90,7 @@ fn build_balance_from_credit(
             unit: Some(currency.to_string()),
             percentage: None,
             status,
+            reset_at_ms: None,
         }],
         breakdown: vec![],
         resets: vec![],

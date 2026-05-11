@@ -212,6 +212,8 @@ pub struct Metric {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percentage: Option<f64>,
     pub status: MetricStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,6 +290,7 @@ mod balance_struct_tests {
                 unit: Some("%".into()),
                 percentage: Some(72.0),
                 status: MetricStatus::Ok,
+                reset_at_ms: None,
             }],
             breakdown: vec![BreakdownItem {
                 label: "glm-4".into(),
