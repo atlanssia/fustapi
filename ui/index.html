@@ -4,32 +4,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0a0a1a">
+  <meta name="theme-color" content="#0B1714">
   <title>FustAPI Control Plane</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a0a1a;
-      --bg-gradient: linear-gradient(135deg, #0a0a1a 0%, #111133 30%, #0d1122 60%, #0a0a1a 100%);
-      --surface: rgba(255, 255, 255, 0.05);
-      --surface-muted: rgba(255, 255, 255, 0.03);
-      --surface-hover: rgba(255, 255, 255, 0.08);
-      --surface-strong: rgba(255, 255, 255, 0.10);
-      --border: rgba(255, 255, 255, 0.08);
-      --border-strong: rgba(255, 255, 255, 0.15);
+      --bg: #0B1714;
+      --bg-gradient: linear-gradient(135deg, #0B1714 0%, #101E1A 30%, #0D1A16 60%, #0B1714 100%);
+      --surface: rgba(132, 169, 140, 0.06);
+      --surface-muted: rgba(132, 169, 140, 0.03);
+      --surface-hover: rgba(132, 169, 140, 0.10);
+      --surface-strong: rgba(132, 169, 140, 0.14);
+      --border: rgba(132, 169, 140, 0.12);
+      --border-strong: rgba(132, 169, 140, 0.22);
       --blur: blur(24px);
       --blur-light: blur(12px);
-      --text: #F8FAFC;
-      --muted: #94A3B8;
-      --primary: #818CF8;
-      --primary-strong: #6366F1;
-      --primary-soft: rgba(129, 140, 248, 0.15);
-      --success: #34D399;
-      --success-soft: rgba(52, 211, 153, 0.15);
-      --warning: #FBBF24;
-      --warning-soft: rgba(251, 191, 36, 0.15);
-      --danger: #F87171;
-      --danger-soft: rgba(248, 113, 113, 0.15);
+      --text: #E8F0EB;
+      --muted: #8BA697;
+      --primary: #84A98C;
+      --primary-strong: #52786F;
+      --primary-soft: rgba(132, 169, 140, 0.15);
+      --success: #7DD3A0;
+      --success-soft: rgba(125, 211, 160, 0.15);
+      --warning: #D4B96A;
+      --warning-soft: rgba(212, 185, 106, 0.15);
+      --danger: #D48A8A;
+      --danger-soft: rgba(212, 138, 138, 0.15);
       --shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
       --radius: 16px;
       --font-heading: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
@@ -63,10 +63,10 @@
       z-index: 0;
       pointer-events: none;
       background:
-        radial-gradient(ellipse 800px 600px at 20% 10%, rgba(129, 140, 248, 0.08), transparent),
-        radial-gradient(ellipse 600px 500px at 80% 30%, rgba(99, 102, 241, 0.06), transparent),
-        radial-gradient(ellipse 700px 500px at 50% 80%, rgba(52, 211, 153, 0.04), transparent),
-        radial-gradient(ellipse 500px 400px at 10% 70%, rgba(129, 140, 248, 0.05), transparent);
+        radial-gradient(ellipse 800px 600px at 20% 10%, rgba(82, 120, 111, 0.10), transparent),
+        radial-gradient(ellipse 600px 500px at 80% 30%, rgba(132, 169, 140, 0.07), transparent),
+        radial-gradient(ellipse 700px 500px at 50% 80%, rgba(202, 210, 197, 0.04), transparent),
+        radial-gradient(ellipse 500px 400px at 10% 70%, rgba(82, 120, 111, 0.06), transparent);
     }
 
     h1,
@@ -179,7 +179,7 @@
       background: var(--surface-hover);
     }
     .provider-item.selected {
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(82, 120, 111, 0.12);
       border-color: var(--primary);
     }
     .provider-item.offline {
@@ -223,13 +223,13 @@
       text-transform: uppercase;
       font-weight: 600;
     }
-    .p-pill.glm { background: rgba(99, 102, 241, 0.2); color: #6366f1; }
-    .p-pill.deepseek { background: rgba(16, 185, 129, 0.2); color: #10b981; }
-    .p-pill.openai { background: rgba(5, 150, 105, 0.2); color: #059669; }
-    .p-pill.zai { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
-    .p-pill.omlx { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
-    .p-pill.lmstudio { background: rgba(244, 63, 94, 0.2); color: #f43f5e; }
-    .p-pill.sglang { background: rgba(249, 115, 22, 0.2); color: #f97316; }
+    .p-pill.glm { background: rgba(82, 120, 111, 0.25); color: #84A98C; }
+    .p-pill.deepseek { background: rgba(125, 211, 160, 0.2); color: #7DD3A0; }
+    .p-pill.openai { background: rgba(82, 120, 111, 0.2); color: #6B9A80; }
+    .p-pill.zai { background: rgba(132, 169, 180, 0.2); color: #8AB4C4; }
+    .p-pill.omlx { background: rgba(212, 185, 106, 0.2); color: #D4B96A; }
+    .p-pill.lmstudio { background: rgba(212, 138, 138, 0.2); color: #D48A8A; }
+    .p-pill.sglang { background: rgba(212, 160, 106, 0.2); color: #D4A06A; }
     .p-pill.credit { background: var(--surface-strong); color: var(--muted); }
 
     /* Mini progress bar */
@@ -339,7 +339,7 @@
     }
     .detail-section td {
       padding: 0.3rem 0.5rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(132, 169, 140, 0.06);
     }
     .detail-alerts {
       margin-bottom: 0.8rem;
@@ -471,14 +471,14 @@
     }
 
     /* Brand gradient classes */
-    .brand-glm { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
-    .brand-deepseek { background: linear-gradient(135deg, #10b981, #34d399); }
-    .brand-openai { background: linear-gradient(135deg, #059669, #34d399); }
-    .brand-zai { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
-    .brand-omlx { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
-    .brand-lmstudio { background: linear-gradient(135deg, #f43f5e, #fb7185); }
-    .brand-sglang { background: linear-gradient(135deg, #f97316, #ef4444); }
-    .brand-default { background: linear-gradient(135deg, #6b7280, #9ca3af); }
+    .brand-glm { background: linear-gradient(135deg, #52786F, #84A98C); }
+    .brand-deepseek { background: linear-gradient(135deg, #5A9A72, #84C49A); }
+    .brand-openai { background: linear-gradient(135deg, #4A8A6A, #7ABF94); }
+    .brand-zai { background: linear-gradient(135deg, #5A8AAA, #7AB4CA); }
+    .brand-omlx { background: linear-gradient(135deg, #B49A5A, #D4BA7A); }
+    .brand-lmstudio { background: linear-gradient(135deg, #AA6A6A, #CA8A8A); }
+    .brand-sglang { background: linear-gradient(135deg, #AA7A5A, #CA9A7A); }
+    .brand-default { background: linear-gradient(135deg, #6A7A72, #8A9A92); }
 
     /* ── End Providers Redesign ─────────────────────────────────────── */
 
@@ -968,7 +968,7 @@
 
     tbody td {
       padding: 0.75rem 1rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(132, 169, 140, 0.06);
       vertical-align: middle;
       font-size: 0.92rem;
     }
@@ -2629,8 +2629,8 @@
         `).join("");
       }
 
-      drawChart("chart-qps", m.timeseries, "qps", "#22c55e");
-      drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#60a5fa");
+      drawChart("chart-qps", m.timeseries, "qps", "#84A98C");
+      drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#7AABB4");
     }
 
     function drawChart(canvasId, timeseries, dataKey, color) {
@@ -2661,7 +2661,7 @@
       const maxVal = Math.max(...timeseries.map(t => t[dataKey]), 1);
 
       // Y-axis labels (3 ticks)
-      ctx.fillStyle = "#888";
+      ctx.fillStyle = "#6A8078";
       ctx.font = "10px monospace";
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
@@ -2673,7 +2673,7 @@
       }
 
       // Grid lines
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.strokeStyle = "rgba(132,169,140,0.08)";
       ctx.lineWidth = 1;
       for (let i = 0; i <= 2; i++) {
         const y = padTop + (plotH * i / 2);
@@ -2703,8 +2703,8 @@
       ctx.lineTo(padLeft, padTop + plotH);
 
       let fillStyle = color;
-      if (color === "#22c55e") fillStyle = "rgba(34, 197, 94, 0.15)";
-      else if (color === "#60a5fa") fillStyle = "rgba(96, 165, 250, 0.15)";
+      if (color === "#84A98C") fillStyle = "rgba(132, 169, 140, 0.15)";
+      else if (color === "#7AABB4") fillStyle = "rgba(122, 171, 180, 0.15)";
 
       ctx.fillStyle = fillStyle;
       ctx.fill();
