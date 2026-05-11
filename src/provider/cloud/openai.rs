@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio_stream::StreamExt;
 
-use crate::provider::{Provider, ProviderError, UnifiedRequest};
+use crate::provider::{
+    BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, Provider, ProviderBalance,
+    ProviderError, UnifiedRequest,
+};
 use crate::streaming::{LLMChunk, LLMStream};
 
 /// `OpenAI` provider configuration.
@@ -567,5 +570,198 @@ impl Provider for OpenAIProvider {
 
     fn name(&self) -> &'static str {
         "openai"
+    }
+
+    async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
+        let is_local = self.config.endpoint.contains("localhost")
+            || self.config.endpoint.contains("127.0.0.1")
+            || self.config.endpoint.contains("::1");
+
+        if !is_local {
+            return Ok(None);
+        }
+
+        let base = self
+            .config
+            .endpoint
+            .trim_end_matches("/v1")
+            .trim_end_matches('/');
+
+        // Strategy 1: Try /health endpoint (omlx returns JSON, vLLM/SGLang return empty 200)
+        let health_ok = match self.client.get(format!("{base}/health")).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                // Try to parse as JSON (omlx-style with engine_pool)
+                match resp.text().await {
+                    Ok(text) if text.trim().is_empty() => Some((true, None)),
+                    Ok(text) => {
+                        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
+                        parsed.ok().map(|v| (true, Some(v)))
+                    }
+                    Err(_) => Some((true, None)),
+                }
+            }
+            Ok(_) => Some((false, None)),
+            Err(_) => None,
+        };
+
+        // Strategy 2: Fallback to /v1/models for model listing (vLLM, LM Studio)
+        let models_data: Option<Vec<String>> = if health_ok.is_none() || health_ok.as_ref().map(|(ok, _)| !ok).unwrap_or(false) {
+            match self.client.get(format!("{}/v1/models", base)).send().await {
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| {
+                        v.get("data")?
+                            .as_array()
+                            .map(|arr| arr.iter().filter_map(|m| m.get("id")?.as_str().map(String::from)).collect())
+                    }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // Nothing reachable at all → offline
+        if health_ok.is_none() && models_data.is_none() {
+            return Ok(Some(ProviderBalance {
+                provider_name: "local".to_string(),
+                status: BalanceStatus::Offline,
+                plan: None,
+                plan_type: None,
+                alerts: vec![],
+                metrics: vec![],
+                breakdown: vec![],
+                resets: vec![],
+                config_summary: ConfigSummary {
+                    provider_type: "local".to_string(),
+                    endpoint: self.config.endpoint.clone(),
+                    has_key: !self.config.api_key.is_empty(),
+                    model: self.config.model.clone(),
+                },
+            }));
+        }
+
+        // Build result from available data
+        let mut status = BalanceStatus::Online;
+        let mut metrics = Vec::new();
+        let mut alerts = Vec::new();
+        let mut detected_model: Option<String> = None;
+
+        if let Some((_is_healthy, Some(json_body))) = &health_ok {
+            // Rich JSON health response (omlx-style)
+            let status_str = json_body.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            // Accept: "healthy", "ok", "running", "up", "ready"
+            let healthy = matches!(status_str, "healthy" | "ok" | "running" | "up" | "ready" | "");
+            if !healthy && !status_str.is_empty() {
+                status = BalanceStatus::Error;
+            }
+
+            detected_model = json_body
+                .get("default_model")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            let pool = &json_body["engine_pool"];
+            let model_count = pool.get("model_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let loaded_count = pool.get("loaded_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let max_mem = pool.get("max_model_memory").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cur_mem = pool.get("current_model_memory").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            let mem_pct = if max_mem > 0 {
+                cur_mem as f64 / max_mem as f64 * 100.0
+            } else {
+                0.0
+            };
+
+            if model_count > 0 || max_mem > 0 {
+                metrics.push(Metric {
+                    label: "Models".to_string(),
+                    kind: MetricKind::Absolute,
+                    value: model_count as f64,
+                    total: None,
+                    unit: Some("available".to_string()),
+                    percentage: None,
+                    status: MetricStatus::Ok,
+                    reset_at_ms: None,
+                });
+                metrics.push(Metric {
+                    label: "Loaded".to_string(),
+                    kind: MetricKind::Absolute,
+                    value: loaded_count as f64,
+                    total: Some(model_count as f64),
+                    unit: Some("models".to_string()),
+                    percentage: None,
+                    status: if loaded_count == 0 && model_count > 0 {
+                        MetricStatus::Warn
+                    } else {
+                        MetricStatus::Ok
+                    },
+                    reset_at_ms: None,
+                });
+                metrics.push(Metric {
+                    label: "VRAM".to_string(),
+                    kind: MetricKind::Percentage,
+                    value: mem_pct,
+                    total: Some(100.0),
+                    unit: Some("%".to_string()),
+                    percentage: Some(mem_pct),
+                    status: MetricStatus::from_percentage(mem_pct),
+                    reset_at_ms: None,
+                });
+
+                if mem_pct >= 95.0 {
+                    alerts.push(crate::provider::Alert {
+                        level: crate::provider::AlertLevel::Critical,
+                        message: format!("VRAM usage {:.0}% — cannot load more models", mem_pct),
+                    });
+                } else if mem_pct >= 80.0 {
+                    alerts.push(crate::provider::Alert {
+                        level: crate::provider::AlertLevel::Warn,
+                        message: format!("VRAM usage {:.0}% — approaching limit", mem_pct),
+                    });
+                }
+            }
+        }
+
+        // Fallback: use /v1/models data if no rich health info
+        if metrics.is_empty() {
+            if let Some(model_ids) = &models_data {
+                metrics.push(Metric {
+                    label: "Models".to_string(),
+                    kind: MetricKind::Absolute,
+                    value: model_ids.len() as f64,
+                    total: None,
+                    unit: Some("loaded".to_string()),
+                    percentage: None,
+                    status: if model_ids.is_empty() {
+                        MetricStatus::Warn
+                    } else {
+                        MetricStatus::Ok
+                    },
+                    reset_at_ms: None,
+                });
+                if detected_model.is_none() {
+                    detected_model = model_ids.first().cloned();
+                }
+            }
+        }
+
+        Ok(Some(ProviderBalance {
+            provider_name: "local".to_string(),
+            status,
+            plan: detected_model.clone(),
+            plan_type: None,
+            alerts,
+            metrics,
+            breakdown: vec![],
+            resets: vec![],
+            config_summary: ConfigSummary {
+                provider_type: "local".to_string(),
+                endpoint: self.config.endpoint.clone(),
+                has_key: !self.config.api_key.is_empty(),
+                model: self.config.model.clone().or(detected_model),
+            },
+        }))
     }
 }
