@@ -209,7 +209,7 @@ impl SnapshotBuilder {
             total_requests: global.total_requests,
             success_requests: global.success_requests,
             failed_requests: global.failed_requests,
-            in_flight: global.in_flight_requests,
+            in_flight: global.in_flight_requests.max(0),
             success_rate,
             uptime_secs,
             provider_stats,

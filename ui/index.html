@@ -1649,6 +1649,7 @@
       models: [],
       metrics: null,
       metricsInterval: null,
+      balanceInterval: null,
       activeTab: "dashboard",
       modal: null,
       lastFocus: null,
@@ -1763,9 +1764,16 @@
         clearInterval(state.metricsInterval);
         state.metricsInterval = null;
       }
+      // Handle balance polling
+      if (state.balanceInterval) {
+        clearInterval(state.balanceInterval);
+        state.balanceInterval = null;
+      }
       if (tabName === "dashboard") {
         fetchMetrics();
         state.metricsInterval = setInterval(fetchMetrics, 1000);
+        fetchBalance();
+        state.balanceInterval = setInterval(fetchBalance, 60000);
       }
     }
 

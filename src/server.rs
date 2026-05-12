@@ -213,9 +213,9 @@ async fn chat_completions_handler(
     )
     .await
     {
-        Ok(response) => response, // StreamTracker/collector handles emitting request_end
+        Ok(response) => response,
         Err(e) => {
-            emitter.request_end(&provider_name, &model_name, start, false, None, None);
+            // dispatch_request handles request_end on all error paths
             e.into_response()
         }
     }
@@ -247,7 +247,7 @@ async fn messages_handler(
     {
         Ok(response) => response,
         Err(e) => {
-            emitter.request_end(&provider_name, &model_name, start, false, None, None);
+            // dispatch_request handles request_end on all error paths
             e.into_response()
         }
     }

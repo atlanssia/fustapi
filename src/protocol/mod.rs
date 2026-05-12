@@ -62,10 +62,16 @@ async fn openai_handler(
     model: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
-    let unified_req = openai::parse_chat_request(&body).map_err(|e| ProtocolError::Parse {
-        message: e.to_string(),
-        protocol: Protocol::OpenAI,
-    })?;
+    let unified_req = match openai::parse_chat_request(&body) {
+        Ok(req) => req,
+        Err(e) => {
+            emitter.request_end(&provider, &model, start, false, None, None);
+            return Err(ProtocolError::Parse {
+                message: e.to_string(),
+                protocol: Protocol::OpenAI,
+            });
+        }
+    };
     let model_name = model.clone();
     let provider_req = unified_req.clone();
 
@@ -489,18 +495,21 @@ async fn collect_non_streaming(
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
 
-    let stream_mode =
-        router
-            .chat_stream(request, false)
-            .await
-            .map_err(|e| ProtocolError::Internal {
+    let stream_mode = match router.chat_stream(request, false).await {
+        Ok(mode) => mode,
+        Err(e) => {
+            emitter.request_end(&provider, model, start, false, None, None);
+            return Err(ProtocolError::Internal {
                 message: e.to_string(),
                 protocol,
-            })?;
+            });
+        }
+    };
 
     let mut stream = match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => stream,
         crate::streaming::StreamMode::Passthrough(_) => {
+            emitter.request_end(&provider, model, start, false, None, None);
             return Err(ProtocolError::Internal {
                 message: "Passthrough not supported for non-streaming".to_string(),
                 protocol,
@@ -523,6 +532,7 @@ async fn collect_non_streaming(
                 chunks.push(chunk);
             }
             Err(e) => {
+                emitter.request_end(&provider, model, start, false, None, None);
                 return Err(ProtocolError::Internal {
                     message: e.to_string(),
                     protocol,
@@ -566,7 +576,7 @@ async fn collect_non_streaming(
     });
 
     let response_body = match protocol {
-        Protocol::OpenAI => openai::serialize_response(
+        Protocol::OpenAI => match openai::serialize_response(
             "chatcmpl-gw",
             model,
             if content.is_empty() {
@@ -584,12 +594,17 @@ async fn collect_non_streaming(
             } else {
                 Some(&reasoning_content)
             },
-        )
-        .map_err(|e| ProtocolError::Internal {
-            message: e.to_string(),
-            protocol,
-        })?,
-        Protocol::Anthropic => anthropic::serialize_response(
+        ) {
+            Ok(body) => body,
+            Err(e) => {
+                emitter.request_end(&provider, model, start, false, None, None);
+                return Err(ProtocolError::Internal {
+                    message: e.to_string(),
+                    protocol,
+                });
+            }
+        },
+        Protocol::Anthropic => match anthropic::serialize_response(
             "msg-gw",
             model,
             if content.is_empty() {
@@ -604,11 +619,16 @@ async fn collect_non_streaming(
             } else {
                 Some(&reasoning_content)
             },
-        )
-        .map_err(|e| ProtocolError::Internal {
-            message: e.to_string(),
-            protocol,
-        })?,
+        ) {
+            Ok(body) => body,
+            Err(e) => {
+                emitter.request_end(&provider, model, start, false, None, None);
+                return Err(ProtocolError::Internal {
+                    message: e.to_string(),
+                    protocol,
+                });
+            }
+        },
     };
 
     emitter.request_end(&provider, model, start, true, final_usage, first_token_ms);
@@ -628,11 +648,16 @@ async fn anthropic_handler(
     model: String,
     start: std::time::Instant,
 ) -> Result<Response, ProtocolError> {
-    let unified_req =
-        anthropic::parse_messages_request(&body).map_err(|e| ProtocolError::Parse {
-            message: e.to_string(),
-            protocol: Protocol::Anthropic,
-        })?;
+    let unified_req = match anthropic::parse_messages_request(&body) {
+        Ok(req) => req,
+        Err(e) => {
+            emitter.request_end(&provider, &model, start, false, None, None);
+            return Err(ProtocolError::Parse {
+                message: e.to_string(),
+                protocol: Protocol::Anthropic,
+            });
+        }
+    };
 
     let model_name = model.clone();
 
