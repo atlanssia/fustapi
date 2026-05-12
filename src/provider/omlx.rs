@@ -44,6 +44,10 @@ impl OmlxProvider {
                 api_key: "omlx".to_string(),
                 model: config.model.clone(),
                 stream_options: false,
+                provider_name: None,
+                tool_calling: crate::provider::ToolCallingSupport::Emulated,
+                image_input: true,
+                streaming: true,
             },
         );
         Self {
@@ -84,6 +88,10 @@ impl Provider for OmlxProvider {
 
     fn name(&self) -> &'static str {
         "omlx"
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        self.openai_backend.list_models().await
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {

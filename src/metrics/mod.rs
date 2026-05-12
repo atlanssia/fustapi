@@ -9,6 +9,7 @@
 
 pub mod aggregator;
 pub mod counters;
+pub mod guard;
 pub mod snapshot;
 
 use std::sync::Arc;

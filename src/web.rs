@@ -69,12 +69,16 @@ fn default_type() -> String {
 pub struct ModelInfo {
     pub id: String,
     pub providers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct RouteForm {
     pub model: String,
     pub providers: Vec<String>,
+    #[serde(default)]
+    pub upstream_model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -231,11 +235,11 @@ pub async fn models_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) -> 
     let config = load_config(&db_path);
     let models = config
         .router
-        .keys()
-        .cloned()
-        .map(|id| {
-            let providers = config.router.get(&id).cloned().unwrap_or_default();
-            ModelInfo { id, providers }
+        .iter()
+        .map(|(id, route_cfg)| ModelInfo {
+            id: id.clone(),
+            providers: route_cfg.provider_ids.clone(),
+            upstream_model: route_cfg.upstream_model.clone(),
         })
         .collect();
     (StatusCode::OK, Json(ModelsResponse { models })).into_response()
@@ -325,7 +329,13 @@ pub async fn create_route(
     }
 
     let existed = config.router.contains_key(&form.model);
-    config.router.insert(form.model.clone(), form.providers);
+    config.router.insert(
+        form.model.clone(),
+        crate::config::RouteConfig {
+            provider_ids: form.providers,
+            upstream_model: form.upstream_model.filter(|m| !m.trim().is_empty()),
+        },
+    );
 
     if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
         return e.into_response();
@@ -388,8 +398,8 @@ pub async fn update_provider(
 
     if form.name != id {
         config.providers.remove(&id);
-        for providers in config.router.values_mut() {
-            for provider in providers {
+        for route_cfg in config.router.values_mut() {
+            for provider in &mut route_cfg.provider_ids {
                 if provider == &id {
                     provider.clone_from(&form.name);
                 }
@@ -437,9 +447,9 @@ pub async fn delete_provider(
     config.providers.remove(&id);
 
     // Clean up routes that reference this provider; remove models with no providers left.
-    config.router.retain(|_, providers| {
-        providers.retain(|p| p != &id);
-        !providers.is_empty()
+    config.router.retain(|_, route_cfg| {
+        route_cfg.provider_ids.retain(|p| p != &id);
+        !route_cfg.provider_ids.is_empty()
     });
 
     if let Err(e) = save_and_rebuild(&config, &router_store, &db_path) {
@@ -484,6 +494,39 @@ pub async fn delete_route(
         }),
     )
         .into_response()
+}
+
+/// GET /api/providers/:id/models — list models available from a provider.
+pub async fn provider_models_api_handler(
+    Extension(db_path): Extension<Arc<PathBuf>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let config = load_config(&db_path);
+    let Some(cfg) = config.providers.get(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Provider not found"})),
+        )
+            .into_response();
+    };
+    let provider = crate::config::create_provider(&id, cfg);
+    match tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await {
+        Ok(Ok(models)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"models": models})),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string(), "models": []})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({"error": "timeout", "models": []})),
+        )
+            .into_response(),
+    }
 }
 
 // ── Balance Handler ──────────────────────────────────────────────────
@@ -717,6 +760,7 @@ mod tests {
         let form = RouteForm {
             model: "qwen".into(),
             providers: Vec::new(),
+            upstream_model: None,
         };
 
         let err = validate_route_form(&form).expect_err("empty provider list should be rejected");
@@ -769,6 +813,7 @@ mod tests {
             models: vec![ModelInfo {
                 id: "gpt-4".into(),
                 providers: vec!["openai".into()],
+                upstream_model: None,
             }],
         };
         let json = serde_json::to_string(&resp).expect("should serialize");

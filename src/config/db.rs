@@ -29,6 +29,8 @@ pub struct ProviderRecord {
 pub struct RouteRecord {
     pub model: String,
     pub provider_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
 }
 
 const SCHEMA_SQL: &str = r"
@@ -58,6 +60,7 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(SCHEMA_SQL)?;
     // Simple migration: add upstream_model if missing
     let _ = conn.execute("ALTER TABLE providers ADD COLUMN upstream_model TEXT", []);
+    let _ = conn.execute("ALTER TABLE routes ADD COLUMN upstream_model TEXT", []);
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
@@ -86,13 +89,16 @@ pub fn load_providers(conn: &Connection) -> Result<Vec<ProviderRecord>> {
 
 /// Load all routes from the database.
 pub fn load_routes(conn: &Connection) -> Result<Vec<RouteRecord>> {
-    let mut stmt = conn.prepare("SELECT model, provider_ids FROM routes ORDER BY model")?;
+    let mut stmt =
+        conn.prepare("SELECT model, provider_ids, upstream_model FROM routes ORDER BY model")?;
     let rows = stmt.query_map([], |row| {
         let raw: String = row.get(1)?;
         let ids: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        let upstream: Option<String> = row.get(2)?;
         Ok(RouteRecord {
             model: row.get(0)?,
             provider_ids: ids,
+            upstream_model: upstream.filter(|m| !m.trim().is_empty()),
         })
     })?;
     let mut results = Vec::new();
@@ -113,8 +119,8 @@ pub fn upsert_route(conn: &Transaction, r: &RouteRecord) -> Result<()> {
     let j = serde_json::to_string(&r.provider_ids)
         .map_err(|_e| rusqlite::Error::ExecuteReturnedResults)?;
     conn.execute(
-        "INSERT OR REPLACE INTO routes (model, provider_ids) VALUES (?1, ?2)",
-        params![&r.model, j],
+        "INSERT OR REPLACE INTO routes (model, provider_ids, upstream_model) VALUES (?1, ?2, ?3)",
+        params![&r.model, j, r.upstream_model.as_deref()],
     )?;
     Ok(())
 }
@@ -183,6 +189,7 @@ mod tests {
         let r = RouteRecord {
             model: "gpt-4".into(),
             provider_ids: vec!["omlx".into(), "lmstudio".into()],
+            upstream_model: None,
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();
@@ -190,6 +197,40 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].model, "gpt-4");
         assert_eq!(loaded[0].provider_ids.len(), 2);
+        assert_eq!(loaded[0].upstream_model, None);
+    }
+
+    #[test]
+    fn test_route_with_upstream_model() {
+        let path = temp_db("route_upstream");
+        let mut conn = init_db(&path).expect("init_db failed");
+        let tx = conn.transaction().unwrap();
+        let r = RouteRecord {
+            model: "my-alias".into(),
+            provider_ids: vec!["openai".into()],
+            upstream_model: Some("gpt-4o".into()),
+        };
+        upsert_route(&tx, &r).unwrap();
+        tx.commit().unwrap();
+        let loaded = load_routes(&conn).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].upstream_model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn test_route_empty_upstream_normalized() {
+        let path = temp_db("route_empty_upstream");
+        let mut conn = init_db(&path).expect("init_db failed");
+        let tx = conn.transaction().unwrap();
+        let r = RouteRecord {
+            model: "alias".into(),
+            provider_ids: vec!["openai".into()],
+            upstream_model: Some("".into()),
+        };
+        upsert_route(&tx, &r).unwrap();
+        tx.commit().unwrap();
+        let loaded = load_routes(&conn).unwrap();
+        assert_eq!(loaded[0].upstream_model, None);
     }
 
     #[test]
@@ -221,6 +262,7 @@ mod tests {
         let r = RouteRecord {
             model: "delete-me".into(),
             provider_ids: vec!["omlx".into()],
+            upstream_model: None,
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();

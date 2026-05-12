@@ -113,6 +113,14 @@ pub trait Provider: Send + Sync {
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         Ok(None)
     }
+
+    /// List models available from this provider.
+    ///
+    /// Default: returns an empty list. Providers that support model listing
+    /// (e.g., OpenAI-compatible endpoints) should override this.
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Errors that can occur when interacting with a provider.
@@ -262,9 +270,7 @@ pub struct ProviderBalance {
 // ── Provider module exports ───────────────────────────────────────────
 
 pub mod cloud;
-pub mod lmstudio;
 pub mod omlx;
-pub mod sglang;
 
 #[cfg(test)]
 mod balance_struct_tests {

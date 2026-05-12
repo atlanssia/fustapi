@@ -40,16 +40,11 @@ pub async fn dispatch_request(
     protocol: Protocol,
     body: String,
     router: &dyn Router,
-    emitter: crate::metrics::MetricsEmitter,
-    provider: String,
-    model: String,
-    start: std::time::Instant,
+    guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
     match protocol {
-        Protocol::OpenAI => openai_handler(body, router, emitter, provider, model, start).await,
-        Protocol::Anthropic => {
-            anthropic_handler(body, router, emitter, provider, model, start).await
-        }
+        Protocol::OpenAI => openai_handler(body, router, guard).await,
+        Protocol::Anthropic => anthropic_handler(body, router, guard).await,
     }
 }
 
@@ -57,38 +52,25 @@ pub async fn dispatch_request(
 async fn openai_handler(
     body: String,
     router: &dyn Router,
-    emitter: crate::metrics::MetricsEmitter,
-    provider: String,
-    model: String,
-    start: std::time::Instant,
+    guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
     let unified_req = match openai::parse_chat_request(&body) {
         Ok(req) => req,
         Err(e) => {
-            emitter.request_end(&provider, &model, start, false, None, None);
             return Err(ProtocolError::Parse {
                 message: e.to_string(),
                 protocol: Protocol::OpenAI,
             });
         }
     };
-    let model_name = model.clone();
+    let model_name = unified_req.model.clone();
     let provider_req = unified_req.clone();
 
     if is_streaming(&body) {
-        let tracker = crate::metrics::StreamTracker::new(emitter, provider, model, start);
+        let tracker = guard.into_tracker();
         forward_streaming(router, provider_req, &model_name, Protocol::OpenAI, tracker).await
     } else {
-        collect_non_streaming(
-            router,
-            provider_req,
-            &model_name,
-            Protocol::OpenAI,
-            emitter,
-            provider,
-            start,
-        )
-        .await
+        collect_non_streaming(router, provider_req, &model_name, Protocol::OpenAI, guard).await
     }
 }
 
@@ -489,16 +471,14 @@ async fn collect_non_streaming(
     request: crate::provider::UnifiedRequest,
     model: &str,
     protocol: Protocol,
-    emitter: crate::metrics::MetricsEmitter,
-    provider: String,
-    start: std::time::Instant,
+    guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
 
     let stream_mode = match router.chat_stream(request, false).await {
         Ok(mode) => mode,
         Err(e) => {
-            emitter.request_end(&provider, model, start, false, None, None);
+            guard.finish_err();
             return Err(ProtocolError::Internal {
                 message: e.to_string(),
                 protocol,
@@ -509,7 +489,7 @@ async fn collect_non_streaming(
     let mut stream = match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => stream,
         crate::streaming::StreamMode::Passthrough(_) => {
-            emitter.request_end(&provider, model, start, false, None, None);
+            guard.finish_err();
             return Err(ProtocolError::Internal {
                 message: "Passthrough not supported for non-streaming".to_string(),
                 protocol,
@@ -524,7 +504,7 @@ async fn collect_non_streaming(
         match chunk_result {
             Ok(chunk) => {
                 if first_token_ms.is_none() {
-                    first_token_ms = Some(start.elapsed().as_millis() as u64);
+                    first_token_ms = Some(guard.elapsed_ms());
                 }
                 if let Some(ref usage) = chunk.usage {
                     final_usage = Some(usage.clone());
@@ -532,7 +512,7 @@ async fn collect_non_streaming(
                 chunks.push(chunk);
             }
             Err(e) => {
-                emitter.request_end(&provider, model, start, false, None, None);
+                guard.finish_err();
                 return Err(ProtocolError::Internal {
                     message: e.to_string(),
                     protocol,
@@ -597,7 +577,7 @@ async fn collect_non_streaming(
         ) {
             Ok(body) => body,
             Err(e) => {
-                emitter.request_end(&provider, model, start, false, None, None);
+                guard.finish_err();
                 return Err(ProtocolError::Internal {
                     message: e.to_string(),
                     protocol,
@@ -622,7 +602,7 @@ async fn collect_non_streaming(
         ) {
             Ok(body) => body,
             Err(e) => {
-                emitter.request_end(&provider, model, start, false, None, None);
+                guard.finish_err();
                 return Err(ProtocolError::Internal {
                     message: e.to_string(),
                     protocol,
@@ -631,7 +611,7 @@ async fn collect_non_streaming(
         },
     };
 
-    emitter.request_end(&provider, model, start, true, final_usage, first_token_ms);
+    guard.finish(true, final_usage, first_token_ms);
 
     let body: serde_json::Value = serde_json::from_str(&response_body).unwrap_or_else(
         |e| serde_json::json!({"error": {"message": format!("serialization error: {}", e)}}),
@@ -643,15 +623,11 @@ async fn collect_non_streaming(
 async fn anthropic_handler(
     body: String,
     router: &dyn Router,
-    emitter: crate::metrics::MetricsEmitter,
-    provider: String,
-    model: String,
-    start: std::time::Instant,
+    guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
     let unified_req = match anthropic::parse_messages_request(&body) {
         Ok(req) => req,
         Err(e) => {
-            emitter.request_end(&provider, &model, start, false, None, None);
             return Err(ProtocolError::Parse {
                 message: e.to_string(),
                 protocol: Protocol::Anthropic,
@@ -659,10 +635,10 @@ async fn anthropic_handler(
         }
     };
 
-    let model_name = model.clone();
+    let model_name = unified_req.model.clone();
 
     if is_streaming(&body) {
-        let tracker = crate::metrics::StreamTracker::new(emitter, provider, model, start);
+        let tracker = guard.into_tracker();
         forward_streaming(
             router,
             unified_req,
@@ -677,9 +653,7 @@ async fn anthropic_handler(
             unified_req,
             &model_name,
             Protocol::Anthropic,
-            emitter,
-            provider,
-            start,
+            guard,
         )
         .await
     }

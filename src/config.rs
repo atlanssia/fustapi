@@ -19,8 +19,16 @@ use tracing::info;
 /// Contains only business data — no server/bootstrap parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub router: HashMap<String, Vec<String>>,
+    pub router: HashMap<String, RouteConfig>,
     pub providers: HashMap<String, ProviderConfig>,
+}
+
+/// A single model route: client-facing model name → provider list + optional upstream model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RouteConfig {
+    pub provider_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
 }
 
 /// A single provider endpoint configuration.
@@ -140,7 +148,13 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
     let route_records = load_routes(&conn).map_err(ConfigError::DbError)?;
     let mut router = HashMap::new();
     for rec in &route_records {
-        router.insert(rec.model.clone(), rec.provider_ids.clone());
+        router.insert(
+            rec.model.clone(),
+            RouteConfig {
+                provider_ids: rec.provider_ids.clone(),
+                upstream_model: rec.upstream_model.clone(),
+            },
+        );
     }
     info!(
         providers = providers.len(),
@@ -181,18 +195,28 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 model: cfg.model.clone(),
             },
         )),
-        "lmstudio" => Box::new(crate::provider::lmstudio::LmStudioProvider::new(
-            crate::provider::lmstudio::LmStudioConfig {
+        "lmstudio" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
                 endpoint,
                 api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
+                stream_options: false,
+                provider_name: Some("lmstudio".to_string()),
+                tool_calling: crate::provider::ToolCallingSupport::Emulated,
+                image_input: true,
+                streaming: true,
             },
         )),
-        "sglang" => Box::new(crate::provider::sglang::SglProvider::new(
-            crate::provider::sglang::SglConfig {
+        "sglang" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
                 endpoint,
                 api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
+                stream_options: false,
+                provider_name: Some("sglang".to_string()),
+                tool_calling: crate::provider::ToolCallingSupport::Native,
+                image_input: true,
+                streaming: true,
             },
         )),
         "glm" | "z.ai" => Box::new(crate::provider::cloud::glm::GlmProvider::new(
@@ -215,6 +239,10 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
                 stream_options: true,
+                provider_name: None,
+                tool_calling: crate::provider::ToolCallingSupport::Native,
+                image_input: true,
+                streaming: true,
             },
         )),
         "openai-compatible" => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
@@ -223,6 +251,10 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 api_key: cfg.api_key.clone().unwrap_or_default(),
                 model: cfg.model.clone(),
                 stream_options: false,
+                provider_name: None,
+                tool_calling: crate::provider::ToolCallingSupport::Native,
+                image_input: true,
+                streaming: true,
             },
         )),
         _ => {
@@ -260,10 +292,11 @@ pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError>
         };
         upsert_provider(&tx, &rec).map_err(ConfigError::DbError)?;
     }
-    for (model, provider_ids) in &config.router {
+    for (model, route_cfg) in &config.router {
         let rec = db::RouteRecord {
             model: model.clone(),
-            provider_ids: provider_ids.clone(),
+            provider_ids: route_cfg.provider_ids.clone(),
+            upstream_model: route_cfg.upstream_model.clone(),
         };
         upsert_route(&tx, &rec).map_err(ConfigError::DbError)?;
     }
@@ -349,7 +382,10 @@ mod tests {
         );
         first
             .router
-            .insert("old-model".into(), vec!["old-provider".into()]);
+            .insert("old-model".into(), RouteConfig {
+                provider_ids: vec!["old-provider".into()],
+                upstream_model: None,
+            });
         save_to_db(&first, &db_path).expect("first save should work");
 
         let mut second = default_config();
@@ -364,7 +400,10 @@ mod tests {
         );
         second
             .router
-            .insert("new-model".into(), vec!["new-provider".into()]);
+            .insert("new-model".into(), RouteConfig {
+                provider_ids: vec!["new-provider".into()],
+                upstream_model: None,
+            });
         save_to_db(&second, &db_path).expect("second save should work");
 
         let loaded = load_from_db(&db_path).expect("load should work");
@@ -372,6 +411,45 @@ mod tests {
         assert!(!loaded.providers.contains_key("old-provider"));
         assert!(loaded.router.contains_key("new-model"));
         assert!(!loaded.router.contains_key("old-model"));
+        assert_eq!(
+            loaded.router.get("new-model").and_then(|r| r.upstream_model.as_deref()),
+            None,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_routes_with_upstream_model_roundtrip() {
+        let dir = std::env::temp_dir().join("fustapi_test_upstream_roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("test.db");
+
+        let mut config = default_config();
+        config.providers.insert(
+            "openai".into(),
+            ProviderConfig {
+                endpoint: "https://api.openai.com/v1".into(),
+                api_key: Some("sk-test".into()),
+                model: None,
+                r#type: "openai".into(),
+            },
+        );
+        config.router.insert(
+            "my-gpt4".into(),
+            RouteConfig {
+                provider_ids: vec!["openai".into()],
+                upstream_model: Some("gpt-4o".into()),
+            },
+        );
+
+        save_to_db(&config, &db_path).expect("save");
+        let loaded = load_from_db(&db_path).expect("load");
+
+        let route = loaded.router.get("my-gpt4").expect("route should exist");
+        assert_eq!(route.provider_ids, vec!["openai"]);
+        assert_eq!(route.upstream_model.as_deref(), Some("gpt-4o"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -249,8 +249,8 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
                 return;
             }
             println!("Model routing:");
-            for (model, providers) in &config.router {
-                println!("  {} → {}", model, providers.join(" → "));
+            for (model, route_cfg) in &config.router {
+                println!("  {} → {}", model, route_cfg.provider_ids.join(" → "));
             }
         }
         RoutesCommand::Add { model, providers } => {
@@ -260,7 +260,10 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
             }
             let mut config = fustapi::config::load_from_db(&db_path)
                 .unwrap_or_else(|_| fustapi::config::default_config());
-            config.router.insert(model.clone(), providers);
+            config.router.insert(model.clone(), fustapi::config::RouteConfig {
+                provider_ids: providers,
+                upstream_model: None,
+            });
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {
                 eprintln!("Failed to save: {e}");
                 std::process::exit(1);

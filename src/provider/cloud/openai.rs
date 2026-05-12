@@ -8,12 +8,11 @@ use tokio_stream::StreamExt;
 
 use crate::provider::{
     BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, Provider, ProviderBalance,
-    ProviderError, UnifiedRequest,
+    ProviderError, ToolCallingSupport, UnifiedRequest,
 };
 use crate::streaming::{LLMChunk, LLMStream};
 
 /// `OpenAI` provider configuration.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
     pub endpoint: String,
@@ -22,6 +21,15 @@ pub struct OpenAIConfig {
     /// Whether to send `stream_options.include_usage` in streaming requests.
     /// Disable for providers that don't support this `OpenAI` extension (e.g. GLM).
     pub stream_options: bool,
+    /// Provider-override for the name returned by `Provider::name()`.
+    /// If `None`, falls back to the default name derived from the type.
+    pub provider_name: Option<String>,
+    /// Tool calling support override.
+    pub tool_calling: ToolCallingSupport,
+    /// Image input support override.
+    pub image_input: bool,
+    /// Streaming support override.
+    pub streaming: bool,
 }
 
 impl Default for OpenAIConfig {
@@ -31,6 +39,10 @@ impl Default for OpenAIConfig {
             api_key: String::new(),
             model: None,
             stream_options: true,
+            provider_name: None,
+            tool_calling: ToolCallingSupport::Native,
+            image_input: true,
+            streaming: true,
         }
     }
 }
@@ -200,6 +212,44 @@ impl OpenAIProvider {
         }
 
         chunks
+    }
+
+    /// Fetch available models from the provider's `/v1/models` endpoint.
+    async fn fetch_model_list(&self) -> Result<Vec<String>, ProviderError> {
+        let base = self
+            .config
+            .endpoint
+            .trim_end_matches("/v1")
+            .trim_end_matches('/');
+        let is_local = self.config.endpoint.contains("localhost")
+            || self.config.endpoint.contains("127.0.0.1")
+            || self.config.endpoint.contains("::1");
+
+        let mut builder = self.client.get(format!("{}/v1/models", base));
+        if !self.config.api_key.is_empty() && !is_local {
+            builder =
+                builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+        match builder.send().await {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("data")?
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                                .collect()
+                        })
+                })
+                .ok_or_else(|| ProviderError::Internal("Failed to parse models response".into())),
+            Ok(_) => Err(ProviderError::Connection(
+                "models endpoint returned non-success status".into(),
+            )),
+            Err(e) => Err(ProviderError::Connection(e.to_string())),
+        }
     }
 }
 
@@ -562,14 +612,21 @@ impl Provider for OpenAIProvider {
 
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
         crate::provider::ProviderCapabilities {
-            tool_calling: crate::provider::ToolCallingSupport::Native,
-            image_input: true,
-            streaming: true,
+            tool_calling: self.config.tool_calling,
+            image_input: self.config.image_input,
+            streaming: self.config.streaming,
         }
     }
 
-    fn name(&self) -> &'static str {
-        "openai"
+    fn name(&self) -> &str {
+        self.config
+            .provider_name
+            .as_deref()
+            .unwrap_or("openai")
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        self.fetch_model_list().await
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
@@ -608,29 +665,9 @@ impl Provider for OpenAIProvider {
         //   Local: fallback when /health didn't return data
         //   Remote: liveness check via OpenAI-compatible endpoint
         let need_models = health_ok.is_none()
-            || health_ok.as_ref().map(|(ok, _)| !ok).unwrap_or(false);
+            || health_ok.as_ref().is_some_and(|(ok, _)| !ok);
         let models_data: Option<Vec<String>> = if need_models {
-            let mut builder = self.client.get(format!("{}/v1/models", base));
-            if !self.config.api_key.is_empty() && !is_local {
-                builder =
-                    builder.header("Authorization", format!("Bearer {}", self.config.api_key));
-            }
-            match builder.send().await {
-                Ok(resp) if resp.status().is_success() => resp
-                    .json::<serde_json::Value>()
-                    .await
-                    .ok()
-                    .and_then(|v| {
-                        v.get("data")?
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|m| m.get("id")?.as_str().map(String::from))
-                                    .collect()
-                            })
-                    }),
-                _ => None,
-            }
+            self.fetch_model_list().await.ok()
         } else {
             None
         };

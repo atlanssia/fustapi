@@ -46,6 +46,10 @@ impl DeepSeekProvider {
                 api_key: config.api_key.clone(),
                 model: config.model.clone(),
                 stream_options: true,
+                provider_name: None,
+                tool_calling: crate::provider::ToolCallingSupport::Native,
+                image_input: false,
+                streaming: true,
             },
         );
         Self {
@@ -125,6 +129,10 @@ impl Provider for DeepSeekProvider {
         self.openai_backend
             .chat_stream(request, allow_passthrough)
             .await
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        self.openai_backend.list_models().await
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {

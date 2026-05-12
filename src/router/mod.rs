@@ -70,7 +70,14 @@ pub trait Router: Send + Sync {
 /// Real router that uses configured providers.
 pub struct RealRouter {
     providers: HashMap<String, Box<dyn Provider>>,
-    routes: HashMap<String, Vec<String>>,
+    routes: HashMap<String, RouteEntry>,
+}
+
+/// Internal route entry: provider list + optional upstream model override.
+#[derive(Debug)]
+struct RouteEntry {
+    provider_ids: Vec<String>,
+    upstream_model: Option<String>,
 }
 
 impl std::fmt::Debug for RealRouter {
@@ -96,8 +103,14 @@ impl RealRouter {
         }
 
         // Copy routes from config
-        for (model, provider_names) in &config.router {
-            routes.insert(model.clone(), provider_names.clone());
+        for (model, route_cfg) in &config.router {
+            routes.insert(
+                model.clone(),
+                RouteEntry {
+                    provider_ids: route_cfg.provider_ids.clone(),
+                    upstream_model: route_cfg.upstream_model.clone(),
+                },
+            );
         }
 
         Self { providers, routes }
@@ -107,8 +120,9 @@ impl RealRouter {
     fn get_provider_for_model(&self, model: &str) -> Option<&dyn Provider> {
         self.routes
             .get(model)
-            .and_then(|provider_names| {
-                provider_names
+            .and_then(|entry| {
+                entry
+                    .provider_ids
                     .first()
                     .and_then(|name| self.providers.get(name))
             })
@@ -119,8 +133,8 @@ impl RealRouter {
 #[async_trait]
 impl Router for RealRouter {
     fn resolve(&self, model: &str) -> Result<String, RouterError> {
-        if let Some(provider_names) = self.routes.get(model)
-            && let Some(first) = provider_names.first()
+        if let Some(entry) = self.routes.get(model)
+            && let Some(first) = entry.provider_ids.first()
         {
             return Ok(first.clone());
         }
@@ -138,6 +152,14 @@ impl Router for RealRouter {
         mut allow_passthrough: bool,
     ) -> Result<crate::streaming::StreamMode, RouterError> {
         let model_name = request.model.clone();
+
+        // Inject upstream_model override from route config
+        if let Some(entry) = self.routes.get(&model_name)
+            && let Some(ref upstream) = entry.upstream_model
+        {
+            request.model = upstream.clone();
+        }
+
         if let Some(provider) = self.get_provider_for_model(&model_name) {
             let caps = provider.capabilities();
             let needs_emulation = caps.tool_calling

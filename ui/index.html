@@ -1601,8 +1601,9 @@
           <div class="form-grid">
             <input type="hidden" id="route-original-model" name="original_model">
             <div class="form-field">
-              <label for="route-model">Model</label>
-              <input id="route-model" name="model" autocomplete="off" required placeholder="qwen2.5-coder">
+              <label for="route-model">Model (client-facing name)</label>
+              <input id="route-model" name="model" autocomplete="off" required placeholder="my-gpt4">
+              <p class="help">This is the name clients will use in API requests.</p>
               <p class="error" id="route-model-error"></p>
             </div>
             <div class="form-field">
@@ -1611,6 +1612,12 @@
               <p class="help">Select at least one provider. Use up and down to set priority.</p>
               <p class="error" id="route-providers-error"></p>
               <div class="order-list" id="route-order-list" aria-live="polite"></div>
+            </div>
+            <div class="form-field">
+              <label for="route-upstream-model">Upstream model (optional)</label>
+              <input id="route-upstream-model" name="upstream_model" autocomplete="off" list="route-upstream-models-list" placeholder="Leave blank to use client-facing name">
+              <datalist id="route-upstream-models-list"></datalist>
+              <p class="help">Select from provider models or type a custom name. This is what gets sent to the provider.</p>
             </div>
           </div>
         </div>
@@ -1658,6 +1665,7 @@
       balances: [],
       selectedProvider: null,
       providerSearch: '',
+      providerModels: {},
     };
 
     function byId(id) {
@@ -1856,8 +1864,25 @@
         state.providers = Array.isArray(data.providers) ? data.providers : [];
         renderProviders();
         renderRouteProviderPicker();
+        // Fetch model lists for all providers
+        for (const p of state.providers) {
+          fetchProviderModels(p.name);
+        }
       } catch (error) {
         setStateHtml("providers-state", `<strong>Providers could not be loaded.</strong>${escapeHtml(error.message)}`);
+      }
+    }
+
+    async function fetchProviderModels(name) {
+      try {
+        const data = await api("/api/providers/" + encodeURIComponent(name) + "/models");
+        state.providerModels[name] = Array.isArray(data.models) ? data.models : [];
+      } catch (_e) {
+        state.providerModels[name] = [];
+      }
+      // Re-render if providers tab is visible
+      if (state.activeTab === "providers") {
+        renderProviders();
       }
     }
 
@@ -2292,6 +2317,8 @@
         // Row 2 detail text
         var row2Parts = [escapeHtml(provider.endpoint)];
         if (provider.upstream_model) row2Parts.push('Model: ' + escapeHtml(provider.upstream_model));
+        var pModels = state.providerModels[name] || [];
+        if (pModels.length > 0) row2Parts.push(pModels.length + ' model' + (pModels.length > 1 ? 's' : '') + ' available');
         row2Parts.push(provider.has_key ? 'Key configured' : 'No key');
 
         return '<div class="config-provider-card' + offCls + '">' +
@@ -2500,26 +2527,33 @@
       }
       setStateText("routes-state", "", true);
       byId("routes-content").hidden = false;
-      byId("routes-tbody").innerHTML = state.models.map((route) => `
-    <tr>
-      <td><strong>${escapeHtml(route.id)}</strong></td>
-      <td>${route.providers.map((p, index) => `<span class="badge type">${index + 1}. ${escapeHtml(p)}</span>`).join(" ")}</td>
-      <td><div class="actions">
-        <button class="btn small" type="button" data-route-action="edit" data-route-id="${escapeHtml(route.id)}">Edit</button>
-        <button class="btn small danger" type="button" data-route-action="delete" data-route-id="${escapeHtml(route.id)}">Delete</button>
-      </div></td>
-    </tr>
-  `).join("");
-      byId("routes-mobile").innerHTML = state.models.map((route) => `
-    <article class="record">
-      <h3>${escapeHtml(route.id)}</h3>
-      <dl><div><dt>Priority</dt><dd>${route.providers.map((p, index) => `${index + 1}. ${escapeHtml(p)}`).join("<br>")}</dd></div></dl>
-      <div class="actions">
-        <button class="btn small" type="button" data-route-action="edit" data-route-id="${escapeHtml(route.id)}">Edit</button>
-        <button class="btn small danger" type="button" data-route-action="delete" data-route-id="${escapeHtml(route.id)}">Delete</button>
-      </div>
-    </article>
-  `).join("");
+      byId("routes-tbody").innerHTML = state.models.map((route) => {
+        var providerCol = route.providers.map((p, index) => "<span class=\"badge type\">" + (index + 1) + ". " + escapeHtml(p) + "</span>").join(" ");
+        if (route.upstream_model) {
+          providerCol += " <span class=\"badge\" style=\"font-size:0.55rem;opacity:0.7\">→ " + escapeHtml(route.upstream_model) + "</span>";
+        }
+        return "<tr>" +
+      "<td><strong>" + escapeHtml(route.id) + "</strong></td>" +
+      "<td>" + providerCol + "</td>" +
+      "<td><div class=\"actions\">" +
+        "<button class=\"btn small\" type=\"button\" data-route-action=\"edit\" data-route-id=\"" + escapeHtml(route.id) + "\">Edit</button>" +
+        "<button class=\"btn small danger\" type=\"button\" data-route-action=\"delete\" data-route-id=\"" + escapeHtml(route.id) + "\">Delete</button>" +
+      "</div></td>" +
+    "</tr>";
+      }).join("");
+      byId("routes-mobile").innerHTML = state.models.map((route) => {
+        var upstreamInfo = route.upstream_model
+          ? "<div><dt>Upstream</dt><dd>" + escapeHtml(route.upstream_model) + "</dd></div>"
+          : "";
+        return "<article class=\"record\">" +
+      "<h3>" + escapeHtml(route.id) + "</h3>" +
+      "<dl><div><dt>Priority</dt><dd>" + route.providers.map((p, index) => (index + 1) + ". " + escapeHtml(p)).join("<br>") + "</dd></div>" + upstreamInfo + "</dl>" +
+      "<div class=\"actions\">" +
+        "<button class=\"btn small\" type=\"button\" data-route-action=\"edit\" data-route-id=\"" + escapeHtml(route.id) + "\">Edit</button>" +
+        "<button class=\"btn small danger\" type=\"button\" data-route-action=\"delete\" data-route-id=\"" + escapeHtml(route.id) + "\">Delete</button>" +
+      "</div>" +
+    "</article>";
+      }).join("");
       bindRouteActions();
     }
 
@@ -2548,13 +2582,18 @@
     </label>
   `).join("");
       picker.querySelectorAll("input[type='checkbox']").forEach((input) => {
-        input.addEventListener("change", () => {
+        input.addEventListener("change", async () => {
           if (input.checked && !state.routeProviders.includes(input.value)) state.routeProviders.push(input.value);
           if (!input.checked) state.routeProviders = state.routeProviders.filter((name) => name !== input.value);
+          if (input.checked) {
+            await fetchProviderModels(input.value);
+            updateUpstreamModelDatalist();
+          }
           renderRouteOrderList();
         });
       });
       renderRouteOrderList();
+      updateUpstreamModelDatalist();
     }
 
     function renderRouteOrderList() {
@@ -2596,7 +2635,11 @@
       byId("route-original-model").value = route?.id || "";
       byId("route-model").value = route?.id || "";
       byId("route-model").readOnly = Boolean(route);
+      byId("route-upstream-model").value = route?.upstream_model || "";
       renderRouteProviderPicker();
+      // Fetch model lists for already-selected providers and update datalist
+      Promise.all(state.routeProviders.map(function (n) { return fetchProviderModels(n); }))
+        .then(function () { updateUpstreamModelDatalist(); });
       openModal("route-modal");
     }
 
@@ -2612,12 +2655,13 @@
         byId("route-providers-error").textContent = "Select at least one provider.";
         valid = false;
       }
+      const upstreamModel = byId("route-upstream-model").value.trim();
       if (!valid) {
         const firstInvalid = byId("route-form").querySelector("[aria-invalid='true']");
         if (firstInvalid) firstInvalid.focus();
         return null;
       }
-      return { model, providers: [...state.routeProviders] };
+      return { model, providers: [...state.routeProviders], upstream_model: upstreamModel || null };
     }
 
     async function submitRoute(event) {

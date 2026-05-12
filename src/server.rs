@@ -97,6 +97,10 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
             "/api/providers/{id}",
             put(web::update_provider).delete(web::delete_provider),
         )
+        .route(
+            "/api/providers/{id}/models",
+            get(web::provider_models_api_handler),
+        )
         // Control plane API — model routes
         .route("/api/models", get(web::models_api_handler))
         .route("/api/routes", post(web::create_route))
@@ -198,26 +202,12 @@ async fn chat_completions_handler(
     let proto = protocol::detect_protocol("/v1/chat/completions", &headers);
     let current_router = router.load_full();
 
-    // Resolve provider name for metrics (best-effort)
     let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());
-    let start = emitter.request_start(&provider_name, &model_name);
+    let guard = metrics::guard::RequestGuard::start(emitter, &provider_name, &model_name);
 
-    match protocol::dispatch_request(
-        proto,
-        body,
-        current_router.as_ref(),
-        emitter.clone(),
-        provider_name.clone(),
-        model_name.clone(),
-        start,
-    )
-    .await
-    {
+    match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
         Ok(response) => response,
-        Err(e) => {
-            // dispatch_request handles request_end on all error paths
-            e.into_response()
-        }
+        Err(e) => e.into_response(),
     }
 }
 
@@ -232,24 +222,11 @@ async fn messages_handler(
     let current_router = router.load_full();
 
     let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());
-    let start = emitter.request_start(&provider_name, &model_name);
+    let guard = metrics::guard::RequestGuard::start(emitter, &provider_name, &model_name);
 
-    match protocol::dispatch_request(
-        proto,
-        body,
-        current_router.as_ref(),
-        emitter.clone(),
-        provider_name.clone(),
-        model_name.clone(),
-        start,
-    )
-    .await
-    {
+    match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
         Ok(response) => response,
-        Err(e) => {
-            // dispatch_request handles request_end on all error paths
-            e.into_response()
-        }
+        Err(e) => e.into_response(),
     }
 }
 
