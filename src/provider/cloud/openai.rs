@@ -64,6 +64,11 @@ impl OpenAIProvider {
         }
     }
 
+    #[must_use]
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     /// Build the OpenAI-compatible request body from a `UnifiedRequest`.
     #[must_use]
     pub fn build_request_body(&self, request: &UnifiedRequest) -> serde_json::Value {

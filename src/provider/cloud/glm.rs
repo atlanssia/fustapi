@@ -225,7 +225,38 @@ impl Provider for GlmProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        self.openai_backend.list_models().await
+        // GLM uses {endpoint}/models, not the OpenAI-style {base}/v1/models.
+        let base = self.config.endpoint.trim_end_matches('/');
+        let url = format!("{base}/models");
+        let mut req = self.openai_backend.client().get(&url);
+        if !self.config.api_key.is_empty() {
+            req = req.header("Authorization", &self.config.api_key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(ProviderError::Connection(format!(
+                "GLM models endpoint returned {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("data")?
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                            .collect()
+                    })
+            })
+            .ok_or_else(|| ProviderError::Internal("Failed to parse GLM models response".into()))
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
