@@ -1890,10 +1890,9 @@
         state.providers = Array.isArray(data.providers) ? data.providers : [];
         renderProviders();
         renderRouteProviderPicker();
-        // Fetch model lists for all providers
-        for (const p of state.providers) {
-          fetchProviderModels(p.name);
-        }
+        // Fetch model lists for all providers in parallel, then render once
+        await Promise.all(state.providers.map(function(p) { return fetchProviderModels(p.name); }));
+        renderProviders();
       } catch (error) {
         setStateHtml("providers-state", `<strong>Providers could not be loaded.</strong>${escapeHtml(error.message)}`);
       }
@@ -1905,10 +1904,6 @@
         state.providerModels[name] = Array.isArray(data.models) ? data.models : [];
       } catch (_e) {
         state.providerModels[name] = [];
-      }
-      // Re-render if providers tab is visible
-      if (state.activeTab === "providers") {
-        renderProviders();
       }
     }
 
@@ -2656,8 +2651,8 @@
           if (!input.checked) state.routeProviders = state.routeProviders.filter((name) => name !== input.value);
           if (input.checked) {
             await fetchProviderModels(input.value);
-            updateUpstreamModelDatalist();
           }
+          updateUpstreamModelDatalist();
           renderRouteOrderList();
         });
       });
