@@ -1202,6 +1202,103 @@
       border-radius: 7px;
     }
 
+    /* ── Upstream model picker dropdown ── */
+    .upstream-picker {
+      position: relative;
+      display: flex;
+    }
+    .upstream-picker input {
+      flex: 1;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+    .upstream-picker input:focus {
+      z-index: 1;
+    }
+    .upstream-picker-btn {
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-left: none;
+      border-radius: 0 10px 10px 0;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 0 0.55rem;
+      font-size: 0.7rem;
+      align-self: stretch;
+      transition: background 0.15s, color 0.15s;
+    }
+    .upstream-picker-btn:hover,
+    .upstream-picker-btn.active {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+    .upstream-picker-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      max-height: 220px;
+      overflow-y: auto;
+      background: #111F1A;
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid var(--border-strong);
+      border-top: none;
+      border-radius: 0 0 10px 10px;
+      z-index: 900;
+      box-shadow: var(--shadow);
+    }
+    .upstream-picker-dropdown.open {
+      display: block;
+    }
+    .upstream-picker-group {
+      padding: 0.2rem 0;
+    }
+    .upstream-picker-group + .upstream-picker-group {
+      border-top: 1px solid var(--border);
+    }
+    .upstream-picker-group-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 0.35rem 0.6rem 0.15rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .upstream-picker-group-label .badge {
+      font-size: 0.5rem;
+      opacity: 0.7;
+    }
+    .upstream-picker-item {
+      padding: 0.25rem 0.6rem 0.25rem 1.1rem;
+      font-size: 0.72rem;
+      cursor: pointer;
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .upstream-picker-item:hover {
+      background: var(--surface-hover);
+    }
+    .upstream-picker-item .check-mark {
+      display: none;
+      margin-left: 0.3rem;
+      color: var(--success);
+      font-size: 0.6rem;
+    }
+    .upstream-picker-item.selected .check-mark {
+      display: inline;
+    }
+    .upstream-picker-empty {
+      padding: 0.7rem 0.6rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
     .toast-region {
       position: fixed;
       top: 1rem;
@@ -1641,9 +1738,12 @@
             </div>
             <div class="form-field">
               <label for="route-upstream-model">Upstream model (optional)</label>
-              <input id="route-upstream-model" name="upstream_model" autocomplete="off" list="route-upstream-models-list" placeholder="Leave blank to use client-facing name">
-              <datalist id="route-upstream-models-list"></datalist>
-              <p class="help">Select from provider models or type a custom name. This is what gets sent to the provider.</p>
+              <div class="upstream-picker">
+                <input id="route-upstream-model" name="upstream_model" autocomplete="off" placeholder="Leave blank to use client-facing name">
+                <button type="button" class="upstream-picker-btn" id="upstream-picker-toggle" title="Browse provider models" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>
+                <div class="upstream-picker-dropdown" id="upstream-picker-dropdown" role="listbox"></div>
+              </div>
+              <p class="help">Pick from a provider's models or type a custom name. Sent to the provider instead of the client-facing name.</p>
             </div>
           </div>
         </div>
@@ -1846,6 +1946,7 @@
 
     function closeModal() {
       if (!state.modal) return;
+      closeUpstreamDropdown();
       state.modal.classList.remove("active");
       state.modal.setAttribute("aria-hidden", "true");
       document.body.classList.remove("modal-open");
@@ -1908,20 +2009,88 @@
     }
 
     function updateUpstreamModelDatalist() {
-      var datalist = byId("route-upstream-models-list");
-      if (!datalist) return;
-      var seen = new Set();
-      datalist.innerHTML = "";
-      state.routeProviders.forEach(function(name) {
-        (state.providerModels[name] || []).forEach(function(m) {
-          if (!seen.has(m)) {
-            seen.add(m);
-            var opt = document.createElement("option");
-            opt.value = m;
-            datalist.appendChild(opt);
+      var dropdown = byId("upstream-picker-dropdown");
+      if (!dropdown) return;
+      dropdown.innerHTML = "";
+      var currentValue = (byId("route-upstream-model").value || "").trim();
+
+      if (!state.routeProviders.length) {
+        dropdown.innerHTML = '<div class="upstream-picker-empty">Select providers first</div>';
+        return;
+      }
+
+      var hasAny = false;
+      state.routeProviders.forEach(function(pName) {
+        var models = state.providerModels[pName] || [];
+        if (!models.length) return;
+        hasAny = true;
+
+        var group = document.createElement("div");
+        group.className = "upstream-picker-group";
+
+        var label = document.createElement("div");
+        label.className = "upstream-picker-group-label";
+        label.textContent = pName;
+        var count = document.createElement("span");
+        count.className = "badge type";
+        count.textContent = models.length + " model" + (models.length > 1 ? "s" : "");
+        label.appendChild(count);
+        group.appendChild(label);
+
+        models.forEach(function(m) {
+          var item = document.createElement("div");
+          item.className = "upstream-picker-item";
+          item.setAttribute("role", "option");
+          if (m === currentValue) {
+            item.classList.add("selected");
+            item.setAttribute("aria-selected", "true");
           }
+          item.dataset.value = m;
+
+          var text = document.createElement("span");
+          text.textContent = m;
+          item.appendChild(text);
+
+          var check = document.createElement("span");
+          check.className = "check-mark";
+          check.textContent = " ✓";
+          item.appendChild(check);
+
+          item.addEventListener("click", function() {
+            byId("route-upstream-model").value = m;
+            closeUpstreamDropdown();
+          });
+          group.appendChild(item);
         });
+
+        dropdown.appendChild(group);
       });
+
+      if (!hasAny) {
+        dropdown.innerHTML = '<div class="upstream-picker-empty">No models found — providers may be offline</div>';
+      }
+    }
+
+    function toggleUpstreamDropdown() {
+      var dropdown = byId("upstream-picker-dropdown");
+      var btn = byId("upstream-picker-toggle");
+      if (!dropdown) return;
+      var isOpen = dropdown.classList.toggle("open");
+      if (btn) {
+        btn.classList.toggle("active", isOpen);
+        btn.setAttribute("aria-expanded", String(isOpen));
+      }
+      if (isOpen) updateUpstreamModelDatalist();
+    }
+
+    function closeUpstreamDropdown() {
+      var dropdown = byId("upstream-picker-dropdown");
+      var btn = byId("upstream-picker-toggle");
+      if (dropdown) dropdown.classList.remove("open");
+      if (btn) {
+        btn.classList.remove("active");
+        btn.setAttribute("aria-expanded", "false");
+      }
     }
 
     async function fetchBalance() {
@@ -2410,7 +2579,7 @@
       document.querySelectorAll("[data-models-toggle]").forEach(function(btn) {
         btn.addEventListener("click", function() {
           var name = btn.dataset.modelsToggle;
-          var list = document.querySelector('[data-models-for="' + name + '"]');
+          var list = btn.parentElement.querySelector("[data-models-for]");
           if (list) list.classList.toggle("open");
           btn.classList.toggle("active");
         });
@@ -2701,7 +2870,7 @@
       byId("route-model").readOnly = Boolean(route);
       byId("route-upstream-model").value = route?.upstream_model || "";
       renderRouteProviderPicker();
-      // Fetch model lists for already-selected providers and update datalist
+      // Fetch model lists for already-selected providers and populate dropdown
       Promise.all(state.routeProviders.map(function (n) { return fetchProviderModels(n); }))
         .then(function () { updateUpstreamModelDatalist(); });
       openModal("route-modal");
@@ -2941,6 +3110,13 @@
       byId("route-form").addEventListener("submit", submitRoute);
       byId("confirm-action").addEventListener("click", () => {
         if (typeof state.confirmAction === "function") state.confirmAction();
+      });
+      // Upstream model picker dropdown
+      var upstreamToggle = byId("upstream-picker-toggle");
+      if (upstreamToggle) upstreamToggle.addEventListener("click", toggleUpstreamDropdown);
+      document.addEventListener("click", function(e) {
+        var picker = document.querySelector(".upstream-picker");
+        if (picker && !picker.contains(e.target)) closeUpstreamDropdown();
       });
       document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
       document.querySelectorAll(".modal-overlay").forEach((overlay) => {
