@@ -425,6 +425,32 @@
       font-size: 0.65rem;
       color: var(--muted);
     }
+    .config-provider-card .cpc-models {
+      padding: 0 0.7rem 0.5rem;
+    }
+    .config-provider-card .cpc-models-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 0.6rem;
+      padding: 2px 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .config-provider-card .cpc-models-toggle:hover,
+    .config-provider-card .cpc-models-toggle.active {
+      background: var(--accent-bg);
+      color: var(--text);
+    }
+    .config-provider-card .cpc-models-list {
+      display: none;
+      margin-top: 0.35rem;
+      line-height: 1.8;
+    }
+    .config-provider-card .cpc-models-list.open {
+      display: block;
+    }
     .config-provider-icon {
       width: 24px;
       height: 24px;
@@ -1886,6 +1912,23 @@
       }
     }
 
+    function updateUpstreamModelDatalist() {
+      var datalist = byId("route-upstream-models-list");
+      if (!datalist) return;
+      var seen = new Set();
+      datalist.innerHTML = "";
+      state.routeProviders.forEach(function(name) {
+        (state.providerModels[name] || []).forEach(function(m) {
+          if (!seen.has(m)) {
+            seen.add(m);
+            var opt = document.createElement("option");
+            opt.value = m;
+            datalist.appendChild(opt);
+          }
+        });
+      });
+    }
+
     async function fetchBalance() {
       try {
         const data = await api("/api/balance");
@@ -2321,6 +2364,19 @@
         if (pModels.length > 0) row2Parts.push(pModels.length + ' model' + (pModels.length > 1 ? 's' : '') + ' available');
         row2Parts.push(provider.has_key ? 'Key configured' : 'No key');
 
+        // Row 3: model list (collapsible)
+        var modelsHtml = '';
+        if (pModels.length > 0) {
+          modelsHtml = '<div class="cpc-models">' +
+            '<button class="cpc-models-toggle" type="button" data-models-toggle="' + escapeHtml(name) + '">' +
+              pModels.length + ' model' + (pModels.length > 1 ? 's' : '') +
+            '</button>' +
+            '<div class="cpc-models-list" data-models-for="' + escapeHtml(name) + '">' +
+              pModels.map(function(m) { return '<span class="badge type" style="font-size:0.6rem;margin:2px">' + escapeHtml(m) + '</span>'; }).join('') +
+            '</div>' +
+          '</div>';
+        }
+
         return '<div class="config-provider-card' + offCls + '">' +
           '<div class="cpc-row1">' +
             '<div class="config-provider-icon ' + brandCls + '">' + escapeHtml(initial) + '</div>' +
@@ -2334,11 +2390,13 @@
             '</div>' +
           '</div>' +
           '<div class="cpc-row2">' + row2Parts.join(' &middot; ') + '</div>' +
+          modelsHtml +
         '</div>';
       }).join('');
 
       byId("providers-content").innerHTML = cardsHtml;
       bindProviderActions();
+      bindModelToggles();
     }
 
     function bindProviderActions() {
@@ -2349,6 +2407,17 @@
           if (button.dataset.providerAction === "edit") openProviderModal(name);
           if (button.dataset.providerAction === "delete") confirmDeleteProvider(name);
           if (button.dataset.providerAction === "test") testProviderConnection(name);
+        });
+      });
+    }
+
+    function bindModelToggles() {
+      document.querySelectorAll("[data-models-toggle]").forEach(function(btn) {
+        btn.addEventListener("click", function() {
+          var name = btn.dataset.modelsToggle;
+          var list = document.querySelector('[data-models-for="' + name + '"]');
+          if (list) list.classList.toggle("open");
+          btn.classList.toggle("active");
         });
       });
     }
