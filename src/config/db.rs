@@ -9,6 +9,7 @@
 
 use rusqlite::{Connection, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// A single provider record from the database.
@@ -29,8 +30,8 @@ pub struct ProviderRecord {
 pub struct RouteRecord {
     pub model: String,
     pub provider_ids: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_model: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub upstream_models: HashMap<String, String>,
 }
 
 const SCHEMA_SQL: &str = r"
@@ -58,9 +59,8 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
     }
     let conn = Connection::open(db_path)?;
     conn.execute_batch(SCHEMA_SQL)?;
-    // Simple migration: add upstream_model if missing
     let _ = conn.execute("ALTER TABLE providers ADD COLUMN upstream_model TEXT", []);
-    let _ = conn.execute("ALTER TABLE routes ADD COLUMN upstream_model TEXT", []);
+    let _ = conn.execute("ALTER TABLE routes ADD COLUMN upstream_models TEXT", []);
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
@@ -90,15 +90,19 @@ pub fn load_providers(conn: &Connection) -> Result<Vec<ProviderRecord>> {
 /// Load all routes from the database.
 pub fn load_routes(conn: &Connection) -> Result<Vec<RouteRecord>> {
     let mut stmt =
-        conn.prepare("SELECT model, provider_ids, upstream_model FROM routes ORDER BY model")?;
+        conn.prepare("SELECT model, provider_ids, upstream_models FROM routes ORDER BY model")?;
     let rows = stmt.query_map([], |row| {
         let raw: String = row.get(1)?;
         let ids: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
-        let upstream: Option<String> = row.get(2)?;
+        let raw_models: Option<String> = row.get(2)?;
+        let upstream_models: HashMap<String, String> = raw_models
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
         Ok(RouteRecord {
             model: row.get(0)?,
             provider_ids: ids,
-            upstream_model: upstream.filter(|m| !m.trim().is_empty()),
+            upstream_models,
         })
     })?;
     let mut results = Vec::new();
@@ -118,9 +122,14 @@ pub fn upsert_provider(conn: &Transaction, p: &ProviderRecord) -> Result<()> {
 pub fn upsert_route(conn: &Transaction, r: &RouteRecord) -> Result<()> {
     let j = serde_json::to_string(&r.provider_ids)
         .map_err(|_e| rusqlite::Error::ExecuteReturnedResults)?;
+    let models_json = if r.upstream_models.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&r.upstream_models).unwrap_or_default())
+    };
     conn.execute(
-        "INSERT OR REPLACE INTO routes (model, provider_ids, upstream_model) VALUES (?1, ?2, ?3)",
-        params![&r.model, j, r.upstream_model.as_deref()],
+        "INSERT OR REPLACE INTO routes (model, provider_ids, upstream_models) VALUES (?1, ?2, ?3)",
+        params![&r.model, j, models_json],
     )?;
     Ok(())
 }
@@ -189,7 +198,7 @@ mod tests {
         let r = RouteRecord {
             model: "gpt-4".into(),
             provider_ids: vec!["omlx".into(), "lmstudio".into()],
-            upstream_model: None,
+            upstream_models: HashMap::new(),
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();
@@ -197,40 +206,48 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].model, "gpt-4");
         assert_eq!(loaded[0].provider_ids.len(), 2);
-        assert_eq!(loaded[0].upstream_model, None);
+        assert!(loaded[0].upstream_models.is_empty());
     }
 
     #[test]
-    fn test_route_with_upstream_model() {
+    fn test_route_with_upstream_models() {
         let path = temp_db("route_upstream");
         let mut conn = init_db(&path).expect("init_db failed");
         let tx = conn.transaction().unwrap();
+        let mut upstream = HashMap::new();
+        upstream.insert("openai".into(), "gpt-4o".into());
+        upstream.insert("deepseek".into(), "deepseek-chat".into());
         let r = RouteRecord {
             model: "my-alias".into(),
-            provider_ids: vec!["openai".into()],
-            upstream_model: Some("gpt-4o".into()),
+            provider_ids: vec!["openai".into(), "deepseek".into()],
+            upstream_models: upstream,
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();
         let loaded = load_routes(&conn).unwrap();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].upstream_model.as_deref(), Some("gpt-4o"));
+        assert_eq!(loaded[0].upstream_models.get("openai").unwrap(), "gpt-4o");
+        assert_eq!(loaded[0].upstream_models.get("deepseek").unwrap(), "deepseek-chat");
     }
 
     #[test]
-    fn test_route_empty_upstream_normalized() {
-        let path = temp_db("route_empty_upstream");
+    fn test_route_upstream_models_partial() {
+        let path = temp_db("upstream_partial");
         let mut conn = init_db(&path).expect("init_db failed");
         let tx = conn.transaction().unwrap();
+        let mut upstream = HashMap::new();
+        upstream.insert("openai".into(), "gpt-4o".into());
+        // deepseek has no upstream model — map doesn't contain it
         let r = RouteRecord {
-            model: "alias".into(),
-            provider_ids: vec!["openai".into()],
-            upstream_model: Some("".into()),
+            model: "my-model".into(),
+            provider_ids: vec!["openai".into(), "deepseek".into()],
+            upstream_models: upstream,
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();
         let loaded = load_routes(&conn).unwrap();
-        assert_eq!(loaded[0].upstream_model, None);
+        assert_eq!(loaded[0].upstream_models.get("openai").unwrap(), "gpt-4o");
+        assert!(!loaded[0].upstream_models.contains_key("deepseek"));
     }
 
     #[test]
@@ -262,7 +279,7 @@ mod tests {
         let r = RouteRecord {
             model: "delete-me".into(),
             provider_ids: vec!["omlx".into()],
-            upstream_model: None,
+            upstream_models: HashMap::new(),
         };
         upsert_route(&tx, &r).unwrap();
         tx.commit().unwrap();

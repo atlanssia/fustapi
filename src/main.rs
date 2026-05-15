@@ -251,7 +251,7 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
                 .unwrap_or_else(|_| fustapi::config::default_config());
             config.router.insert(model.clone(), fustapi::config::RouteConfig {
                 provider_ids: providers,
-                upstream_model: None,
+                upstream_models: std::collections::HashMap::new(),
             });
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {
                 eprintln!("Failed to save: {e}");

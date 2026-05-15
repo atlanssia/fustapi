@@ -23,12 +23,12 @@ pub struct AppConfig {
     pub providers: HashMap<String, ProviderConfig>,
 }
 
-/// A single model route: client-facing model name → provider list + optional upstream model.
+/// A single model route: client-facing model name → provider list + optional per-provider upstream model.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RouteConfig {
     pub provider_ids: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_model: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub upstream_models: std::collections::HashMap<String, String>,
 }
 
 /// A single provider endpoint configuration.
@@ -152,7 +152,7 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
             rec.model.clone(),
             RouteConfig {
                 provider_ids: rec.provider_ids.clone(),
-                upstream_model: rec.upstream_model.clone(),
+                upstream_models: rec.upstream_models.clone(),
             },
         );
     }
@@ -281,7 +281,7 @@ pub fn save_to_db(config: &AppConfig, db_path: &Path) -> Result<(), ConfigError>
         let rec = db::RouteRecord {
             model: model.clone(),
             provider_ids: route_cfg.provider_ids.clone(),
-            upstream_model: route_cfg.upstream_model.clone(),
+            upstream_models: route_cfg.upstream_models.clone(),
         };
         upsert_route(&tx, &rec).map_err(ConfigError::DbError)?;
     }
@@ -369,7 +369,7 @@ mod tests {
             .router
             .insert("old-model".into(), RouteConfig {
                 provider_ids: vec!["old-provider".into()],
-                upstream_model: None,
+                upstream_models: HashMap::new(),
             });
         save_to_db(&first, &db_path).expect("first save should work");
 
@@ -387,7 +387,7 @@ mod tests {
             .router
             .insert("new-model".into(), RouteConfig {
                 provider_ids: vec!["new-provider".into()],
-                upstream_model: None,
+                upstream_models: HashMap::new(),
             });
         save_to_db(&second, &db_path).expect("second save should work");
 
@@ -397,7 +397,7 @@ mod tests {
         assert!(loaded.router.contains_key("new-model"));
         assert!(!loaded.router.contains_key("old-model"));
         assert_eq!(
-            loaded.router.get("new-model").and_then(|r| r.upstream_model.as_deref()),
+            loaded.router.get("new-model").and_then(|r| r.upstream_models.get("new-provider")),
             None,
         );
 
@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn test_routes_with_upstream_model_roundtrip() {
+    fn test_routes_with_upstream_models_roundtrip() {
         let dir = std::env::temp_dir().join("fustapi_test_upstream_roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -421,20 +421,33 @@ mod tests {
                 r#type: "openai".into(),
             },
         );
+        config.providers.insert(
+            "deepseek".into(),
+            ProviderConfig {
+                endpoint: "https://api.deepseek.com".into(),
+                api_key: Some("sk-ds".into()),
+                model: None,
+                r#type: "deepseek".into(),
+            },
+        );
+        let mut upstream = HashMap::new();
+        upstream.insert("openai".into(), "gpt-4o".into());
+        upstream.insert("deepseek".into(), "deepseek-chat".into());
         config.router.insert(
-            "my-gpt4".into(),
+            "my-model".into(),
             RouteConfig {
-                provider_ids: vec!["openai".into()],
-                upstream_model: Some("gpt-4o".into()),
+                provider_ids: vec!["openai".into(), "deepseek".into()],
+                upstream_models: upstream,
             },
         );
 
         save_to_db(&config, &db_path).expect("save");
         let loaded = load_from_db(&db_path).expect("load");
 
-        let route = loaded.router.get("my-gpt4").expect("route should exist");
-        assert_eq!(route.provider_ids, vec!["openai"]);
-        assert_eq!(route.upstream_model.as_deref(), Some("gpt-4o"));
+        let route = loaded.router.get("my-model").expect("route should exist");
+        assert_eq!(route.provider_ids, vec!["openai", "deepseek"]);
+        assert_eq!(route.upstream_models.get("openai").unwrap(), "gpt-4o");
+        assert_eq!(route.upstream_models.get("deepseek").unwrap(), "deepseek-chat");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

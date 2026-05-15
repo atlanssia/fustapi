@@ -73,11 +73,11 @@ pub struct RealRouter {
     routes: HashMap<String, RouteEntry>,
 }
 
-/// Internal route entry: provider list + optional upstream model override.
+/// Internal route entry: provider list + per-provider upstream model overrides.
 #[derive(Debug)]
 struct RouteEntry {
     provider_ids: Vec<String>,
-    upstream_model: Option<String>,
+    upstream_models: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for RealRouter {
@@ -108,7 +108,7 @@ impl RealRouter {
                 model.clone(),
                 RouteEntry {
                     provider_ids: route_cfg.provider_ids.clone(),
-                    upstream_model: route_cfg.upstream_model.clone(),
+                    upstream_models: route_cfg.upstream_models.clone(),
                 },
             );
         }
@@ -153,9 +153,10 @@ impl Router for RealRouter {
     ) -> Result<crate::streaming::StreamMode, RouterError> {
         let model_name = request.model.clone();
 
-        // Inject upstream_model override from route config
+        // Inject per-provider upstream model override from route config
         if let Some(entry) = self.routes.get(&model_name)
-            && let Some(ref upstream) = entry.upstream_model
+            && let Some(provider_id) = entry.provider_ids.first()
+            && let Some(upstream) = entry.upstream_models.get(provider_id)
         {
             request.model = upstream.clone();
         }

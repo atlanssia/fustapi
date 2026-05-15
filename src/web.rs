@@ -69,8 +69,8 @@ fn default_type() -> String {
 pub struct ModelInfo {
     pub id: String,
     pub providers: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_model: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub upstream_models: std::collections::HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -78,7 +78,7 @@ pub struct RouteForm {
     pub model: String,
     pub providers: Vec<String>,
     #[serde(default)]
-    pub upstream_model: Option<String>,
+    pub upstream_models: std::collections::HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -236,7 +236,7 @@ pub async fn models_api_handler(Extension(db_path): Extension<Arc<PathBuf>>) -> 
         .map(|(id, route_cfg)| ModelInfo {
             id: id.clone(),
             providers: route_cfg.provider_ids.clone(),
-            upstream_model: route_cfg.upstream_model.clone(),
+            upstream_models: route_cfg.upstream_models.clone(),
         })
         .collect();
     (StatusCode::OK, Json(ModelsResponse { models })).into_response()
@@ -326,11 +326,18 @@ pub async fn create_route(
     }
 
     let existed = config.router.contains_key(&form.model);
+    // Only keep upstream_models entries for providers actually in this route
+    let valid_providers: std::collections::HashSet<_> = form.providers.iter().collect();
+    let upstream_models: std::collections::HashMap<String, String> = form
+        .upstream_models
+        .into_iter()
+        .filter(|(k, v)| valid_providers.contains(&k) && !v.trim().is_empty())
+        .collect();
     config.router.insert(
         form.model.clone(),
         crate::config::RouteConfig {
             provider_ids: form.providers,
-            upstream_model: form.upstream_model.filter(|m| !m.trim().is_empty()),
+            upstream_models,
         },
     );
 
@@ -446,6 +453,7 @@ pub async fn delete_provider(
     // Clean up routes that reference this provider; remove models with no providers left.
     config.router.retain(|_, route_cfg| {
         route_cfg.provider_ids.retain(|p| p != &id);
+        route_cfg.upstream_models.remove(&id);
         !route_cfg.provider_ids.is_empty()
     });
 
@@ -757,7 +765,7 @@ mod tests {
         let form = RouteForm {
             model: "qwen".into(),
             providers: Vec::new(),
-            upstream_model: None,
+            upstream_models: std::collections::HashMap::new(),
         };
 
         let err = validate_route_form(&form).expect_err("empty provider list should be rejected");
@@ -810,12 +818,38 @@ mod tests {
             models: vec![ModelInfo {
                 id: "gpt-4".into(),
                 providers: vec!["openai".into()],
-                upstream_model: None,
+                upstream_models: std::collections::HashMap::new(),
             }],
         };
         let json = serde_json::to_string(&resp).expect("should serialize");
         assert!(json.contains("\"id\":\"gpt-4\""));
         assert!(json.contains("\"providers\":[\"openai\"]"));
+    }
+
+    #[test]
+    fn models_response_with_upstream_models_serializes() {
+        let mut upstream = std::collections::HashMap::new();
+        upstream.insert("openai".into(), "gpt-4o".into());
+        upstream.insert("deepseek".into(), "deepseek-chat".into());
+        let resp = ModelsResponse {
+            models: vec![ModelInfo {
+                id: "my-model".into(),
+                providers: vec!["openai".into(), "deepseek".into()],
+                upstream_models: upstream,
+            }],
+        };
+        let json = serde_json::to_string(&resp).expect("should serialize");
+        assert!(json.contains("gpt-4o"));
+        assert!(json.contains("deepseek-chat"));
+    }
+
+    #[test]
+    fn route_form_deserializes_upstream_models() {
+        let json = r#"{"model":"test","providers":["openai"],"upstream_models":{"openai":"gpt-4o"}}"#;
+        let form: RouteForm = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(form.model, "test");
+        assert_eq!(form.providers, vec!["openai"]);
+        assert_eq!(form.upstream_models.get("openai").unwrap(), "gpt-4o");
     }
 
     #[test]

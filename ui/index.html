@@ -1523,7 +1523,7 @@
             Providers
           </button>
           <button class="btn tab" type="button" role="tab" id="tab-routes" aria-selected="false" aria-controls="routes-panel" data-tab="routes" tabindex="-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 10a6 6 0 0 1 6-6h3"/><path d="M6 14a6 6 0 0 0 6 6h3"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>
             Routes
           </button>
         </div>
@@ -1736,15 +1736,6 @@
               <p class="error" id="route-providers-error"></p>
               <div class="order-list" id="route-order-list" aria-live="polite"></div>
             </div>
-            <div class="form-field">
-              <label for="route-upstream-model">Upstream model (optional)</label>
-              <div class="upstream-picker">
-                <input id="route-upstream-model" name="upstream_model" autocomplete="off" placeholder="Leave blank to use client-facing name">
-                <button type="button" class="upstream-picker-btn" id="upstream-picker-toggle" title="Browse provider models" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>
-                <div class="upstream-picker-dropdown" id="upstream-picker-dropdown" role="listbox"></div>
-              </div>
-              <p class="help">Pick from a provider's models or type a custom name. Sent to the provider instead of the client-facing name.</p>
-            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -1787,6 +1778,7 @@
       modal: null,
       lastFocus: null,
       routeProviders: [],
+      routeUpstreamModels: {},
       confirmAction: null,
       balances: [],
       selectedProvider: null,
@@ -1946,7 +1938,7 @@
 
     function closeModal() {
       if (!state.modal) return;
-      closeUpstreamDropdown();
+      closeAllProviderModelDropdowns();
       state.modal.classList.remove("active");
       state.modal.setAttribute("aria-hidden", "true");
       document.body.classList.remove("modal-open");
@@ -2005,91 +1997,6 @@
         state.providerModels[name] = Array.isArray(data.models) ? data.models : [];
       } catch (_e) {
         state.providerModels[name] = [];
-      }
-    }
-
-    function updateUpstreamModelDatalist() {
-      var dropdown = byId("upstream-picker-dropdown");
-      if (!dropdown) return;
-      dropdown.innerHTML = "";
-      var currentValue = (byId("route-upstream-model").value || "").trim();
-
-      if (!state.routeProviders.length) {
-        dropdown.innerHTML = '<div class="upstream-picker-empty">Select providers first</div>';
-        return;
-      }
-
-      var hasAny = false;
-      state.routeProviders.forEach(function(pName) {
-        var models = state.providerModels[pName] || [];
-        if (!models.length) return;
-        hasAny = true;
-
-        var group = document.createElement("div");
-        group.className = "upstream-picker-group";
-
-        var label = document.createElement("div");
-        label.className = "upstream-picker-group-label";
-        label.textContent = pName;
-        var count = document.createElement("span");
-        count.className = "badge type";
-        count.textContent = models.length + " model" + (models.length > 1 ? "s" : "");
-        label.appendChild(count);
-        group.appendChild(label);
-
-        models.forEach(function(m) {
-          var item = document.createElement("div");
-          item.className = "upstream-picker-item";
-          item.setAttribute("role", "option");
-          if (m === currentValue) {
-            item.classList.add("selected");
-            item.setAttribute("aria-selected", "true");
-          }
-          item.dataset.value = m;
-
-          var text = document.createElement("span");
-          text.textContent = m;
-          item.appendChild(text);
-
-          var check = document.createElement("span");
-          check.className = "check-mark";
-          check.textContent = " ✓";
-          item.appendChild(check);
-
-          item.addEventListener("click", function() {
-            byId("route-upstream-model").value = m;
-            closeUpstreamDropdown();
-          });
-          group.appendChild(item);
-        });
-
-        dropdown.appendChild(group);
-      });
-
-      if (!hasAny) {
-        dropdown.innerHTML = '<div class="upstream-picker-empty">No models found — providers may be offline</div>';
-      }
-    }
-
-    function toggleUpstreamDropdown() {
-      var dropdown = byId("upstream-picker-dropdown");
-      var btn = byId("upstream-picker-toggle");
-      if (!dropdown) return;
-      var isOpen = dropdown.classList.toggle("open");
-      if (btn) {
-        btn.classList.toggle("active", isOpen);
-        btn.setAttribute("aria-expanded", String(isOpen));
-      }
-      if (isOpen) updateUpstreamModelDatalist();
-    }
-
-    function closeUpstreamDropdown() {
-      var dropdown = byId("upstream-picker-dropdown");
-      var btn = byId("upstream-picker-toggle");
-      if (dropdown) dropdown.classList.remove("open");
-      if (btn) {
-        btn.classList.remove("active");
-        btn.setAttribute("aria-expanded", "false");
       }
     }
 
@@ -2760,11 +2667,13 @@
       }
       setStateText("routes-state", "", true);
       byId("routes-content").hidden = false;
-      byId("routes-tbody").innerHTML = state.models.map((route) => {
-        var providerCol = route.providers.map((p, index) => "<span class=\"badge type\">" + (index + 1) + ". " + escapeHtml(p) + "</span>").join(" ");
-        if (route.upstream_model) {
-          providerCol += " <span class=\"badge\" style=\"font-size:0.55rem;opacity:0.7\">→ " + escapeHtml(route.upstream_model) + "</span>";
-        }
+      byId("routes-tbody").innerHTML = state.models.map(function(route) {
+        var providerCol = route.providers.map(function(p, index) {
+          var badge = "<span class=\"badge type\">" + (index + 1) + ". " + escapeHtml(p) + "</span>";
+          var upModel = route.upstream_models && route.upstream_models[p];
+          if (upModel) badge += " <span class=\"badge\" style=\"font-size:0.55rem;opacity:0.7\">→ " + escapeHtml(upModel) + "</span>";
+          return badge;
+        }).join(" ");
         return "<tr>" +
       "<td><strong>" + escapeHtml(route.id) + "</strong></td>" +
       "<td>" + providerCol + "</td>" +
@@ -2774,13 +2683,16 @@
       "</div></td>" +
     "</tr>";
       }).join("");
-      byId("routes-mobile").innerHTML = state.models.map((route) => {
-        var upstreamInfo = route.upstream_model
-          ? "<div><dt>Upstream</dt><dd>" + escapeHtml(route.upstream_model) + "</dd></div>"
-          : "";
+      byId("routes-mobile").innerHTML = state.models.map(function(route) {
+        var providerDl = route.providers.map(function(p, index) {
+          var line = (index + 1) + ". " + escapeHtml(p);
+          var upModel = route.upstream_models && route.upstream_models[p];
+          if (upModel) line += " → " + escapeHtml(upModel);
+          return line;
+        }).join("<br>");
         return "<article class=\"record\">" +
       "<h3>" + escapeHtml(route.id) + "</h3>" +
-      "<dl><div><dt>Priority</dt><dd>" + route.providers.map((p, index) => (index + 1) + ". " + escapeHtml(p)).join("<br>") + "</dd></div>" + upstreamInfo + "</dl>" +
+      "<dl><div><dt>Priority</dt><dd>" + providerDl + "</dd></div></dl>" +
       "<div class=\"actions\">" +
         "<button class=\"btn small\" type=\"button\" data-route-action=\"edit\" data-route-id=\"" + escapeHtml(route.id) + "\">Edit</button>" +
         "<button class=\"btn small danger\" type=\"button\" data-route-action=\"delete\" data-route-id=\"" + escapeHtml(route.id) + "\">Delete</button>" +
@@ -2821,12 +2733,10 @@
           if (input.checked) {
             await fetchProviderModels(input.value);
           }
-          updateUpstreamModelDatalist();
           renderRouteOrderList();
         });
       });
       renderRouteOrderList();
-      updateUpstreamModelDatalist();
     }
 
     function renderRouteOrderList() {
@@ -2837,16 +2747,82 @@
         return;
       }
       list.innerHTML = state.routeProviders.map((name, index) => `
-    <div class="order-item">
+    <div class="order-item" style="grid-template-columns: minmax(0,1fr) minmax(120px,180px) auto auto;">
       <strong>${index + 1}. ${escapeHtml(name)}</strong>
+      <div class="upstream-picker" style="position:relative;">
+        <input data-route-provider-model="${escapeHtml(name)}" autocomplete="off" placeholder="Upstream model" value="${escapeHtml(state.routeUpstreamModels[name] || "")}">
+        <button type="button" class="upstream-picker-btn" data-route-provider-model-toggle="${escapeHtml(name)}" title="Browse models" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>
+        <div class="upstream-picker-dropdown" data-route-provider-model-dropdown="${escapeHtml(name)}" role="listbox"></div>
+      </div>
       <button class="btn small" type="button" ${index === 0 ? "disabled" : ""} data-route-provider-index="${index}" data-route-provider-direction="-1">Up</button>
       <button class="btn small" type="button" ${index === state.routeProviders.length - 1 ? "disabled" : ""} data-route-provider-index="${index}" data-route-provider-direction="1">Down</button>
     </div>
   `).join("");
-      list.querySelectorAll("[data-route-provider-index]").forEach((button) => {
-        button.addEventListener("click", () => {
+      list.querySelectorAll("[data-route-provider-model]").forEach(function(input) {
+        if (input.tagName === "INPUT") {
+          input.addEventListener("input", function() {
+            var pName = input.dataset.routeProviderModel;
+            if (input.value.trim()) state.routeUpstreamModels[pName] = input.value.trim();
+            else delete state.routeUpstreamModels[pName];
+          });
+        }
+      });
+      list.querySelectorAll("[data-route-provider-model-toggle]").forEach(function(btn) {
+        btn.addEventListener("click", function(e) {
+          e.preventDefault();
+          toggleProviderModelDropdown(btn.dataset.routeProviderModelToggle, btn);
+        });
+      });
+      list.querySelectorAll("[data-route-provider-index]").forEach(function(button) {
+        button.addEventListener("click", function() {
           moveRouteProvider(Number(button.dataset.routeProviderIndex), Number(button.dataset.routeProviderDirection));
         });
+      });
+    }
+
+    function toggleProviderModelDropdown(providerName, btn) {
+      closeAllProviderModelDropdowns();
+      var dropdown = document.querySelector('[data-route-provider-model-dropdown="' + providerName + '"]');
+      if (!dropdown) return;
+      var models = state.providerModels[providerName] || [];
+      var currentInput = document.querySelector('[data-route-provider-model="' + providerName + '"]');
+      var currentValue = (currentInput ? currentInput.value : "").trim();
+      if (!models.length) {
+        dropdown.textContent = "No models found";
+        dropdown.className = "upstream-picker-dropdown upstream-picker-empty";
+        dropdown.classList.add("open");
+      } else {
+        dropdown.textContent = "";
+        dropdown.className = "upstream-picker-dropdown";
+        models.forEach(function(m) {
+          var item = document.createElement("div");
+          item.className = "upstream-picker-item" + (m === currentValue ? " selected" : "");
+          item.dataset.model = m;
+          item.textContent = m;
+          var check = document.createElement("span");
+          check.className = "check-mark";
+          check.textContent = "✓";
+          item.appendChild(check);
+          item.addEventListener("click", function() {
+            var inp = document.querySelector('[data-route-provider-model="' + providerName + '"]');
+            if (inp) { inp.value = m; state.routeUpstreamModels[providerName] = m; }
+            closeAllProviderModelDropdowns();
+          });
+          dropdown.appendChild(item);
+        });
+        dropdown.classList.add("open");
+      }
+      btn.classList.add("active");
+      btn.setAttribute("aria-expanded", "true");
+    }
+
+    function closeAllProviderModelDropdowns() {
+      document.querySelectorAll("[data-route-provider-model-dropdown].open").forEach(function(d) {
+        d.classList.remove("open");
+      });
+      document.querySelectorAll("[data-route-provider-model-toggle].active").forEach(function(b) {
+        b.classList.remove("active");
+        b.setAttribute("aria-expanded", "false");
       });
     }
 
@@ -2859,27 +2835,27 @@
       renderRouteOrderList();
     }
 
-    function openRouteModal(modelId = "") {
+    function openRouteModal(modelId) {
       clearErrors("route-form");
-      const route = state.models.find((item) => item.id === modelId);
-      state.routeProviders = route ? [...route.providers] : [];
+      var route = state.models.find(function(item) { return item.id === modelId; });
+      state.routeProviders = route ? route.providers.slice() : [];
+      state.routeUpstreamModels = route && route.upstream_models ? Object.assign({}, route.upstream_models) : {};
       byId("route-modal-title").textContent = route ? "Edit route" : "Add route";
       byId("route-submit").textContent = route ? "Update route" : "Create route";
-      byId("route-original-model").value = route?.id || "";
-      byId("route-model").value = route?.id || "";
+      byId("route-original-model").value = route ? route.id : "";
+      byId("route-model").value = route ? route.id : "";
       byId("route-model").readOnly = Boolean(route);
-      byId("route-upstream-model").value = route?.upstream_model || "";
       renderRouteProviderPicker();
       // Fetch model lists for already-selected providers and populate dropdown
       Promise.all(state.routeProviders.map(function (n) { return fetchProviderModels(n); }))
-        .then(function () { updateUpstreamModelDatalist(); });
+        .then(function () { renderRouteOrderList(); });
       openModal("route-modal");
     }
 
     function validateRouteForm() {
       clearErrors("route-form");
-      const model = byId("route-model").value.trim();
-      let valid = true;
+      var model = byId("route-model").value.trim();
+      var valid = true;
       if (!model) {
         setFieldError("route-model", "Enter a model name.");
         valid = false;
@@ -2888,13 +2864,12 @@
         byId("route-providers-error").textContent = "Select at least one provider.";
         valid = false;
       }
-      const upstreamModel = byId("route-upstream-model").value.trim();
       if (!valid) {
-        const firstInvalid = byId("route-form").querySelector("[aria-invalid='true']");
+        var firstInvalid = byId("route-form").querySelector("[aria-invalid='true']");
         if (firstInvalid) firstInvalid.focus();
         return null;
       }
-      return { model, providers: [...state.routeProviders], upstream_model: upstreamModel || null };
+      return { model: model, providers: state.routeProviders.slice(), upstream_models: Object.assign({}, state.routeUpstreamModels) };
     }
 
     async function submitRoute(event) {
@@ -3111,12 +3086,9 @@
       byId("confirm-action").addEventListener("click", () => {
         if (typeof state.confirmAction === "function") state.confirmAction();
       });
-      // Upstream model picker dropdown
-      var upstreamToggle = byId("upstream-picker-toggle");
-      if (upstreamToggle) upstreamToggle.addEventListener("click", toggleUpstreamDropdown);
+      // Close per-provider model dropdowns on outside click
       document.addEventListener("click", function(e) {
-        var picker = document.querySelector(".upstream-picker");
-        if (picker && !picker.contains(e.target)) closeUpstreamDropdown();
+        if (!e.target.closest(".upstream-picker")) closeAllProviderModelDropdowns();
       });
       document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
       document.querySelectorAll(".modal-overlay").forEach((overlay) => {
