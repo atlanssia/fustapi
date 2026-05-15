@@ -780,25 +780,25 @@ impl Provider for OpenAIProvider {
         }
 
         // Fallback: use /v1/models data if no rich health info
-        if metrics.is_empty() {
-            if let Some(model_ids) = &models_data {
-                metrics.push(Metric {
-                    label: "Models".to_string(),
-                    kind: MetricKind::Absolute,
-                    value: model_ids.len() as f64,
-                    total: None,
-                    unit: Some("loaded".to_string()),
-                    percentage: None,
-                    status: if model_ids.is_empty() {
-                        MetricStatus::Warn
-                    } else {
-                        MetricStatus::Ok
-                    },
-                    reset_at_ms: None,
-                });
-                if detected_model.is_none() {
-                    detected_model = model_ids.first().cloned();
-                }
+        if metrics.is_empty()
+            && let Some(model_ids) = &models_data
+        {
+            metrics.push(Metric {
+                label: "Models".to_string(),
+                kind: MetricKind::Absolute,
+                value: model_ids.len() as f64,
+                total: None,
+                unit: Some("loaded".to_string()),
+                percentage: None,
+                status: if model_ids.is_empty() {
+                    MetricStatus::Warn
+                } else {
+                    MetricStatus::Ok
+                },
+                reset_at_ms: None,
+            });
+            if detected_model.is_none() {
+                detected_model = model_ids.first().cloned();
             }
         }
 

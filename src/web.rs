@@ -151,8 +151,10 @@ fn provider_config_from_form(
 
     crate::config::ProviderConfig {
         endpoint: if form.endpoint.trim().is_empty() {
-            crate::config::default_endpoint(&form.provider_type)
-                .map(String::from)
+            form.provider_type
+                .parse::<crate::types::ProviderType>()
+                .ok()
+                .and_then(|pt| pt.default_endpoint().map(String::from))
                 .unwrap_or_default()
         } else {
             form.endpoint
@@ -174,7 +176,12 @@ fn validate_provider_form(form: &ProviderForm) -> Result<(), &'static str> {
     if form.name.trim().is_empty() {
         return Err("Provider name is required");
     }
-    let has_default = crate::config::default_endpoint(&form.provider_type).is_some();
+    let has_default = form
+        .provider_type
+        .parse::<crate::types::ProviderType>()
+        .ok()
+        .and_then(|pt| pt.default_endpoint())
+        .is_some();
     if (!form.endpoint.trim().is_empty() || !has_default)
         && reqwest::Url::parse(&form.endpoint)
             .ok()
@@ -182,17 +189,7 @@ fn validate_provider_form(form: &ProviderForm) -> Result<(), &'static str> {
     {
         return Err("Provider endpoint must be a valid http or https URL");
     }
-    if !matches!(
-        form.provider_type.as_str(),
-        "omlx"
-            | "lmstudio"
-            | "sglang"
-            | "openai"
-            | "openai-compatible"
-            | "deepseek"
-            | "glm"
-            | "z.ai"
-    ) {
+    if form.provider_type.parse::<crate::types::ProviderType>().is_err() {
         return Err("Provider type is not supported");
     }
     Ok(())

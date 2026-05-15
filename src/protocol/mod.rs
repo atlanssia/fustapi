@@ -4,13 +4,13 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod serializer;
 
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::router::Router;
-use crate::streaming::LLMChunk;
 
 /// Protocol identifier for dispatch decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,44 +74,6 @@ async fn openai_handler(
     }
 }
 
-/// Extract token usage from raw SSE bytes in passthrough mode.
-///
-/// Scans SSE data lines for usage fields from upstream providers that
-/// support `stream_options.include_usage`. Maintains a small sliding
-/// buffer to handle cross‑chunk boundaries without adding latency.
-fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenUsage> {
-    let text = String::from_utf8_lossy(buf);
-    for line in text.lines() {
-        let data = line
-            .strip_prefix("data: ")
-            .or_else(|| line.strip_prefix("data:"));
-        let Some(data) = data else { continue };
-        let data = data.trim();
-        if data == "[DONE]" {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
-            && let Some(usage) = v.get("usage")
-        {
-            let pt = usage
-                .get("prompt_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as u32;
-            let ct = usage
-                .get("completion_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as u32;
-            if pt > 0 || ct > 0 {
-                return Some(crate::metrics::TokenUsage {
-                    prompt_tokens: pt,
-                    completion_tokens: ct,
-                });
-            }
-        }
-    }
-    None
-}
-
 /// Forward provider stream as SSE response.
 async fn forward_streaming(
     router: &dyn Router,
@@ -120,8 +82,6 @@ async fn forward_streaming(
     protocol: Protocol,
     mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
-    // If client requested Anthropic protocol, we MUST normalize if the provider is OpenAI-compatible (which all are currently).
-    // Passthrough only works if the provider's native SSE matches the client's requested protocol.
     let model_name = model.to_string();
     let allow_passthrough = protocol == Protocol::OpenAI;
 
@@ -136,19 +96,8 @@ async fn forward_streaming(
     match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => {
             use futures::StreamExt;
-            let mut block_index: usize = 0;
-            // Tracks whether we need to emit content_block_start for the
-            // current content block. Resets when the block changes.
-            let mut need_block_start = true;
-            // Tracks whether a text content block is currently open and needs
-            // a content_block_stop before a different block type starts.
-            let mut text_block_open = false;
-            // Tracks whether a thinking/reasoning block is currently open.
-            let mut reasoning_block_open = false;
-            // Tracks whether any tool call has been emitted (for stop_reason).
-            let mut has_tool_calls = false;
-            // Tracks whether the initial role chunk has been sent (OpenAI protocol).
             let mut sent_role = false;
+            let mut anthropic_state = serializer::AnthropicStreamState::new();
             let model_name_start = model_name.clone();
 
             let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
@@ -162,70 +111,10 @@ async fn forward_streaming(
                             Protocol::OpenAI => {
                                 let include_role = !sent_role;
                                 sent_role = true;
-                                create_sse_chunk(&chunk, &model_name, include_role)
+                                serializer::serialize_openai_chunk(&chunk, &model_name, include_role)
                             }
                             Protocol::Anthropic => {
-                                let mut prefix = String::new();
-
-                                // Close any open block before transitioning to a
-                                // different block type. When chunk.done,
-                                // serialize_stream_event handles content_block_stop.
-                                let needs_close = (reasoning_block_open
-                                    && (chunk.content.is_some() || chunk.tool_call.is_some()))
-                                    || (text_block_open && chunk.tool_call.is_some());
-                                if needs_close {
-                                    let block_stop = serde_json::json!({
-                                        "type": "content_block_stop",
-                                        "index": block_index
-                                    });
-                                    prefix.push_str(&format!(
-                                        "event: content_block_stop\ndata: {}\n\n",
-                                        serde_json::to_string(&block_stop).unwrap_or_default()
-                                    ));
-                                    block_index += 1;
-                                    reasoning_block_open = false;
-                                    text_block_open = false;
-                                    need_block_start = true;
-                                }
-
-                                let stop_reason = if has_tool_calls || chunk.tool_call.is_some() {
-                                    "tool_use"
-                                } else {
-                                    "end_turn"
-                                };
-
-                                let s = anthropic::serialize_stream_event(
-                                    &chunk,
-                                    "msg_gw",
-                                    &model_name,
-                                    &block_index,
-                                    need_block_start,
-                                    stop_reason,
-                                );
-
-                                if chunk.reasoning_content.is_some() {
-                                    need_block_start = false;
-                                    reasoning_block_open = true;
-                                }
-                                if chunk.content.is_some() {
-                                    need_block_start = false;
-                                    text_block_open = true;
-                                }
-                                if chunk.tool_call.is_some() {
-                                    has_tool_calls = true;
-                                    block_index += 1;
-                                    need_block_start = true;
-                                    text_block_open = false;
-                                    reasoning_block_open = false;
-                                }
-                                if chunk.done {
-                                    block_index += 1;
-                                    need_block_start = true;
-                                    text_block_open = false;
-                                    reasoning_block_open = false;
-                                }
-
-                                format!("{prefix}{s}")
+                                anthropic_state.serialize_chunk(&chunk, &model_name)
                             }
                         };
                         Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
@@ -265,33 +154,10 @@ async fn forward_streaming(
                     ),
                 );
 
-                let response = Response::builder()
-                    .status(StatusCode::OK)
-                    .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
-                    .header("cache-control", "no-cache")
-                    .body(axum::body::Body::from_stream(combined))
-                    .unwrap_or_else(|_| {
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(axum::body::Body::empty())
-                            .unwrap()
-                    });
-                return Ok(response);
+                return Ok(sse_response(Box::pin(combined)));
             }
 
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
-                .header("cache-control", "no-cache")
-                .body(axum::body::Body::from_stream(body_stream))
-                .unwrap_or_else(|_| {
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(axum::body::Body::empty())
-                        .unwrap()
-                });
-
-            Ok(response)
+            Ok(sse_response(Box::pin(body_stream)))
         }
         crate::streaming::StreamMode::Passthrough(byte_stream) => {
             let mut buf = bytes::BytesMut::with_capacity(8192);
@@ -301,16 +167,13 @@ async fn forward_streaming(
                     Ok(bytes) => {
                         tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
 
-                        // Scan passthrough SSE bytes for usage data so that
-                        // gen speed and token columns are accurate even when
-                        // the client uses the OpenAI protocol.
                         if tracker.tokens.is_none() {
                             buf.extend_from_slice(&bytes);
                             if buf.len() > 8192 {
                                 let excess = buf.len() - 8192;
                                 let _ = buf.split_to(excess);
                             }
-                            if let Some(usage) = extract_usage_from_sse_bytes(&buf) {
+                            if let Some(usage) = serializer::extract_usage_from_sse_bytes(&buf) {
                                 tracker.set_tokens(usage);
                             }
                         }
@@ -331,138 +194,24 @@ async fn forward_streaming(
                     }
                 });
 
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
-                .header("cache-control", "no-cache")
-                .header("connection", "keep-alive")
-                .body(axum::body::Body::from_stream(body_stream))
-                .unwrap_or_else(|_| {
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(axum::body::Body::empty())
-                        .unwrap()
-                });
-
-            Ok(response)
+            Ok(sse_response(Box::pin(body_stream)))
         }
     }
 }
 
-/// Create an SSE-formatted chunk from an `LLMChunk`.
-fn create_sse_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String {
-    let ts = current_timestamp();
-    let mut lines = Vec::new();
-
-    if include_role {
-        let role_data = serde_json::json!({
-            "id": "chatcmpl-gw",
-            "object": "chat.completion.chunk",
-            "created": ts,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"role": "assistant"},
-                "finish_reason": null
-            }]
-        });
-        lines.push(format!("data: {role_data}"));
-    }
-
-    if let Some(ref content) = chunk.content
-        && !content.is_empty()
-    {
-        let data = serde_json::json!({
-            "id": "chatcmpl-gw",
-            "object": "chat.completion.chunk",
-            "created": ts,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": content},
-                "finish_reason": null
-            }]
-        });
-        lines.push(format!("data: {data}"));
-    }
-
-    if let Some(ref reasoning) = chunk.reasoning_content
-        && !reasoning.is_empty()
-    {
-        let data = serde_json::json!({
-            "id": "chatcmpl-gw",
-            "object": "chat.completion.chunk",
-            "created": ts,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"reasoning_content": reasoning},
-                "finish_reason": null
-            }]
-        });
-        lines.push(format!("data: {data}"));
-    }
-
-    if let Some(ref tc) = chunk.tool_call {
-        let args_str = if tc.arguments.is_string() {
-            tc.arguments.as_str().unwrap().to_string()
-        } else {
-            serde_json::to_string(&tc.arguments).unwrap_or_default()
-        };
-        let data = serde_json::json!({
-            "id": "chatcmpl-gw",
-            "object": "chat.completion.chunk",
-            "created": ts,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": tc.id.clone().unwrap_or_else(|| "call_emulated".to_string()),
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": args_str
-                        }
-                    }]
-                },
-                "finish_reason": null
-            }]
-        });
-        lines.push(format!("data: {data}"));
-    }
-
-    if chunk.done {
-        let data = serde_json::json!({
-            "id": "chatcmpl-gw",
-            "object": "chat.completion.chunk",
-            "created": ts,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop"
-            }]
-        });
-        lines.push(format!("data: {data}"));
-        lines.push("data: [DONE]".to_string());
-    }
-
-    if lines.is_empty() {
-        String::new()
-    } else {
-        lines.join("\n\n") + "\n\n"
-    }
-}
-
-/// Get current UTC timestamp in seconds.
-fn current_timestamp() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn sse_response(body_stream: std::pin::Pin<Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>> + Send>>) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("connection", "keep-alive")
+        .body(axum::body::Body::from_stream(body_stream))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        })
 }
 
 /// Collect all chunks and return a single non-streaming response.

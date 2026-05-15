@@ -181,26 +181,15 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
             api_key,
             upstream_model,
         } => {
-            let valid_types = [
-                "omlx",
-                "lmstudio",
-                "sglang",
-                "openai",
-                "openai-compatible",
-                "deepseek",
-                "glm",
-                "z.ai",
-            ];
-            if !valid_types.contains(&r#type.as_str()) {
-                eprintln!(
-                    "Unknown provider type '{}'. Valid types: {}",
-                    r#type,
-                    valid_types.join(", ")
-                );
-                std::process::exit(1);
-            }
+            let pt: fustapi::types::ProviderType = match r#type.parse() {
+                Ok(pt) => pt,
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    std::process::exit(1);
+                }
+            };
             let endpoint = endpoint.unwrap_or_else(|| {
-                fustapi::config::default_endpoint(&r#type)
+                pt.default_endpoint()
                     .map(String::from)
                     .unwrap_or_default()
             });
@@ -220,7 +209,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                     endpoint,
                     api_key,
                     model: upstream_model,
-                    r#type,
+                    r#type: pt.to_string(),
                 },
             );
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {
