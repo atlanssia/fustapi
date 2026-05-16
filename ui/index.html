@@ -2944,19 +2944,38 @@
       if (!state.metrics) return;
       const m = state.metrics;
       
-      byId("metric-rpm").textContent = m.rpm.toFixed(1);
-      byId("metric-latency").textContent = Math.round(m.avg_latency_ms) + "ms";
-      byId("metric-inflight").textContent = m.in_flight;
-      byId("metric-total-requests").textContent = m.total_requests;
-      byId("metric-success-rate").textContent = (m.total_requests === 0 ? 100 : m.success_rate).toFixed(1) + "%";
-      
+      // ── Formatting helpers ────────────────────────────────────
+      const fmtNum = (n) => {
+        if (n < 1000) return String(n);
+        if (n < 10000) return n.toLocaleString();
+        if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+        return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+      };
+      const fmtMs = (ms) => {
+        if (ms <= 0) return "0ms";
+        if (ms < 1000) return Math.round(ms) + "ms";
+        if (ms < 60000) return (ms / 1000).toFixed(1).replace(/\.0$/, "") + "s";
+        const m = Math.floor(ms / 60000);
+        const s = Math.round((ms % 60000) / 1000);
+        return s > 0 ? m + "m " + s + "s" : m + "m";
+      };
+      const fmtTokens = (n) => {
+        if (n < 1000) return String(n);
+        if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+        return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+      };
       const formatTime = (s) => {
         if (s < 60) return s + "s";
         if (s < 3600) return Math.floor(s/60) + "m " + (s%60) + "s";
         return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
       };
-      const uptimeSub = byId("dashboard-uptime-sub");
-      if (uptimeSub) uptimeSub.textContent = "Uptime " + formatTime(m.uptime_secs);
+
+      byId("metric-rpm").textContent = m.rpm.toFixed(1);
+      byId("metric-latency").textContent = fmtMs(m.avg_latency_ms);
+      byId("metric-inflight").textContent = m.in_flight;
+      byId("metric-total-requests").textContent = fmtNum(m.total_requests);
+      byId("metric-success-rate").textContent = (m.total_requests === 0 ? 100 : m.success_rate).toFixed(1).replace(/\.0$/, "") + "%";
+
       const gwUptime = byId("gw-uptime");
       if (gwUptime) gwUptime.textContent = formatTime(m.uptime_secs);
 
@@ -2968,12 +2987,12 @@
           <tr>
             <td><strong>${escapeHtml(p.name)}</strong></td>
             <td><code>${escapeHtml(p.model)}</code></td>
-            <td>${p.request_count} ${p.failure_count > 0 ? '<span style="color:var(--danger)">(' + p.failure_count + ' err)</span>' : ''}</td>
-            <td>${p.success_rate.toFixed(1)}%</td>
-            <td>${Math.round(p.avg_latency_ms)}ms</td>
-            <td>${Math.round(p.avg_ttft_ms || 0)}ms</td>
+            <td>${fmtNum(p.request_count)} ${p.failure_count > 0 ? '<span style="color:var(--danger)">(' + p.failure_count + ' err)</span>' : ''}</td>
+            <td>${p.success_rate.toFixed(1).replace(/\.0$/, "")}%</td>
+            <td>${fmtMs(p.avg_latency_ms)}</td>
+            <td>${fmtMs(p.avg_ttft_ms || 0)}</td>
             <td>${Math.round(p.avg_gen_tokens_per_sec || 0)} t/s</td>
-            <td>${p.prompt_tokens} / ${p.completion_tokens}</td>
+            <td>${fmtTokens(p.prompt_tokens)} / ${fmtTokens(p.completion_tokens)}</td>
           </tr>
         `).join("");
       }
@@ -3017,7 +3036,7 @@
       for (let i = 0; i <= 2; i++) {
         const val = (maxVal * (2 - i) / 2);
         const y = padTop + (plotH * i / 2);
-        const label = dataKey === "avg_latency_ms" ? Math.round(val) + "" : val.toFixed(1);
+        const label = dataKey === "avg_latency_ms" ? fmtMs(val) : val.toFixed(1);
         ctx.fillText(label, padLeft - 6, y);
       }
 
@@ -3061,8 +3080,8 @@
       // Current value badge (top-right)
       const current = timeseries[timeseries.length - 1][dataKey];
       const display = dataKey === "avg_latency_ms"
-        ? Math.round(current) + "ms"
-        : current.toFixed(2);
+        ? fmtMs(current)
+        : current.toFixed(1);
       ctx.font = "bold 11px monospace";
       ctx.textAlign = "right";
       ctx.textBaseline = "top";
