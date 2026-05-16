@@ -85,6 +85,11 @@ async fn forward_streaming(
     let model_name = model.to_string();
     let allow_passthrough = protocol == Protocol::OpenAI;
 
+    // Sync tracker model with the upstream model for accurate metrics.
+    if let Some(upstream) = router.resolve_upstream_model(model) {
+        tracker.set_model(upstream);
+    }
+
     let stream_mode = router
         .chat_stream(request, allow_passthrough)
         .await
@@ -220,9 +225,14 @@ async fn collect_non_streaming(
     request: crate::provider::UnifiedRequest,
     model: &str,
     protocol: Protocol,
-    guard: crate::metrics::guard::RequestGuard,
+    mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
     use tokio_stream::StreamExt;
+
+    // Sync guard model with the upstream model for accurate metrics.
+    if let Some(upstream) = router.resolve_upstream_model(model) {
+        guard.set_model(upstream);
+    }
 
     let stream_mode = match router.chat_stream(request, false).await {
         Ok(mode) => mode,

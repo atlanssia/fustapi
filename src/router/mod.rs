@@ -53,6 +53,9 @@ pub trait Router: Send + Sync {
     /// Resolve a model name to a provider name.
     fn resolve(&self, model: &str) -> Result<String, RouterError>;
 
+    /// Resolve the upstream model name for a given client model.
+    fn resolve_upstream_model(&self, model: &str) -> Option<String>;
+
     /// Get list of available models.
     fn list_models(&self) -> Vec<String>;
 
@@ -139,6 +142,15 @@ impl Router for RealRouter {
             return Ok(first.clone());
         }
         Err(RouterError::ModelNotFound(model.to_string()))
+    }
+    fn resolve_upstream_model(&self, model: &str) -> Option<String> {
+        if let Some(entry) = self.routes.get(model)
+            && let Some(provider_id) = entry.provider_ids.first()
+        {
+            entry.upstream_models.get(provider_id).cloned()
+        } else {
+            None
+        }
     }
     fn list_models(&self) -> Vec<String> {
         self.routes.keys().cloned().collect()
@@ -235,6 +247,9 @@ impl Router for RealRouter {
 impl Router for std::sync::Arc<RealRouter> {
     fn resolve(&self, model: &str) -> Result<String, RouterError> {
         (**self).resolve(model)
+    }
+    fn resolve_upstream_model(&self, model: &str) -> Option<String> {
+        (**self).resolve_upstream_model(model)
     }
     fn list_models(&self) -> Vec<String> {
         (**self).list_models()

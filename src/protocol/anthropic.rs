@@ -242,6 +242,15 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
             },
         );
     }
+    // Map Anthropic-specific params to OpenAI equivalents.
+    let mut extra = req.extra;
+    if let Some(stop_seqs) = extra.remove("stop_sequences") {
+        extra.insert("stop".to_string(), stop_seqs);
+    }
+    // Drop Anthropic-only params with no OpenAI equivalent.
+    extra.remove("top_k");
+    extra.remove("metadata");
+
     Ok(UnifiedRequest {
         model: req.model,
         messages,
@@ -257,7 +266,7 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?,
-        extra_params: req.extra,
+        extra_params: extra,
     })
 }
 

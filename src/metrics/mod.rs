@@ -139,6 +139,10 @@ impl StreamTracker {
     pub fn set_success(&mut self, success: bool) {
         self.success = success;
     }
+
+    pub fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
 }
 
 impl Drop for StreamTracker {

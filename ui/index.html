@@ -3071,17 +3071,14 @@
     }
 
     function setupEvents() {
-      byId("add-provider-panel").addEventListener("click", () => openProviderModal());
-      byId("refresh-providers").addEventListener("click", fetchProviders);
-      byId("provider-form").addEventListener("submit", submitProvider);
-      byId("provider-type").addEventListener("change", function () {
-        const ep = byId("provider-endpoint");
-        const def = DEFAULT_ENDPOINTS[this.value];
-        ep.placeholder = def || "http://localhost:8800/v1";
-        ep.required = !def;
-      });
-      byId("add-route-panel").addEventListener("click", () => openRouteModal());
-      byId("refresh-routes").addEventListener("click", fetchModels);
+      const addRouteBtn = byId("add-route-panel");
+      const refreshRoutesBtn = byId("refresh-routes");
+      const addProviderBtn = byId("add-provider-panel");
+      const refreshProvidersBtn = byId("refresh-providers");
+      if (addRouteBtn) addRouteBtn.addEventListener("click", () => openRouteModal());
+      if (refreshRoutesBtn) refreshRoutesBtn.addEventListener("click", fetchModels);
+      if (addProviderBtn) addProviderBtn.addEventListener("click", () => openProviderModal());
+      if (refreshProvidersBtn) refreshProvidersBtn.addEventListener("click", fetchProviders);
       byId("route-form").addEventListener("submit", submitRoute);
       byId("confirm-action").addEventListener("click", () => {
         if (typeof state.confirmAction === "function") state.confirmAction();

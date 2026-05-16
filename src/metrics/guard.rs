@@ -82,6 +82,13 @@ impl RequestGuard {
             .elapsed()
             .as_millis() as u64
     }
+
+    /// Update the model name (e.g., to reflect the upstream model after route resolution).
+    pub fn set_model(&mut self, model: String) {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.model = model;
+        }
+    }
 }
 
 impl Drop for RequestGuard {

@@ -162,9 +162,27 @@ impl OpenAIProvider {
             body["tools"] = serde_json::json!(tool_defs);
         }
 
-        // Forward all extra parameters (top_p, stop, n, etc.) as-is.
+        // Forward only known OpenAI-compatible parameters.
+        // Providers like GLM reject unknown fields (e.g., top_k from Anthropic protocol).
+        const KNOWN_PARAMS: &[&str] = &[
+            "top_p",
+            "n",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "logprobs",
+            "top_logprobs",
+            "response_format",
+            "seed",
+            "logit_bias",
+            "user",
+            "service_tier",
+            "parallel_tool_calls",
+        ];
         for (key, value) in &request.extra_params {
-            body[key] = value.clone();
+            if KNOWN_PARAMS.contains(&key.as_str()) {
+                body[key] = value.clone();
+            }
         }
 
         body
