@@ -1538,7 +1538,7 @@
           <!-- Compact stats row -->
           <div class="compact-stats">
             <div class="compact-stat"><span class="cs-label">Total Reqs</span><strong id="metric-total-requests">0</strong></div>
-            <div class="compact-stat"><span class="cs-label">QPS</span><strong id="metric-qps">0.0</strong></div>
+            <div class="compact-stat"><span class="cs-label">Req/min</span><strong id="metric-rpm">0.0</strong></div>
             <div class="compact-stat"><span class="cs-label">Avg Latency</span><strong id="metric-latency">0ms</strong></div>
             <div class="compact-stat"><span class="cs-label">Success Rate</span><strong id="metric-success-rate">100%</strong></div>
             <div class="compact-stat"><span class="cs-label">In-Flight</span><strong id="metric-inflight">0</strong></div>
@@ -1555,8 +1555,8 @@
           <!-- Charts row -->
           <div class="charts-stack">
             <div class="chart-card">
-              <h3>Requests / sec</h3>
-              <canvas id="chart-qps" style="width:100%" role="img" aria-label="Requests per second chart. Auto-refreshes every second."></canvas>
+              <h3>Requests / min</h3>
+              <canvas id="chart-qps" style="width:100%" role="img" aria-label="Requests per minute chart. Auto-refreshes every second."></canvas>
             </div>
             <div class="chart-card">
               <h3>Latency (ms)</h3>
@@ -2944,7 +2944,7 @@
       if (!state.metrics) return;
       const m = state.metrics;
       
-      byId("metric-qps").textContent = m.qps.toFixed(2);
+      byId("metric-rpm").textContent = m.rpm.toFixed(1);
       byId("metric-latency").textContent = Math.round(m.avg_latency_ms) + "ms";
       byId("metric-inflight").textContent = m.in_flight;
       byId("metric-total-requests").textContent = m.total_requests;
@@ -2978,7 +2978,7 @@
         `).join("");
       }
 
-      drawChart("chart-qps", m.timeseries, "qps", "#84A98C");
+      drawChart("chart-qps", m.timeseries, "rpm", "#84A98C");
       drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#7AABB4");
     }
 

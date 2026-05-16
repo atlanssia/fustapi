@@ -229,6 +229,6 @@ mod tests {
         };
         let snap = reader.snapshot();
         assert_eq!(snap.total_requests, 0);
-        assert_eq!(snap.qps, 0.0);
+        assert_eq!(snap.rpm, 0.0);
     }
 }

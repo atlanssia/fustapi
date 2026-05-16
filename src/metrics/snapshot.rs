@@ -13,16 +13,16 @@ use super::counters::{GlobalSnapshot, ProviderCounters};
 /// Maximum number of timeseries points retained.
 const MAX_TIMESERIES_POINTS: usize = 300;
 
-/// Sliding window size for QPS calculation (seconds).
-const QPS_WINDOW_SECS: u64 = 10;
+/// Sliding window size for RPM calculation (seconds).
+const RPM_WINDOW_SECS: u64 = 60;
 
 /// A single timeseries data point.
 #[derive(Debug, Clone, Serialize)]
 pub struct TimeseriesPoint {
     /// Unix timestamp in seconds.
     pub timestamp: u64,
-    /// Requests per second at this point.
-    pub qps: f64,
+    /// Requests per minute at this point.
+    pub rpm: f64,
     /// Average latency in milliseconds at this point.
     pub avg_latency_ms: f64,
     /// Total requests counted at this point.
@@ -50,7 +50,7 @@ pub struct ProviderStats {
 /// Complete metrics snapshot served to the dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct MetricsSnapshot {
-    pub qps: f64,
+    pub rpm: f64,
     pub avg_latency_ms: f64,
     pub total_requests: u64,
     pub success_requests: u64,
@@ -65,7 +65,7 @@ pub struct MetricsSnapshot {
 impl Default for MetricsSnapshot {
     fn default() -> Self {
         Self {
-            qps: 0.0,
+            rpm: 0.0,
             avg_latency_ms: 0.0,
             total_requests: 0,
             success_requests: 0,
@@ -83,7 +83,7 @@ impl Default for MetricsSnapshot {
 pub struct SnapshotBuilder {
     start_time: u64,
     timeseries: Vec<TimeseriesPoint>,
-    /// Recent request counts for QPS sliding window.
+    /// Recent request counts for RPM sliding window.
     recent_totals: Vec<(u64, u64)>,
 }
 
@@ -112,17 +112,18 @@ impl SnapshotBuilder {
         let now = now_secs();
         let uptime_secs = now.saturating_sub(self.start_time);
 
-        // Update sliding window for QPS
+        // Update sliding window for RPM
         self.recent_totals.push((now, global.total_requests));
-        let cutoff = now.saturating_sub(QPS_WINDOW_SECS);
+        let cutoff = now.saturating_sub(RPM_WINDOW_SECS);
         self.recent_totals.retain(|(ts, _)| *ts >= cutoff);
 
-        let qps = if self.recent_totals.len() >= 2 {
+        let rpm = if self.recent_totals.len() >= 2 {
             let first = &self.recent_totals[0];
             let last = &self.recent_totals[self.recent_totals.len() - 1];
             let dt = last.0.saturating_sub(first.0);
             let dr = last.1.saturating_sub(first.1);
-            if dt > 0 { dr as f64 / dt as f64 } else { 0.0 }
+            // Scale to per-minute: (requests / seconds) * 60
+            if dt > 0 { (dr as f64 / dt as f64) * 60.0 } else { 0.0 }
         } else {
             0.0
         };
@@ -192,7 +193,7 @@ impl SnapshotBuilder {
         // Add timeseries point
         let point = TimeseriesPoint {
             timestamp: now,
-            qps,
+            rpm,
             avg_latency_ms,
             total_requests: global.total_requests,
             error_count: global.failed_requests,
@@ -204,7 +205,7 @@ impl SnapshotBuilder {
         }
 
         MetricsSnapshot {
-            qps,
+            rpm,
             avg_latency_ms,
             total_requests: global.total_requests,
             success_requests: global.success_requests,
@@ -240,7 +241,7 @@ mod tests {
         };
         let snap = builder.build(&global, &HashMap::new());
         assert_eq!(snap.total_requests, 0);
-        assert_eq!(snap.qps, 0.0);
+        assert_eq!(snap.rpm, 0.0);
         assert_eq!(snap.success_rate, 0.0);
         assert!(snap.provider_stats.is_empty());
     }
