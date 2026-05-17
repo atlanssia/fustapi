@@ -78,12 +78,29 @@ printf "${BLUE}==>${NC} Resolved Target: ${GREEN}$TARGET${NC}\n"
 
 # 2. Version Resolution
 printf "${BLUE}==>${NC} Fetching latest release version...\n"
-RELEASE_JSON=$(curl -s "$GITHUB_API/releases/latest")
-VERSION=$(echo "$RELEASE_JSON" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+# Avoid GitHub API rate limits by resolving the latest release redirect
+LATEST_URL=$(curl -Ls -o /dev/null -w "%{url_effective}" "https://github.com/$REPO/releases/latest")
+VERSION=$(basename "$LATEST_URL")
 
-if [ -z "$VERSION" ]; then
-    printf "${RED}Error:${NC} Failed to resolve version from GitHub API.\n"
+if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+    printf "${RED}Error:${NC} Failed to resolve latest version.\n"
     exit 1
+fi
+
+# Check if local version is already up to date
+if command -v "$BINARY_NAME" >/dev/null 2>&1; then
+    LOCAL_VERSION=$("$BINARY_NAME" --version 2>/dev/null | awk '{print $2}')
+elif [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
+    LOCAL_VERSION=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null | awk '{print $2}')
+else
+    LOCAL_VERSION=""
+fi
+
+if [ -n "$LOCAL_VERSION" ]; then
+    if [ "v$LOCAL_VERSION" = "$VERSION" ] || [ "$LOCAL_VERSION" = "$VERSION" ]; then
+        printf "${GREEN}OK:${NC} FustAPI is already up to date ($VERSION). Skipping installation.\n"
+        exit 0
+    fi
 fi
 
 FILENAME="fustapi-$VERSION-$TARGET.$EXTENSION"
@@ -98,8 +115,9 @@ fi
 
 # 3. Artifact Manifest Validation (Pre-download check)
 printf "${BLUE}==>${NC} Validating artifact existence...\n"
-if ! echo "$RELEASE_JSON" | grep -q "$FILENAME"; then
-    printf "${RED}Error:${NC} Artifact $FILENAME not found in release assets.\n"
+HTTP_STATUS=$(curl -sL -I -o /dev/null -w "%{http_code}" "$DOWNLOAD_URL")
+if [ "$HTTP_STATUS" != "200" ]; then
+    printf "${RED}Error:${NC} Artifact $FILENAME not found for version $VERSION (HTTP $HTTP_STATUS).\n"
     exit 1
 fi
 
