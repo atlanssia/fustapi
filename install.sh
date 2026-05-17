@@ -8,7 +8,6 @@ set -e
 REPO="atlanssia/fustapi"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="fustapi"
-GITHUB_API="https://api.github.com/repos/$REPO"
 GITHUB_DOWNLOAD="https://github.com/$REPO/releases/download"
 
 # Colors for output
