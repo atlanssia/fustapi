@@ -261,7 +261,7 @@ impl Provider for GlmProvider {
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         use tracing::debug;
-        let client = reqwest::Client::new();
+        let client = crate::provider::build_http_client();
         let url = self.balance_url();
 
         debug!(url = %url, has_key = !self.config.api_key.is_empty(), "glm balance query");

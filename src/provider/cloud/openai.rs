@@ -60,7 +60,7 @@ impl OpenAIProvider {
     pub fn new(config: OpenAIConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: crate::provider::build_http_client(),
         }
     }
 
@@ -329,11 +329,30 @@ pub struct OpenAIUsage {
     pub total_tokens: usize,
 }
 
+/// Send a request with one-shot retry for transient TCP connect errors.
+async fn send_with_tcp_retry(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ProviderError> {
+    let retry = builder.try_clone();
+    match builder.send().await {
+        Ok(resp) => Ok(resp),
+        Err(e) if e.is_connect() => {
+            tracing::warn!(error = %e, "transient connect error, retrying once");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            match retry {
+                Some(r) => r.send().await.map_err(|e| ProviderError::Connection(e.to_string())),
+                None => Err(ProviderError::Connection(e.to_string())),
+            }
+        }
+        Err(e) => Err(ProviderError::Connection(e.to_string())),
+    }
+}
+
 pub fn parse_openai_sse_stream(
     stream: impl futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static,
 ) -> LLMStream {
     use futures::stream;
-    let buffer = String::new();
+    let buffer = bytes::BytesMut::new();
     let tool_id: Option<String> = None;
     let tool_name: Option<String> = None;
     let tool_args = String::new();
@@ -362,9 +381,9 @@ pub fn parse_openai_sse_stream(
                 })
             }
             loop {
-                if let Some(pos) = buffer.find('\n') {
-                    let line = buffer[..pos].trim().to_string();
-                    buffer.drain(..=pos);
+                if let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                    let line_bytes = buffer.split_to(pos + 1);
+                    let line = std::str::from_utf8(&line_bytes[..pos]).unwrap_or("").trim();
 
                     if line.starts_with("data:") && line.len() > 5 {
                         let data = line[5..].trim();
@@ -516,8 +535,7 @@ pub fn parse_openai_sse_stream(
 
                 match stream.next().await {
                     Some(Ok(bytes)) => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        buffer.push_str(&text);
+                        buffer.extend_from_slice(&bytes);
                     }
                     Some(Err(e)) => {
                         return Some((
@@ -579,10 +597,7 @@ impl Provider for OpenAIProvider {
         builder = builder.json(&body);
 
         if request.stream {
-            let resp = builder
-                .send()
-                .await
-                .map_err(|e| ProviderError::Connection(e.to_string()))?;
+            let resp = send_with_tcp_retry(builder).await?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
@@ -605,10 +620,7 @@ impl Provider for OpenAIProvider {
                 ))
             }
         } else {
-            let resp_body = builder
-                .send()
-                .await
-                .map_err(|e| ProviderError::Connection(e.to_string()))?;
+            let resp_body = send_with_tcp_retry(builder).await?;
 
             if !resp_body.status().is_success() {
                 let status = resp_body.status();

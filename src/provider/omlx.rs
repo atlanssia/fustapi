@@ -95,7 +95,7 @@ impl Provider for OmlxProvider {
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
-        let client = reqwest::Client::new();
+        let client = crate::provider::build_http_client();
         // Health endpoint sits at root, not under /v1
         let url = self
             .config

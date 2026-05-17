@@ -267,6 +267,18 @@ pub struct ProviderBalance {
     pub config_summary: ConfigSummary,
 }
 
+// ── HTTP client builder ───────────────────────────────────────────────
+
+/// Build a reqwest client with production-appropriate timeouts.
+pub fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("failed to build HTTP client")
+}
+
 // ── Provider module exports ───────────────────────────────────────────
 
 pub mod cloud;

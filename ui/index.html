@@ -1687,7 +1687,7 @@
           <div id="dashboard-balance-list">
             <div class="balance-list-title" style="font-size:0.7rem;color:var(--primary);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:0.5rem">Providers</div>
             <div id="dashboard-balance-entries">
-              <div style="color:var(--muted);padding:1rem;text-align:center">Loading...</div>
+              <div style="color:var(--muted);padding:1rem;text-align:center">Loading&hellip;</div>
             </div>
           </div>
 
@@ -1733,7 +1733,7 @@
               <h3>Configured providers</h3>
               <button class="btn small" type="button" id="refresh-providers">Refresh</button>
             </div>
-            <div id="providers-state" class="state" role="status" aria-live="polite">Loading providers</div>
+            <div id="providers-state" class="state" role="status" aria-live="polite">Loading providers&hellip;</div>
             <div id="providers-content" hidden style="padding:0.75rem"></div>
           </div>
         </section>
@@ -1752,7 +1752,7 @@
               <h3>Model routing</h3>
               <button class="btn small" type="button" id="refresh-routes">Refresh</button>
             </div>
-            <div id="routes-state" class="state" role="status" aria-live="polite">Loading routes</div>
+            <div id="routes-state" class="state" role="status" aria-live="polite">Loading routes&hellip;</div>
             <div id="routes-content" hidden>
               <div class="table-wrap desktop-table">
                 <table>
@@ -2130,7 +2130,7 @@
     }
 
     async function fetchProviders() {
-      setStateText("providers-state", "Loading providers");
+      setStateText("providers-state", "Loading providers&hellip;");
       byId("providers-content").hidden = true;
       try {
         const data = await api("/api/providers");
@@ -2612,9 +2612,9 @@
             '<span class="p-pill ' + pillCls + '">' + escapeHtml(typeLabel) + '</span>' +
             statusHtml +
             '<div class="config-provider-actions">' +
-              '<button class="config-action-btn" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(name) + '" title="Edit">&#9998;</button>' +
-              '<button class="config-action-btn" type="button" data-provider-action="test" data-provider-name="' + escapeHtml(name) + '" title="Test connection" style="color:var(--primary-light,#84A98C)">&#9889;</button>' +
-              '<button class="config-action-btn delete" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(name) + '" title="Delete">&#128465;</button>' +
+              '<button class="config-action-btn" type="button" data-provider-action="edit" data-provider-name="' + escapeHtml(name) + '" title="Edit" aria-label="Edit provider">&#9998;</button>' +
+              '<button class="config-action-btn" type="button" data-provider-action="test" data-provider-name="' + escapeHtml(name) + '" title="Test connection" aria-label="Test connection" style="color:var(--primary-light,#84A98C)">&#9889;</button>' +
+              '<button class="config-action-btn delete" type="button" data-provider-action="delete" data-provider-name="' + escapeHtml(name) + '" title="Delete" aria-label="Delete provider">&#128465;</button>' +
             '</div>' +
           '</div>' +
           '<div class="cpc-row2">' + row2Parts.join(' &middot; ') + '</div>' +
@@ -2975,7 +2975,7 @@
     }
 
     async function fetchModels() {
-      setStateText("routes-state", "Loading routes");
+      setStateText("routes-state", "Loading routes&hellip;");
       byId("routes-content").hidden = true;
       try {
         const data = await api("/api/models");
@@ -3090,7 +3090,7 @@
       <strong>${index + 1}. ${escapeHtml(name)}</strong>
       <div class="upstream-picker" style="position:relative;">
         <input data-route-provider-model="${escapeHtml(name)}" autocomplete="off" placeholder="Upstream model" value="${escapeHtml(state.routeUpstreamModels[name] || "")}">
-        <button type="button" class="upstream-picker-btn" data-route-provider-model-toggle="${escapeHtml(name)}" title="Browse models" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>
+        <button type="button" class="upstream-picker-btn" data-route-provider-model-toggle="${escapeHtml(name)}" title="Browse models" aria-label="Browse models" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>
         <div class="upstream-picker-dropdown" data-route-provider-model-dropdown="${escapeHtml(name)}" role="listbox"></div>
       </div>
       <button class="btn small" type="button" ${index === 0 ? "disabled" : ""} data-route-provider-index="${index}" data-route-provider-direction="-1">Up</button>

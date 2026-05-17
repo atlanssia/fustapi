@@ -137,7 +137,7 @@ impl Provider for DeepSeekProvider {
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         use tracing::debug;
-        let client = reqwest::Client::new();
+        let client = crate::provider::build_http_client();
         let url = format!(
             "{}/user/balance",
             self.config.endpoint.trim_end_matches('/')
