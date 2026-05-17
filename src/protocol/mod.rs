@@ -358,6 +358,8 @@ async fn collect_non_streaming(
             } else {
                 Some(&reasoning_content)
             },
+            prompt_tokens,
+            completion_tokens,
         ) {
             Ok(body) => body,
             Err(e) => {

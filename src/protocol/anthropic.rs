@@ -133,6 +133,13 @@ pub struct AnthropicResponse {
     pub model: String,
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
+    pub usage: AnthropicUsage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnthropicUsage {
+    pub input_tokens: usize,
+    pub output_tokens: usize,
 }
 
 #[derive(Serialize)]
@@ -477,6 +484,8 @@ pub fn serialize_response(
     tool_calls: Option<Vec<ToolCall>>,
     stop_reason: Option<&str>,
     reasoning_content: Option<&str>,
+    input_tokens: usize,
+    output_tokens: usize,
 ) -> Result<String, SerializeError> {
     let mut content_outs = Vec::new();
     // Anthropic thinking block for reasoning content (DeepSeek → Anthropic mapping).
@@ -517,6 +526,10 @@ pub fn serialize_response(
         model: model.to_string(),
         stop_reason: stop_reason.map(std::string::ToString::to_string),
         stop_sequence: None,
+        usage: AnthropicUsage {
+            input_tokens,
+            output_tokens,
+        },
     };
     serde_json::to_string(&resp).map_err(SerializeError::Json)
 }
@@ -768,6 +781,8 @@ mod tests {
             None,
             Some("end_turn"),
             None,
+            10,
+            5,
         )
         .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
@@ -785,7 +800,7 @@ mod tests {
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         }];
-        let json = serialize_response("msg_1", "claude-3", None, Some(tcs), Some("tool_use"), None)
+        let json = serialize_response("msg_1", "claude-3", None, Some(tcs), Some("tool_use"), None, 10, 5)
             .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["content"][0]["type"], "tool_use");
