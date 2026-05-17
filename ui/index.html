@@ -2070,6 +2070,11 @@
     }
 
     function openModal(id) {
+      // If another modal is already open, push it onto the stack
+      if (state.modal && state.modal.id !== id) {
+        if (!state._modalStack) state._modalStack = [];
+        state._modalStack.push(state.modal);
+      }
       state.lastFocus = document.activeElement;
       const overlay = byId(id);
       state.modal = overlay;
@@ -2085,9 +2090,14 @@
       closeAllProviderModelDropdowns();
       state.modal.classList.remove("active");
       state.modal.setAttribute("aria-hidden", "true");
-      document.body.classList.remove("modal-open");
-      if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
-      state.modal = null;
+      // Restore previous modal from stack if any
+      if (state._modalStack && state._modalStack.length > 0) {
+        state.modal = state._modalStack.pop();
+      } else {
+        document.body.classList.remove("modal-open");
+        if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
+        state.modal = null;
+      }
     }
 
     function trapModalFocus(event) {
@@ -2810,12 +2820,19 @@
       document.addEventListener("keydown", function(ev) {
         if (ev.key === "Escape" && _pddOpen) pddClose();
       });
-      // API key clear button
+      // API key clear button (with confirmation)
       byId("api-key-clear-btn").addEventListener("click", function() {
-        byId("provider-api-key").value = "";
-        byId("provider-api-key").placeholder = "Key cleared — submit to remove";
-        byId("provider-clear-key-flag").value = "1";
-        this.style.display = "none";
+        byId("confirm-title").textContent = "Clear API Key";
+        byId("confirm-message").textContent = "Remove the saved API key for this provider? Requests will fail until a new key is set.";
+        byId("confirm-action").textContent = "Clear key";
+        state.confirmAction = () => {
+          byId("provider-api-key").value = "";
+          byId("provider-api-key").placeholder = "Key cleared — submit to remove";
+          byId("provider-clear-key-flag").value = "1";
+          byId("api-key-wrap").classList.remove("has-key");
+          closeModal();
+        };
+        openModal("confirm-modal");
       });
     }
 
@@ -3422,6 +3439,7 @@
       if (refreshRoutesBtn) refreshRoutesBtn.addEventListener("click", fetchModels);
       if (addProviderBtn) addProviderBtn.addEventListener("click", () => openProviderModal());
       if (refreshProvidersBtn) refreshProvidersBtn.addEventListener("click", fetchProviders);
+      byId("provider-form").addEventListener("submit", submitProvider);
       byId("route-form").addEventListener("submit", submitRoute);
       byId("confirm-action").addEventListener("click", () => {
         if (typeof state.confirmAction === "function") state.confirmAction();
