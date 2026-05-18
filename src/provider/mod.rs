@@ -270,9 +270,12 @@ pub struct ProviderBalance {
 // ── HTTP client builder ───────────────────────────────────────────────
 
 /// Build a reqwest client with production-appropriate timeouts.
+///
+/// No total request timeout — LLM streaming responses can last several
+/// minutes (extended thinking, long reasoning). `connect_timeout` is
+/// sufficient for fast-failing unreachable providers.
 pub fn build_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
         .connect_timeout(std::time::Duration::from_secs(10))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()

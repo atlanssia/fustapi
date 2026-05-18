@@ -4,6 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-brightred.svg)](https://www.rust-lang.org)
+[![GitHub release](https://img.shields.io/github/v/release/atlanssia/fustapi)](https://github.com/atlanssia/fustapi/releases)
 
 FustAPI is a single-binary gateway that provides a unified entry point for AI IDEs and applications to interact with multiple LLM backends through **OpenAI-compatible** and **Anthropic-compatible** APIs.
 
@@ -132,13 +133,16 @@ Client Request
 
 ## 🛠️ Supported Providers
 
-| Provider   | Type   | Default Endpoint              |
-|------------|--------|-------------------------------|
-| omlx       | Local  | `http://localhost:11434/v1`   |
-| LM Studio  | Local  | `http://localhost:1234/v1`    |
-| SGLang     | Local  | `http://localhost:30000/v1`   |
-| DeepSeek   | Cloud  | `https://api.deepseek.com/v1` |
-| OpenAI     | Cloud  | `https://api.openai.com/v1`   |
+| Provider            | Type   | Default Endpoint                                   |
+|---------------------|--------|----------------------------------------------------|
+| omlx                | Local  | `http://localhost:8000/v1`                         |
+| LM Studio           | Local  | `http://localhost:1234/v1`                         |
+| SGLang              | Local  | `http://localhost:30000/v1`                        |
+| OpenAI              | Cloud  | `https://api.openai.com/v1`                        |
+| OpenAI Compatible   | Cloud  | None (user must provide)                           |
+| DeepSeek            | Cloud  | `https://api.deepseek.com`                         |
+| GLM (智谱)           | Cloud  | `https://open.bigmodel.cn/api/coding/paas/v4`      |
+| z.ai                | Cloud  | `https://api.z.ai/api/paas/v4`                     |
 
 ## 📁 Persistence & Bootstrap
 

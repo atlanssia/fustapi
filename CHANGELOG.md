@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.45] - 2026-05-18
+
+### Added
+- **GLM (智谱) & z.ai Providers** — Two new cloud providers with balance monitoring and native tool calling support.
+- **Balance Monitoring Dashboard** — Real-time provider balance display with automatic polling and unified `ProviderBalance` API.
+- **Per-Provider Upstream Model Mapping** — Routes can map model names to provider-specific upstream models.
+- **Provider Selection Dropdown** — Web UI allows selecting specific upstream models per provider.
+- **One-Click Install Script** — Deterministic `install.sh` with SHA256 verification, manifest validation, and skip-if-up-to-date logic.
+- **Misty Teal-Green Theme** — New dark theme with multi-engine health check and aggregated gateway status bar.
+- **Anthropic Usage Field** — Non-streaming Anthropic responses now include the `usage` field.
+
+### Changed
+- **Web UI Redesign** — Providers config panel uses icon button cards; dashboard split-panel layout replaces legacy balance cards.
+- **Modal Stacking** — Dialogs support proper stacking and API key clear confirmation.
+- **Number Formatting** — Human-readable numbers (1.2k, 1.5M) in metrics display; QPS → RPM.
+- **Model Fetching** — Parallel provider model fetching with collapsible lists and render optimizations.
+- **Protocol Layer** — Refactored serialization with provider type safety.
+- **Transport Layer** — Optimized SSE buffer size, TCP retry policy, and reqwest timeout configuration.
+- **Installer** — Avoids GitHub API rate limits via release redirect; skips if local version is current.
+- **UI Accessibility** — Improved focus visibility and keyboard navigation.
+
+### Fixed
+- GLM custom models endpoint resolution and 400 error on certain requests.
+- Metrics emission on error paths; negative in-flight request count.
+- Remote provider liveness check now uses `/v1/models` instead of health endpoint.
+- VRAM precision and API key passthrough for local providers.
+- Route upstream model datalist fixes and test connection reliability.
+
 ## [1.2.3] - 2026-05-06
 
 ### Fixed
