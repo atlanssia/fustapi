@@ -17,6 +17,7 @@ pub struct AnthropicStreamState {
     need_block_start: bool,
     text_block_open: bool,
     reasoning_block_open: bool,
+    tool_block_open: bool,
     has_tool_calls: bool,
 }
 
@@ -33,6 +34,7 @@ impl AnthropicStreamState {
             need_block_start: true,
             text_block_open: false,
             reasoning_block_open: false,
+            tool_block_open: false,
             has_tool_calls: false,
         }
     }
@@ -45,7 +47,9 @@ impl AnthropicStreamState {
         // Close any open block before transitioning to a different block type.
         let needs_close = (self.reasoning_block_open
             && (chunk.content.is_some() || chunk.tool_call.is_some()))
-            || (self.text_block_open && chunk.tool_call.is_some());
+            || (self.text_block_open
+                && (chunk.tool_call.is_some() || chunk.reasoning_content.is_some()))
+            || self.tool_block_open;
         if needs_close {
             let block_stop = serde_json::json!({
                 "type": "content_block_stop",
@@ -58,6 +62,7 @@ impl AnthropicStreamState {
             self.block_index += 1;
             self.reasoning_block_open = false;
             self.text_block_open = false;
+            self.tool_block_open = false;
             self.need_block_start = true;
         }
 
@@ -86,8 +91,8 @@ impl AnthropicStreamState {
         }
         if chunk.tool_call.is_some() {
             self.has_tool_calls = true;
-            self.block_index += 1;
-            self.need_block_start = true;
+            self.tool_block_open = true;
+            self.need_block_start = false;
             self.text_block_open = false;
             self.reasoning_block_open = false;
         }
@@ -96,6 +101,7 @@ impl AnthropicStreamState {
             self.need_block_start = true;
             self.text_block_open = false;
             self.reasoning_block_open = false;
+            self.tool_block_open = false;
         }
 
         format!("{prefix}{s}")
@@ -355,6 +361,26 @@ mod tests {
         );
         let done = state.serialize_chunk(&done_chunk(), "model-a");
         assert!(done.contains("tool_use"));
+    }
+
+    #[test]
+    fn anthropic_consecutive_tool_calls_each_get_block_stop() {
+        let mut state = AnthropicStreamState::new();
+        let tc1 = state.serialize_chunk(
+            &tool_call_chunk("read_file", r#"{"path":"/a"}"#),
+            "model-a",
+        );
+        let tc2 = state.serialize_chunk(
+            &tool_call_chunk("write_file", r#"{"path":"/b"}"#),
+            "model-a",
+        );
+        let done = state.serialize_chunk(&done_chunk(), "model-a");
+
+        assert!(tc1.contains("content_block_start"));
+        assert!(!tc1.contains("content_block_stop"));
+        assert!(tc2.contains("content_block_stop"));
+        assert!(tc2.contains("content_block_start"));
+        assert!(done.contains("content_block_stop"));
     }
 
     #[test]

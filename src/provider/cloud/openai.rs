@@ -194,14 +194,28 @@ impl OpenAIProvider {
         let mut chunks = Vec::new();
 
         if let Some(choice) = response.choices.first() {
+            if let Some(reasoning) = &choice.message.reasoning_content {
+                if !reasoning.is_empty() {
+                    chunks.push(LLMChunk {
+                        reasoning_content: Some(reasoning.clone()),
+                        usage: None,
+                        content: None,
+                        tool_call: None,
+                        done: false,
+                    });
+                }
+            }
+
             if let Some(content) = &choice.message.content {
-                chunks.push(LLMChunk {
-                    reasoning_content: None,
-                    usage: None,
-                    content: Some(content.clone()),
-                    tool_call: None,
-                    done: false,
-                });
+                if !content.is_empty() {
+                    chunks.push(LLMChunk {
+                        reasoning_content: None,
+                        usage: None,
+                        content: Some(content.clone()),
+                        tool_call: None,
+                        done: false,
+                    });
+                }
             }
 
             if let Some(tool_calls) = &choice.message.tool_calls {
@@ -304,6 +318,9 @@ pub struct OpenAIMessageOut {
     pub role: String,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// Reasoning/thinking content from providers like DeepSeek and GLM.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -848,5 +865,77 @@ impl Provider for OpenAIProvider {
                 model: self.config.model.clone().or(detected_model),
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chat_response_with_reasoning(reasoning: &str, content: &str) -> OpenAIChatResponse {
+        OpenAIChatResponse {
+            id: "test".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "glm-5.1".to_string(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessageOut {
+                    role: "assistant".to_string(),
+                    content: if content.is_empty() {
+                        Some(String::new())
+                    } else {
+                        Some(content.to_string())
+                    },
+                    tool_calls: None,
+                    reasoning_content: if reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning.to_string())
+                    },
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 30,
+            }),
+        }
+    }
+
+    #[test]
+    fn parse_response_extracts_reasoning_content() {
+        let resp = chat_response_with_reasoning("thinking about it...", "answer");
+        let chunks = OpenAIProvider::parse_response(&resp);
+        assert!(chunks.iter().any(|c| c
+            .reasoning_content
+            .as_ref()
+            .is_some_and(|r| r == "thinking about it...")));
+        assert!(chunks.iter().any(|c| c
+            .content
+            .as_ref()
+            .is_some_and(|c| c == "answer")));
+    }
+
+    #[test]
+    fn parse_response_reasoning_only_no_content() {
+        let resp = chat_response_with_reasoning("thinking...", "");
+        let chunks = OpenAIProvider::parse_response(&resp);
+        assert!(chunks
+            .iter()
+            .any(|c| c.reasoning_content.is_some() && c.content.is_none()));
+        assert!(!chunks
+            .iter()
+            .any(|c| c.content.as_ref().is_some_and(|t| !t.is_empty())));
+    }
+
+    #[test]
+    fn parse_response_empty_strings_skipped() {
+        let resp = chat_response_with_reasoning("", "");
+        let chunks = OpenAIProvider::parse_response(&resp);
+        assert!(!chunks
+            .iter()
+            .any(|c| c.content.is_some() || c.reasoning_content.is_some()));
     }
 }

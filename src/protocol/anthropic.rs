@@ -609,18 +609,24 @@ pub fn serialize_stream_event(
 
     if let Some(tc) = &chunk.tool_call {
         let tool_id = tc.id.clone().unwrap_or_else(|| format!("toolu_{index}"));
-        let start = AnthropicStreamEvent {
-            event_type: "content_block_start".to_string(),
-            message: None,
-            index: Some(*index),
-            delta: None,
-            content_block: Some(AnthropicContentBlockOut {
-                kind: "tool_use".to_string(),
-                id: Some(tool_id),
-                name: Some(tc.name.clone()),
-                input: None,
-            }),
-        };
+        if need_block_start {
+            let start = AnthropicStreamEvent {
+                event_type: "content_block_start".to_string(),
+                message: None,
+                index: Some(*index),
+                delta: None,
+                content_block: Some(AnthropicContentBlockOut {
+                    kind: "tool_use".to_string(),
+                    id: Some(tool_id),
+                    name: Some(tc.name.clone()),
+                    input: None,
+                }),
+            };
+            s.push_str(&format!(
+                "event: content_block_start\ndata: {}\n\n",
+                serde_json::to_string(&start).unwrap_or_default()
+            ));
+        }
         let json_str = tc.arguments.to_string();
         let delta = AnthropicStreamEvent {
             event_type: "content_block_delta".to_string(),
@@ -635,8 +641,7 @@ pub fn serialize_stream_event(
             content_block: None,
         };
         s.push_str(&format!(
-            "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\n",
-            serde_json::to_string(&start).unwrap_or_default(),
+            "event: content_block_delta\ndata: {}\n\n",
             serde_json::to_string(&delta).unwrap_or_default()
         ));
     }

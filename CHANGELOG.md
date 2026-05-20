@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.46] - 2026-05-20
+
+### Added
+- **OpenAI Non-streaming Reasoning Content** — Extract and propagate reasoning content (thinking) from model providers like DeepSeek or GLM.
+
+### Fixed
+- **Anthropic Stream Tool Call Separation** — Fixed stream tool call formatting to ensure consecutive tool calls each receive proper `content_block_stop` and `content_block_start` boundaries.
+- **Anthropic Stream Redundant Starts** — Removed redundant start block emit in stream tool serialize paths, improving SSE stream structure and decoding compatibility.
+
 ## [1.2.45] - 2026-05-18
 
 ### Added
