@@ -16,6 +16,8 @@ pub enum RouterError {
     ModelNotFound(String),
     /// The selected provider returned an error.
     ProviderError(String),
+    /// Upstream provider returned a client error (4xx) — passthrough to client.
+    Upstream { status: u16, message: String },
     /// An internal router error occurred.
     Internal(String),
 }
@@ -25,6 +27,9 @@ impl std::fmt::Display for RouterError {
         match self {
             RouterError::ModelNotFound(model) => write!(f, "model not found: {model}"),
             RouterError::ProviderError(msg) => write!(f, "provider error: {msg}"),
+            RouterError::Upstream { status, message } => {
+                write!(f, "upstream error {status}: {message}")
+            }
             RouterError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -38,6 +43,9 @@ impl From<ProviderError> for RouterError {
             ProviderError::ModelNotFound(model) => RouterError::ModelNotFound(model),
             ProviderError::Connection(msg) => RouterError::ProviderError(msg),
             ProviderError::Request(msg) => RouterError::ProviderError(msg),
+            ProviderError::Upstream { status, message } => {
+                RouterError::Upstream { status, message }
+            }
             ProviderError::Internal(msg) => RouterError::Internal(msg),
             ProviderError::Stream(msg) => RouterError::ProviderError(msg),
             ProviderError::Capability(_) | ProviderError::Api(_) => {

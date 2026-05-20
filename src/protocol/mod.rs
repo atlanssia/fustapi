@@ -10,7 +10,26 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use crate::router::Router;
+use crate::router::{Router, RouterError};
+
+/// Map a `RouterError` to the appropriate `ProtocolError`, preserving upstream HTTP status.
+fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
+    match e {
+        RouterError::Upstream { status, message } => ProtocolError::Upstream {
+            status,
+            message,
+            protocol,
+        },
+        RouterError::ModelNotFound(msg) => ProtocolError::Parse {
+            message: msg,
+            protocol,
+        },
+        other => ProtocolError::Internal {
+            message: other.to_string(),
+            protocol,
+        },
+    }
+}
 
 /// Protocol identifier for dispatch decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,10 +112,7 @@ async fn forward_streaming(
     let stream_mode = router
         .chat_stream(request, allow_passthrough)
         .await
-        .map_err(|e| ProtocolError::Internal {
-            message: e.to_string(),
-            protocol,
-        })?;
+        .map_err(|e| map_router_error(e, protocol))?;
 
     match stream_mode {
         crate::streaming::StreamMode::Normalized(stream) => {
@@ -245,10 +261,7 @@ async fn collect_non_streaming(
         Ok(mode) => mode,
         Err(e) => {
             guard.finish_err();
-            return Err(ProtocolError::Internal {
-                message: e.to_string(),
-                protocol,
-            });
+            return Err(map_router_error(e, protocol));
         }
     };
 
@@ -420,11 +433,13 @@ async fn anthropic_handler(
     }
 }
 
-/// Error type for protocol dispatch failures.  
+/// Error type for protocol dispatch failures.
 #[derive(Debug)]
 pub enum ProtocolError {
     Parse { message: String, protocol: Protocol },
     Internal { message: String, protocol: Protocol },
+    /// Upstream provider returned a client error — forward with original status.
+    Upstream { status: u16, message: String, protocol: Protocol },
 }
 
 impl IntoResponse for ProtocolError {
@@ -436,19 +451,24 @@ impl IntoResponse for ProtocolError {
             ProtocolError::Internal { message, protocol } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, message, protocol)
             }
+            ProtocolError::Upstream { status, message, protocol } => {
+                let code = StatusCode::from_u16(status)
+                    .unwrap_or(StatusCode::BAD_GATEWAY);
+                (code, message, protocol)
+            }
         };
 
         let body = match protocol {
             Protocol::OpenAI => serde_json::json!({
                 "error": {
-                    "type": if status == StatusCode::BAD_REQUEST { "invalid_request_error" } else { "server_error" },
+                    "type": if status.is_client_error() { "invalid_request_error" } else { "server_error" },
                     "message": error_msg
                 }
             }),
             Protocol::Anthropic => serde_json::json!({
                 "type": "error",
                 "error": {
-                    "type": if status == StatusCode::BAD_REQUEST { "invalid_request_error" } else { "api_error" },
+                    "type": if status.is_client_error() { "invalid_request_error" } else { "api_error" },
                     "message": error_msg
                 }
             }),

@@ -130,9 +130,13 @@ pub enum ProviderError {
     #[error("connection failed: {0}")]
     Connection(String),
 
-    /// Provider returned an error response.
+    /// Provider returned an error response (4xx client error from upstream).
     #[error("request failed: {0}")]
     Request(String),
+
+    /// Provider returned a client error with status code (e.g., context limit, rate limit).
+    #[error("upstream error {status}: {message}")]
+    Upstream { status: u16, message: String },
 
     /// The requested model is not available on this provider.
     #[error("model not found: {0}")]

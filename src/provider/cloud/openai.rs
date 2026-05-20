@@ -439,6 +439,28 @@ pub fn parse_openai_sse_stream(
                         if !data.is_empty()
                             && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
                         {
+                            // Detect upstream errors reported via finish_reason (e.g., GLM's
+                            // "model_context_window_exceeded") — return as a stream error so
+                            // the client sees a meaningful message instead of an empty response.
+                            if let Some(fr) = v
+                                .get("choices")
+                                .and_then(|c| c.get(0))
+                                .and_then(|c| c.get("finish_reason"))
+                                .and_then(|v| v.as_str())
+                            {
+                                if fr.contains("context_window")
+                                    || fr.contains("context_length")
+                                    || fr == "error"
+                                {
+                                    return Some((
+                                        Err(crate::streaming::StreamError::Provider(
+                                            format!("upstream error: {fr}"),
+                                        )),
+                                        (stream, buffer, tool_id, tool_name, tool_args),
+                                    ));
+                                }
+                            }
+
                             // Handle usage-only chunk (sent when stream_options.include_usage is set).
                             // This arrives as a chunk with an empty choices array and a populated usage field.
                             if let Some(usage) = extract_usage(&v) {
@@ -620,9 +642,11 @@ impl Provider for OpenAIProvider {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err_text = resp.text().await.unwrap_or_default();
-                return Err(ProviderError::Request(format!(
-                    "provider error {status}: {err_text}"
-                )));
+                return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
+                    ProviderError::Upstream { status: status.as_u16(), message: err_text }
+                } else {
+                    ProviderError::Request(format!("provider error {status}: {err_text}"))
+                });
             }
 
             if allow_passthrough {
@@ -643,9 +667,11 @@ impl Provider for OpenAIProvider {
             if !resp_body.status().is_success() {
                 let status = resp_body.status();
                 let err_text = resp_body.text().await.unwrap_or_default();
-                return Err(ProviderError::Request(format!(
-                    "provider error {status}: {err_text}"
-                )));
+                return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
+                    ProviderError::Upstream { status: status.as_u16(), message: err_text }
+                } else {
+                    ProviderError::Request(format!("provider error {status}: {err_text}"))
+                });
             }
 
             let resp_body = resp_body
