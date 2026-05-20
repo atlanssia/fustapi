@@ -124,11 +124,15 @@ impl Provider for OmlxProvider {
             .await
             .map_err(|e| ProviderError::Internal(e.to_string()))?;
 
-        let is_healthy = matches!(body.status.as_str(), "healthy" | "ok" | "running" | "up" | "ready");
+        let is_healthy = matches!(
+            body.status.as_str(),
+            "healthy" | "ok" | "running" | "up" | "ready"
+        );
         let pool = &body.engine_pool;
 
         let mem_pct = if pool.max_model_memory > 0 {
-            (pool.current_model_memory as f64 / pool.max_model_memory as f64 * 10000.0).round() / 100.0
+            (pool.current_model_memory as f64 / pool.max_model_memory as f64 * 10000.0).round()
+                / 100.0
         } else {
             0.0
         };

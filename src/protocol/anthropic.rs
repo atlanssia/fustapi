@@ -805,8 +805,17 @@ mod tests {
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "nyc"}),
         }];
-        let json = serialize_response("msg_1", "claude-3", None, Some(tcs), Some("tool_use"), None, 10, 5)
-            .expect("serialize should succeed");
+        let json = serialize_response(
+            "msg_1",
+            "claude-3",
+            None,
+            Some(tcs),
+            Some("tool_use"),
+            None,
+            10,
+            5,
+        )
+        .expect("serialize should succeed");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["content"][0]["type"], "tool_use");
         assert_eq!(value["content"][0]["name"], "get_weather");

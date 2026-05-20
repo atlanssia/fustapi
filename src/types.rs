@@ -170,13 +170,34 @@ mod tests {
     #[test]
     fn tool_calling_modes() {
         use crate::provider::ToolCallingSupport;
-        assert_eq!(ProviderType::Omlx.tool_calling_mode(), ToolCallingSupport::Emulated);
-        assert_eq!(ProviderType::LmStudio.tool_calling_mode(), ToolCallingSupport::Emulated);
-        assert_eq!(ProviderType::SgLang.tool_calling_mode(), ToolCallingSupport::Native);
-        assert_eq!(ProviderType::OpenAI.tool_calling_mode(), ToolCallingSupport::Native);
-        assert_eq!(ProviderType::DeepSeek.tool_calling_mode(), ToolCallingSupport::Native);
-        assert_eq!(ProviderType::Glm.tool_calling_mode(), ToolCallingSupport::Native);
-        assert_eq!(ProviderType::Zai.tool_calling_mode(), ToolCallingSupport::Native);
+        assert_eq!(
+            ProviderType::Omlx.tool_calling_mode(),
+            ToolCallingSupport::Emulated
+        );
+        assert_eq!(
+            ProviderType::LmStudio.tool_calling_mode(),
+            ToolCallingSupport::Emulated
+        );
+        assert_eq!(
+            ProviderType::SgLang.tool_calling_mode(),
+            ToolCallingSupport::Native
+        );
+        assert_eq!(
+            ProviderType::OpenAI.tool_calling_mode(),
+            ToolCallingSupport::Native
+        );
+        assert_eq!(
+            ProviderType::DeepSeek.tool_calling_mode(),
+            ToolCallingSupport::Native
+        );
+        assert_eq!(
+            ProviderType::Glm.tool_calling_mode(),
+            ToolCallingSupport::Native
+        );
+        assert_eq!(
+            ProviderType::Zai.tool_calling_mode(),
+            ToolCallingSupport::Native
+        );
     }
 
     #[test]
@@ -184,7 +205,10 @@ mod tests {
         assert!(ProviderType::OpenAI.stream_options());
         for pt in ProviderType::ALL {
             if pt != ProviderType::OpenAI {
-                assert!(!pt.stream_options(), "{pt:?} should not have stream_options");
+                assert!(
+                    !pt.stream_options(),
+                    "{pt:?} should not have stream_options"
+                );
             }
         }
     }

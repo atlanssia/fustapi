@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.47] - 2026-05-20
+
+### Fixed
+- **CI Formatting & Clippy** — Standardized codebase formatting and resolved clippy warnings to restore green CI pipeline status.
+
 ## [1.2.46] - 2026-05-20
 
 ### Added

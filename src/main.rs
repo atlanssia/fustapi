@@ -188,11 +188,8 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                     std::process::exit(1);
                 }
             };
-            let endpoint = endpoint.unwrap_or_else(|| {
-                pt.default_endpoint()
-                    .map(String::from)
-                    .unwrap_or_default()
-            });
+            let endpoint = endpoint
+                .unwrap_or_else(|| pt.default_endpoint().map(String::from).unwrap_or_default());
             if endpoint.is_empty() {
                 eprintln!("No default endpoint for type '{type}'. Provide --endpoint.");
                 std::process::exit(1);
@@ -249,10 +246,13 @@ fn handle_routes(command: RoutesCommand, bootstrap: &fustapi::config::BootstrapC
             }
             let mut config = fustapi::config::load_from_db(&db_path)
                 .unwrap_or_else(|_| fustapi::config::default_config());
-            config.router.insert(model.clone(), fustapi::config::RouteConfig {
-                provider_ids: providers,
-                upstream_models: std::collections::HashMap::new(),
-            });
+            config.router.insert(
+                model.clone(),
+                fustapi::config::RouteConfig {
+                    provider_ids: providers,
+                    upstream_models: std::collections::HashMap::new(),
+                },
+            );
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {
                 eprintln!("Failed to save: {e}");
                 std::process::exit(1);

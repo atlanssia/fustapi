@@ -189,7 +189,11 @@ fn validate_provider_form(form: &ProviderForm) -> Result<(), &'static str> {
     {
         return Err("Provider endpoint must be a valid http or https URL");
     }
-    if form.provider_type.parse::<crate::types::ProviderType>().is_err() {
+    if form
+        .provider_type
+        .parse::<crate::types::ProviderType>()
+        .is_err()
+    {
         return Err("Provider type is not supported");
     }
     Ok(())
@@ -516,11 +520,9 @@ pub async fn provider_models_api_handler(
     };
     let provider = crate::config::create_provider(&id, cfg);
     match tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await {
-        Ok(Ok(models)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"models": models})),
-        )
-            .into_response(),
+        Ok(Ok(models)) => {
+            (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
+        }
         Ok(Err(e)) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"error": e.to_string(), "models": []})),
@@ -845,7 +847,8 @@ mod tests {
 
     #[test]
     fn route_form_deserializes_upstream_models() {
-        let json = r#"{"model":"test","providers":["openai"],"upstream_models":{"openai":"gpt-4o"}}"#;
+        let json =
+            r#"{"model":"test","providers":["openai"],"upstream_models":{"openai":"gpt-4o"}}"#;
         let form: RouteForm = serde_json::from_str(json).expect("should deserialize");
         assert_eq!(form.model, "test");
         assert_eq!(form.providers, vec!["openai"]);

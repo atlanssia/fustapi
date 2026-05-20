@@ -227,7 +227,10 @@ mod tests {
         let loaded = load_routes(&conn).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].upstream_models.get("openai").unwrap(), "gpt-4o");
-        assert_eq!(loaded[0].upstream_models.get("deepseek").unwrap(), "deepseek-chat");
+        assert_eq!(
+            loaded[0].upstream_models.get("deepseek").unwrap(),
+            "deepseek-chat"
+        );
     }
 
     #[test]

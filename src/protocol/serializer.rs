@@ -316,8 +316,10 @@ mod tests {
     fn anthropic_text_block_emits_stream_event() {
         let mut state = AnthropicStreamState::new();
         let output = state.serialize_chunk(&chunk(Some("hello")), "model-a");
-        assert!(output.contains("event: content_block_delta")
-            || output.contains("event: content_block_start"));
+        assert!(
+            output.contains("event: content_block_delta")
+                || output.contains("event: content_block_start")
+        );
     }
 
     #[test]
@@ -355,10 +357,7 @@ mod tests {
     #[test]
     fn anthropic_tool_call_sets_stop_reason_tool_use() {
         let mut state = AnthropicStreamState::new();
-        let _ = state.serialize_chunk(
-            &tool_call_chunk("fn", r#"{}"#),
-            "model-a",
-        );
+        let _ = state.serialize_chunk(&tool_call_chunk("fn", r#"{}"#), "model-a");
         let done = state.serialize_chunk(&done_chunk(), "model-a");
         assert!(done.contains("tool_use"));
     }
@@ -366,10 +365,8 @@ mod tests {
     #[test]
     fn anthropic_consecutive_tool_calls_each_get_block_stop() {
         let mut state = AnthropicStreamState::new();
-        let tc1 = state.serialize_chunk(
-            &tool_call_chunk("read_file", r#"{"path":"/a"}"#),
-            "model-a",
-        );
+        let tc1 =
+            state.serialize_chunk(&tool_call_chunk("read_file", r#"{"path":"/a"}"#), "model-a");
         let tc2 = state.serialize_chunk(
             &tool_call_chunk("write_file", r#"{"path":"/b"}"#),
             "model-a",
@@ -486,7 +483,8 @@ mod tests {
 
     #[test]
     fn extract_usage_valid() {
-        let data = b"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}\n\n";
+        let data =
+            b"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}\n\n";
         let usage = extract_usage_from_sse_bytes(data).unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);

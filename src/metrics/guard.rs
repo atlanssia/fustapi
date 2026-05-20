@@ -61,7 +61,14 @@ impl RequestGuard {
     pub fn finish(mut self, success: bool, tokens: Option<TokenUsage>, ttft_ms: Option<u64>) {
         let inner = self.inner.take().expect("guard already consumed");
         let emitter = inner.emitter.expect("guard already consumed");
-        emitter.request_end(&inner.provider, &inner.model, inner.start, success, tokens, ttft_ms);
+        emitter.request_end(
+            &inner.provider,
+            &inner.model,
+            inner.start,
+            success,
+            tokens,
+            ttft_ms,
+        );
     }
 
     /// Emit `request_end(success=false)` for a failed request.
@@ -136,7 +143,9 @@ mod tests {
         // Should have emitted RequestStart + RequestEnd(success=false)
         let start_event = receiver.try_recv().expect("should have RequestStart");
         match start_event {
-            super::super::MetricEvent::RequestStart { provider, model, .. } => {
+            super::super::MetricEvent::RequestStart {
+                provider, model, ..
+            } => {
                 assert_eq!(provider, "prov");
                 assert_eq!(model, "mod");
             }
@@ -146,7 +155,10 @@ mod tests {
         let end_event = receiver.try_recv().expect("should have RequestEnd");
         match end_event {
             super::super::MetricEvent::RequestEnd {
-                success: false, provider, model, ..
+                success: false,
+                provider,
+                model,
+                ..
             } => {
                 assert_eq!(provider, "prov");
                 assert_eq!(model, "mod");

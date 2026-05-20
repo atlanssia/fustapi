@@ -194,28 +194,29 @@ impl OpenAIProvider {
         let mut chunks = Vec::new();
 
         if let Some(choice) = response.choices.first() {
-            if let Some(reasoning) = &choice.message.reasoning_content {
-                if !reasoning.is_empty() {
-                    chunks.push(LLMChunk {
-                        reasoning_content: Some(reasoning.clone()),
-                        usage: None,
-                        content: None,
-                        tool_call: None,
-                        done: false,
-                    });
-                }
+            if let Some(reasoning) = choice
+                .message
+                .reasoning_content
+                .as_ref()
+                .filter(|r| !r.is_empty())
+            {
+                chunks.push(LLMChunk {
+                    reasoning_content: Some(reasoning.clone()),
+                    usage: None,
+                    content: None,
+                    tool_call: None,
+                    done: false,
+                });
             }
 
-            if let Some(content) = &choice.message.content {
-                if !content.is_empty() {
-                    chunks.push(LLMChunk {
-                        reasoning_content: None,
-                        usage: None,
-                        content: Some(content.clone()),
-                        tool_call: None,
-                        done: false,
-                    });
-                }
+            if let Some(content) = choice.message.content.as_ref().filter(|c| !c.is_empty()) {
+                chunks.push(LLMChunk {
+                    reasoning_content: None,
+                    usage: None,
+                    content: Some(content.clone()),
+                    tool_call: None,
+                    done: false,
+                });
             }
 
             if let Some(tool_calls) = &choice.message.tool_calls {
@@ -264,8 +265,7 @@ impl OpenAIProvider {
 
         let mut builder = self.client.get(format!("{}/v1/models", base));
         if !self.config.api_key.is_empty() && !is_local {
-            builder =
-                builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
         }
         match builder.send().await {
             Ok(resp) if resp.status().is_success() => resp
@@ -273,13 +273,11 @@ impl OpenAIProvider {
                 .await
                 .ok()
                 .and_then(|v| {
-                    v.get("data")?
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|m| m.get("id")?.as_str().map(String::from))
-                                .collect()
-                        })
+                    v.get("data")?.as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                            .collect()
+                    })
                 })
                 .ok_or_else(|| ProviderError::Internal("Failed to parse models response".into())),
             Ok(_) => Err(ProviderError::Connection(
@@ -357,7 +355,10 @@ async fn send_with_tcp_retry(
             tracing::warn!(error = %e, "transient connect error, retrying once");
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             match retry {
-                Some(r) => r.send().await.map_err(|e| ProviderError::Connection(e.to_string())),
+                Some(r) => r
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::Connection(e.to_string())),
                 None => Err(ProviderError::Connection(e.to_string())),
             }
         }
@@ -671,10 +672,7 @@ impl Provider for OpenAIProvider {
     }
 
     fn name(&self) -> &str {
-        self.config
-            .provider_name
-            .as_deref()
-            .unwrap_or("openai")
+        self.config.provider_name.as_deref().unwrap_or("openai")
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
@@ -696,16 +694,14 @@ impl Provider for OpenAIProvider {
         //   omlx returns rich JSON with engine_pool, vLLM/SGLang return empty 200
         let health_ok = if is_local {
             match self.client.get(format!("{base}/health")).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.text().await {
-                        Ok(text) if text.trim().is_empty() => Some((true, None)),
-                        Ok(text) => {
-                            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
-                            parsed.ok().map(|v| (true, Some(v)))
-                        }
-                        Err(_) => Some((true, None)),
+                Ok(resp) if resp.status().is_success() => match resp.text().await {
+                    Ok(text) if text.trim().is_empty() => Some((true, None)),
+                    Ok(text) => {
+                        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
+                        parsed.ok().map(|v| (true, Some(v)))
                     }
-                }
+                    Err(_) => Some((true, None)),
+                },
                 Ok(_) => Some((false, None)),
                 Err(_) => None,
             }
@@ -716,8 +712,7 @@ impl Provider for OpenAIProvider {
         // Strategy 2: Try /v1/models for model listing (all endpoints)
         //   Local: fallback when /health didn't return data
         //   Remote: liveness check via OpenAI-compatible endpoint
-        let need_models = health_ok.is_none()
-            || health_ok.as_ref().is_some_and(|(ok, _)| !ok);
+        let need_models = health_ok.is_none() || health_ok.as_ref().is_some_and(|(ok, _)| !ok);
         let models_data: Option<Vec<String>> = if need_models {
             self.fetch_model_list().await.ok()
         } else {
@@ -752,9 +747,15 @@ impl Provider for OpenAIProvider {
 
         if let Some((_is_healthy, Some(json_body))) = &health_ok {
             // Rich JSON health response (omlx-style)
-            let status_str = json_body.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let status_str = json_body
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             // Accept: "healthy", "ok", "running", "up", "ready"
-            let healthy = matches!(status_str, "healthy" | "ok" | "running" | "up" | "ready" | "");
+            let healthy = matches!(
+                status_str,
+                "healthy" | "ok" | "running" | "up" | "ready" | ""
+            );
             if !healthy && !status_str.is_empty() {
                 status = BalanceStatus::Error;
             }
@@ -765,10 +766,22 @@ impl Provider for OpenAIProvider {
                 .map(String::from);
 
             let pool = &json_body["engine_pool"];
-            let model_count = pool.get("model_count").and_then(|v| v.as_u64()).unwrap_or(0);
-            let loaded_count = pool.get("loaded_count").and_then(|v| v.as_u64()).unwrap_or(0);
-            let max_mem = pool.get("max_model_memory").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cur_mem = pool.get("current_model_memory").and_then(|v| v.as_u64()).unwrap_or(0);
+            let model_count = pool
+                .get("model_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let loaded_count = pool
+                .get("loaded_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let max_mem = pool
+                .get("max_model_memory")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cur_mem = pool
+                .get("current_model_memory")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
 
             let mem_pct = if max_mem > 0 {
                 (cur_mem as f64 / max_mem as f64 * 10000.0).round() / 100.0
@@ -908,34 +921,42 @@ mod tests {
     fn parse_response_extracts_reasoning_content() {
         let resp = chat_response_with_reasoning("thinking about it...", "answer");
         let chunks = OpenAIProvider::parse_response(&resp);
-        assert!(chunks.iter().any(|c| c
-            .reasoning_content
-            .as_ref()
-            .is_some_and(|r| r == "thinking about it...")));
-        assert!(chunks.iter().any(|c| c
-            .content
-            .as_ref()
-            .is_some_and(|c| c == "answer")));
+        assert!(chunks.iter().any(|c| {
+            c.reasoning_content
+                .as_ref()
+                .is_some_and(|r| r == "thinking about it...")
+        }));
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.content.as_ref().is_some_and(|c| c == "answer"))
+        );
     }
 
     #[test]
     fn parse_response_reasoning_only_no_content() {
         let resp = chat_response_with_reasoning("thinking...", "");
         let chunks = OpenAIProvider::parse_response(&resp);
-        assert!(chunks
-            .iter()
-            .any(|c| c.reasoning_content.is_some() && c.content.is_none()));
-        assert!(!chunks
-            .iter()
-            .any(|c| c.content.as_ref().is_some_and(|t| !t.is_empty())));
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.reasoning_content.is_some() && c.content.is_none())
+        );
+        assert!(
+            !chunks
+                .iter()
+                .any(|c| c.content.as_ref().is_some_and(|t| !t.is_empty()))
+        );
     }
 
     #[test]
     fn parse_response_empty_strings_skipped() {
         let resp = chat_response_with_reasoning("", "");
         let chunks = OpenAIProvider::parse_response(&resp);
-        assert!(!chunks
-            .iter()
-            .any(|c| c.content.is_some() || c.reasoning_content.is_some()));
+        assert!(
+            !chunks
+                .iter()
+                .any(|c| c.content.is_some() || c.reasoning_content.is_some())
+        );
     }
 }

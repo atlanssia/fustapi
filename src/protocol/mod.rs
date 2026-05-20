@@ -105,8 +105,8 @@ async fn forward_streaming(
             let mut anthropic_state = serializer::AnthropicStreamState::new();
             let model_name_start = model_name.clone();
 
-            let body_stream = futures::StreamExt::map(stream, move |chunk_result| {
-                match chunk_result {
+            let body_stream =
+                futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
                     Ok(chunk) => {
                         tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
                         if let Some(usage) = &chunk.usage {
@@ -116,7 +116,11 @@ async fn forward_streaming(
                             Protocol::OpenAI => {
                                 let include_role = !sent_role;
                                 sent_role = true;
-                                serializer::serialize_openai_chunk(&chunk, &model_name, include_role)
+                                serializer::serialize_openai_chunk(
+                                    &chunk,
+                                    &model_name,
+                                    include_role,
+                                )
                             }
                             Protocol::Anthropic => {
                                 anthropic_state.serialize_chunk(&chunk, &model_name)
@@ -136,9 +140,8 @@ async fn forward_streaming(
                             "data: {err_json}\n\n"
                         )))
                     }
-                }
-            })
-            .boxed();
+                })
+                .boxed();
 
             if protocol == Protocol::Anthropic {
                 let start_bytes = axum::body::Bytes::from(anthropic::serialize_message_start(
@@ -204,7 +207,11 @@ async fn forward_streaming(
     }
 }
 
-fn sse_response(body_stream: std::pin::Pin<Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>> + Send>>) -> Response {
+fn sse_response(
+    body_stream: std::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>> + Send>,
+    >,
+) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
@@ -409,14 +416,7 @@ async fn anthropic_handler(
         )
         .await
     } else {
-        collect_non_streaming(
-            router,
-            unified_req,
-            &model_name,
-            Protocol::Anthropic,
-            guard,
-        )
-        .await
+        collect_non_streaming(router, unified_req, &model_name, Protocol::Anthropic, guard).await
     }
 }
 

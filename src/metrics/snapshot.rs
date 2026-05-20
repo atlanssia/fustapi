@@ -123,7 +123,11 @@ impl SnapshotBuilder {
             let dt = last.0.saturating_sub(first.0);
             let dr = last.1.saturating_sub(first.1);
             // Scale to per-minute: (requests / seconds) * 60
-            if dt > 0 { (dr as f64 / dt as f64) * 60.0 } else { 0.0 }
+            if dt > 0 {
+                (dr as f64 / dt as f64) * 60.0
+            } else {
+                0.0
+            }
         } else {
             0.0
         };

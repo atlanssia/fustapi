@@ -192,10 +192,7 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
 
     match pt {
         Pt::Omlx => Box::new(crate::provider::omlx::OmlxProvider::new(
-            crate::provider::omlx::OmlxConfig {
-                endpoint,
-                model,
-            },
+            crate::provider::omlx::OmlxConfig { endpoint, model },
         )),
         Pt::LmStudio => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
@@ -235,8 +232,8 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                 model,
             },
         )),
-        Pt::OpenAI | Pt::OpenAICompatible => Box::new(
-            crate::provider::cloud::openai::OpenAIProvider::new(
+        Pt::OpenAI | Pt::OpenAICompatible => {
+            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
                 crate::provider::cloud::openai::OpenAIConfig {
                     endpoint,
                     api_key,
@@ -247,8 +244,8 @@ pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::prov
                     image_input: true,
                     streaming: true,
                 },
-            ),
-        ),
+            ))
+        }
     }
 }
 
@@ -365,12 +362,13 @@ mod tests {
                 r#type: "omlx".into(),
             },
         );
-        first
-            .router
-            .insert("old-model".into(), RouteConfig {
+        first.router.insert(
+            "old-model".into(),
+            RouteConfig {
                 provider_ids: vec!["old-provider".into()],
                 upstream_models: HashMap::new(),
-            });
+            },
+        );
         save_to_db(&first, &db_path).expect("first save should work");
 
         let mut second = default_config();
@@ -383,12 +381,13 @@ mod tests {
                 r#type: "openai".into(),
             },
         );
-        second
-            .router
-            .insert("new-model".into(), RouteConfig {
+        second.router.insert(
+            "new-model".into(),
+            RouteConfig {
                 provider_ids: vec!["new-provider".into()],
                 upstream_models: HashMap::new(),
-            });
+            },
+        );
         save_to_db(&second, &db_path).expect("second save should work");
 
         let loaded = load_from_db(&db_path).expect("load should work");
@@ -397,7 +396,10 @@ mod tests {
         assert!(loaded.router.contains_key("new-model"));
         assert!(!loaded.router.contains_key("old-model"));
         assert_eq!(
-            loaded.router.get("new-model").and_then(|r| r.upstream_models.get("new-provider")),
+            loaded
+                .router
+                .get("new-model")
+                .and_then(|r| r.upstream_models.get("new-provider")),
             None,
         );
 
@@ -447,7 +449,10 @@ mod tests {
         let route = loaded.router.get("my-model").expect("route should exist");
         assert_eq!(route.provider_ids, vec!["openai", "deepseek"]);
         assert_eq!(route.upstream_models.get("openai").unwrap(), "gpt-4o");
-        assert_eq!(route.upstream_models.get("deepseek").unwrap(), "deepseek-chat");
+        assert_eq!(
+            route.upstream_models.get("deepseek").unwrap(),
+            "deepseek-chat"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

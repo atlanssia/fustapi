@@ -248,13 +248,11 @@ impl Provider for GlmProvider {
             .await
             .ok()
             .and_then(|v| {
-                v.get("data")?
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|m| m.get("id")?.as_str().map(String::from))
-                            .collect()
-                    })
+                v.get("data")?.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                        .collect()
+                })
             })
             .ok_or_else(|| ProviderError::Internal("Failed to parse GLM models response".into()))
     }
