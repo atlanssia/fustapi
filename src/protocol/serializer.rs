@@ -45,11 +45,13 @@ impl AnthropicStreamState {
         let mut prefix = String::new();
 
         // Close any open block before transitioning to a different block type.
+        // tool_block_open is excluded for done chunks — the done case in
+        // serialize_stream_event emits the final content_block_stop itself.
         let needs_close = (self.reasoning_block_open
             && (chunk.content.is_some() || chunk.tool_call.is_some()))
             || (self.text_block_open
                 && (chunk.tool_call.is_some() || chunk.reasoning_content.is_some()))
-            || self.tool_block_open;
+            || (self.tool_block_open && !chunk.done);
         if needs_close {
             let block_stop = serde_json::json!({
                 "type": "content_block_stop",
@@ -360,6 +362,27 @@ mod tests {
         let _ = state.serialize_chunk(&tool_call_chunk("fn", r#"{}"#), "model-a");
         let done = state.serialize_chunk(&done_chunk(), "model-a");
         assert!(done.contains("tool_use"));
+    }
+
+    #[test]
+    fn anthropic_tool_call_done_emits_single_block_stop() {
+        let mut state = AnthropicStreamState::new();
+        let _ = state.serialize_chunk(&tool_call_chunk("search", r#"{"q":"rust"}"#), "model-a");
+        let done = state.serialize_chunk(&done_chunk(), "model-a");
+        // Must contain exactly ONE "event: content_block_stop" line —
+        // the done case in serialize_stream_event closes the tool block;
+        // needs_close must NOT also close it (would create a spurious
+        // stop event at a stale index).
+        let event_lines: Vec<_> = done
+            .lines()
+            .filter(|l| l.starts_with("event: content_block_stop"))
+            .collect();
+        assert_eq!(
+            event_lines.len(),
+            1,
+            "expected single 'event: content_block_stop' for tool→done, got {}:\n{done}",
+            event_lines.len()
+        );
     }
 
     #[test]
