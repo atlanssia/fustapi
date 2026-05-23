@@ -11,6 +11,17 @@ use crate::capability::{ImageInput, ImageSource, ToolCall, ToolDefinition};
 use crate::provider::{Message, Role, UnifiedRequest};
 use crate::streaming::LLMChunk;
 
+/// Placeholder signature for thinking blocks proxied from non-Anthropic providers.
+///
+/// Anthropic extended-thinking requires a cryptographic `signature` in every
+/// thinking content block.  As a transparent proxy, fustapi does not hold the
+/// signing key — it emits a fixed placeholder so that clients (Claude Code)
+/// recognise the block as valid and preserve `reasoning_content` across
+/// multi-turn conversations.
+///
+/// Shared with [`super::serializer::PROXY_SIGNATURE`] (same value).
+pub(crate) const THINKING_SIGNATURE: &str = "fustapi-transparent-proxy";
+
 #[derive(Deserialize)]
 pub struct AnthropicRequest {
     pub model: String,
@@ -150,6 +161,14 @@ pub struct AnthropicContentOut {
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    /// Thinking content for Anthropic extended-thinking blocks
+    /// (mapped from DeepSeek / OpenAI reasoning_content).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
+    /// Signature for thinking blocks. Required by Anthropic protocol so
+    /// clients (Claude Code) preserve the block across conversation turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -489,11 +508,17 @@ pub fn serialize_response(
 ) -> Result<String, SerializeError> {
     let mut content_outs = Vec::new();
     // Anthropic thinking block for reasoning content (DeepSeek → Anthropic mapping).
+    // The `signature` field is required by the Anthropic protocol so that clients
+    // (e.g. Claude Code) preserve the thinking block across multi-turn conversations.
+    // As a transparent proxy, fustapi uses a fixed placeholder — the upstream
+    // provider (DeepSeek, etc.) carries the real reasoning in `reasoning_content`.
     if let Some(reasoning) = reasoning_content {
         content_outs.push(AnthropicContentOut {
             kind: "thinking".to_string(),
             id: None,
-            text: Some(reasoning.to_string()),
+            text: None,
+            thinking: Some(reasoning.to_string()),
+            signature: Some(THINKING_SIGNATURE.to_string()),
             input: None,
             name: None,
         });
@@ -503,6 +528,8 @@ pub fn serialize_response(
             kind: "text".to_string(),
             id: None,
             text: Some(text.to_string()),
+            thinking: None,
+            signature: None,
             input: None,
             name: None,
         });
@@ -513,6 +540,8 @@ pub fn serialize_response(
                 kind: "tool_use".to_string(),
                 id: Some(tc.id.clone().unwrap_or_else(|| format!("toolu_{i}"))),
                 text: None,
+                thinking: None,
+                signature: None,
                 input: Some(tc.arguments),
                 name: Some(tc.name),
             });
@@ -540,6 +569,8 @@ pub fn serialize_response(
 /// precede the first text delta for this content block.
 /// `stop_reason` is the Anthropic stop reason to use when `chunk.done` is true
 /// (e.g., `"end_turn"` for text, `"tool_use"` for tool calls).
+/// `close_reasoning` signals that the current reasoning block is being closed
+/// and a `signature_delta` must be emitted.
 #[must_use]
 pub fn serialize_stream_event(
     chunk: &LLMChunk,
@@ -548,8 +579,10 @@ pub fn serialize_stream_event(
     index: &usize,
     need_block_start: bool,
     stop_reason: &str,
+    close_reasoning: bool,
 ) -> String {
     let mut s = String::new();
+    let had_reasoning = chunk.reasoning_content.is_some();
 
     // DeepSeek reasoning_content → Anthropic thinking block
     if let Some(reasoning) = &chunk.reasoning_content {
@@ -557,7 +590,7 @@ pub fn serialize_stream_event(
             let block_start = serde_json::json!({
                 "type": "content_block_start",
                 "index": *index,
-                "content_block": { "type": "thinking", "thinking": "" }
+                "content_block": { "type": "thinking", "thinking": "", "signature": "" }
             });
             s.push_str(&format!(
                 "event: content_block_start\ndata: {}\n\n",
@@ -574,6 +607,21 @@ pub fn serialize_stream_event(
             "event: content_block_delta\ndata: {}\n\n",
             serde_json::to_string(&delta).unwrap_or_default()
         ));
+
+        // Emit the signature_delta after the final thinking delta.
+        // Anthropic requires a signature for every thinking block so that
+        // clients preserve reasoning across multi-turn conversations.
+        if close_reasoning {
+            let sig_delta = serde_json::json!({
+                "type": "content_block_delta",
+                "index": *index,
+                "delta": { "type": "signature_delta", "signature": THINKING_SIGNATURE }
+            });
+            s.push_str(&format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&sig_delta).unwrap_or_default()
+            ));
+        }
     }
 
     if let Some(text) = &chunk.content {
@@ -647,6 +695,20 @@ pub fn serialize_stream_event(
     }
 
     if chunk.done {
+        // When a reasoning block ends without a trailing reasoning delta
+        // (the final chunk is a bare [DONE]), emit the signature_delta first.
+        if close_reasoning && !had_reasoning {
+            let sig_delta = serde_json::json!({
+                "type": "content_block_delta",
+                "index": *index,
+                "delta": { "type": "signature_delta", "signature": THINKING_SIGNATURE }
+            });
+            s.push_str(&format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&sig_delta).unwrap_or_default()
+            ));
+        }
+
         let block_stop = serde_json::json!({
             "type": "content_block_stop",
             "index": *index
@@ -823,6 +885,35 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_response_reasoning_content_uses_thinking_field() {
+        let json = serialize_response(
+            "msg_1",
+            "deepseek-v3",
+            Some("The answer is 42."),
+            None,
+            Some("end_turn"),
+            Some("Let me reason about this..."),
+            10,
+            20,
+        )
+        .expect("serialize should succeed");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+
+        // First content block must be a thinking block with correct fields.
+        let thinking = &value["content"][0];
+        assert_eq!(thinking["type"], "thinking");
+        assert_eq!(thinking["thinking"], "Let me reason about this...");
+        assert!(thinking["signature"].is_string(), "signature must be present");
+        assert!(!thinking["signature"].as_str().unwrap().is_empty());
+        // Must NOT use the "text" field for thinking content.
+        assert!(thinking.get("text").is_none() || thinking["text"].is_null());
+
+        // Second content block is the text response.
+        assert_eq!(value["content"][1]["type"], "text");
+        assert_eq!(value["content"][1]["text"], "The answer is 42.");
+    }
+
+    #[test]
     fn test_serialize_stream_event_text() {
         let chunk = LLMChunk {
             reasoning_content: None,
@@ -831,7 +922,7 @@ mod tests {
             done: false,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "end_turn");
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "end_turn", false);
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""text":"Hello""#));
         assert!(sse.ends_with("\n\n"));
@@ -846,7 +937,7 @@ mod tests {
             done: true,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false, "end_turn");
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, false, "end_turn", false);
         assert!(sse.contains("event: message_delta"));
         assert!(sse.contains(r#""type":"stop_reason""#));
     }
@@ -865,7 +956,7 @@ mod tests {
             done: false,
             usage: None,
         };
-        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "tool_use");
+        let sse = serialize_stream_event(&chunk, "msg_1", "claude-3", &0, true, "tool_use", false);
         assert!(sse.contains("event: content_block_start"));
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""type":"tool_use""#));

@@ -12,6 +12,10 @@ use crate::streaming::LLMChunk;
 /// events around each content block, with a monotonically increasing index.
 /// This struct tracks which blocks are open so they can be closed correctly
 /// when transitioning between text, reasoning, and tool-call blocks.
+///
+/// It also emits a `signature_delta` event before closing reasoning blocks
+/// so that clients (Claude Code) preserve `reasoning_content` across
+/// multi-turn conversations with providers like DeepSeek.
 pub struct AnthropicStreamState {
     block_index: usize,
     need_block_start: bool,
@@ -20,6 +24,11 @@ pub struct AnthropicStreamState {
     tool_block_open: bool,
     has_tool_calls: bool,
 }
+
+/// Placeholder signature emitted with Anthropic thinking blocks that originate
+/// from non-Anthropic providers (e.g. DeepSeek `reasoning_content`).
+/// Aliases [`super::anthropic::THINKING_SIGNATURE`] to avoid duplicating the value.
+const PROXY_SIGNATURE: &str = super::anthropic::THINKING_SIGNATURE;
 
 impl Default for AnthropicStreamState {
     fn default() -> Self {
@@ -39,6 +48,19 @@ impl AnthropicStreamState {
         }
     }
 
+    /// Build a `signature_delta` SSE event for the given block index.
+    fn emit_signature_delta(index: usize) -> String {
+        let sig_delta = serde_json::json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": { "type": "signature_delta", "signature": PROXY_SIGNATURE }
+        });
+        format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::to_string(&sig_delta).unwrap_or_default()
+        )
+    }
+
     /// Serialize an `LLMChunk` into Anthropic SSE events, managing block
     /// lifecycle. Returns the SSE text (one or more `event: / data:` lines).
     pub fn serialize_chunk(&mut self, chunk: &LLMChunk, model: &str) -> String {
@@ -53,6 +75,13 @@ impl AnthropicStreamState {
                 && (chunk.tool_call.is_some() || chunk.reasoning_content.is_some()))
             || (self.tool_block_open && !chunk.done);
         if needs_close {
+            // When closing a reasoning block, emit the signature_delta first.
+            // Anthropic requires a signature for every thinking block so that
+            // clients preserve reasoning across multi-turn conversations.
+            if self.reasoning_block_open {
+                prefix.push_str(&Self::emit_signature_delta(self.block_index));
+            }
+
             let block_stop = serde_json::json!({
                 "type": "content_block_stop",
                 "index": self.block_index
@@ -74,6 +103,13 @@ impl AnthropicStreamState {
             "end_turn"
         };
 
+        // Determine whether the reasoning block is being closed by this chunk.
+        // Two cases: (a) the chunk carries reasoning_content *and* done, so the
+        // block opens and closes in a single chunk; (b) a bare [DONE] chunk
+        // arrives while a reasoning block is still open from previous chunks.
+        let close_reasoning = chunk.done
+            && (self.reasoning_block_open || chunk.reasoning_content.is_some());
+
         let s = super::anthropic::serialize_stream_event(
             chunk,
             "msg_gw",
@@ -81,6 +117,7 @@ impl AnthropicStreamState {
             &self.block_index,
             self.need_block_start,
             stop_reason,
+            close_reasoning,
         );
 
         if chunk.reasoning_content.is_some() {
@@ -335,6 +372,72 @@ mod tests {
         // Must close reasoning block before opening text block.
         assert!(t.contains("content_block_stop"));
         assert!(t.contains("content_block_delta"));
+    }
+
+    #[test]
+    fn anthropic_reasoning_then_done_emits_signature_delta() {
+        let mut state = AnthropicStreamState::new();
+        let r = state.serialize_chunk(&reasoning_chunk("thinking..."), "model-a");
+        assert!(r.contains("thinking_delta"));
+        // Signature is NOT emitted yet — the reasoning block is still open.
+        assert!(!r.contains("signature_delta"));
+
+        let d = state.serialize_chunk(&done_chunk(), "model-a");
+        // Bare DONE must emit signature_delta before content_block_stop.
+        assert!(
+            d.contains("signature_delta"),
+            "expected signature_delta in done chunk:\n{d}"
+        );
+        assert!(d.contains("fustapi-transparent-proxy"));
+        assert!(d.contains("content_block_stop"));
+    }
+
+    #[test]
+    fn anthropic_reasoning_done_single_chunk_emits_signature_delta() {
+        let mut state = AnthropicStreamState::new();
+        let chunk = LLMChunk {
+            content: None,
+            reasoning_content: Some("quick thought".to_string()),
+            tool_call: None,
+            done: true,
+            usage: None,
+        };
+        let out = state.serialize_chunk(&chunk, "model-a");
+        // Single chunk: thinking_delta then signature_delta then content_block_stop.
+        assert!(out.contains("thinking_delta"));
+        assert!(
+            out.contains("signature_delta"),
+            "expected signature_delta in single reasoning+done chunk:\n{out}"
+        );
+        assert!(out.contains("fustapi-transparent-proxy"));
+        assert!(out.contains("content_block_stop"));
+        // Must be exactly ONE signature_delta.
+        assert_eq!(
+            out.matches("signature_delta").count(),
+            1,
+            "expected single signature_delta, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn anthropic_reasoning_then_text_emits_signature_delta_in_prefix() {
+        let mut state = AnthropicStreamState::new();
+        let _ = state.serialize_chunk(&reasoning_chunk("hmm"), "model-a");
+
+        let text = state.serialize_chunk(&chunk(Some("answer")), "model-a");
+        // The signature_delta must appear BEFORE the first content_block_stop
+        // (the one that closes the reasoning block).
+        assert!(
+            text.contains("signature_delta"),
+            "expected signature_delta in reasoning→text transition:\n{text}"
+        );
+        assert!(text.contains("fustapi-transparent-proxy"));
+        let sig_pos = text.find("signature_delta").unwrap();
+        let stop_pos = text.find("content_block_stop").unwrap();
+        assert!(
+            sig_pos < stop_pos,
+            "signature_delta must precede content_block_stop"
+        );
     }
 
     #[test]
