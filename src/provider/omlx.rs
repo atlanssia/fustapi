@@ -87,7 +87,7 @@ impl Provider for OmlxProvider {
     }
 
     fn name(&self) -> &'static str {
-        "omlx"
+        "oMLX"
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
@@ -195,7 +195,7 @@ impl Provider for OmlxProvider {
         }
 
         Ok(Some(ProviderBalance {
-            provider_name: "omlx".to_string(),
+            provider_name: "oMLX".to_string(),
             status: if is_healthy {
                 BalanceStatus::Online
             } else {
@@ -230,6 +230,7 @@ struct OmlxHealthResponse {
 struct EnginePool {
     model_count: u32,
     loaded_count: u32,
+    #[serde(rename = "final_ceiling")]
     max_model_memory: u64,
     current_model_memory: u64,
 }

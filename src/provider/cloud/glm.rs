@@ -297,7 +297,7 @@ impl Provider for GlmProvider {
         let has_key = !self.config.api_key.is_empty();
 
         Ok(Some(build_provider_balance(
-            "glm",
+            "GLM",
             &data,
             &host,
             has_key,
@@ -314,7 +314,7 @@ impl Provider for GlmProvider {
     }
 
     fn name(&self) -> &'static str {
-        "glm"
+        "GLM"
     }
 }
 

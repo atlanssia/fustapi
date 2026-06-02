@@ -92,7 +92,7 @@ impl FromStr for ProviderType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "omlx" => Ok(Self::Omlx),
+            "omlx" | "oMLX" => Ok(Self::Omlx),
             "lmstudio" => Ok(Self::LmStudio),
             "sglang" => Ok(Self::SgLang),
             "openai" => Ok(Self::OpenAI),

@@ -187,7 +187,7 @@ impl Provider for DeepSeekProvider {
             let endpoint = self.config.endpoint.clone();
 
             return Ok(Some(build_balance_from_credit(
-                "deepseek",
+                "DeepSeek",
                 balance,
                 &info.currency,
                 &endpoint,
@@ -207,7 +207,7 @@ impl Provider for DeepSeekProvider {
     }
 
     fn name(&self) -> &'static str {
-        "deepseek"
+        "DeepSeek"
     }
 }
 

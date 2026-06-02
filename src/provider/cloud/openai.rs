@@ -698,7 +698,7 @@ impl Provider for OpenAIProvider {
     }
 
     fn name(&self) -> &str {
-        self.config.provider_name.as_deref().unwrap_or("openai")
+        self.config.provider_name.as_deref().unwrap_or("OpenAI")
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
@@ -748,7 +748,7 @@ impl Provider for OpenAIProvider {
         // Nothing reachable at all → offline
         if health_ok.is_none() && models_data.is_none() {
             return Ok(Some(ProviderBalance {
-                provider_name: "local".to_string(),
+                provider_name: self.name().to_string(),
                 status: BalanceStatus::Offline,
                 plan: None,
                 plan_type: None,
