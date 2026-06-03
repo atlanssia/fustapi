@@ -667,7 +667,7 @@ pub fn serialize_stream_event(
                     kind: "tool_use".to_string(),
                     id: Some(tool_id),
                     name: Some(tc.name.clone()),
-                    input: None,
+                    input: Some(serde_json::json!({})),
                 }),
             };
             s.push_str(&format!(
@@ -960,6 +960,10 @@ mod tests {
         assert!(sse.contains("event: content_block_start"));
         assert!(sse.contains("event: content_block_delta"));
         assert!(sse.contains(r#""type":"tool_use""#));
+        assert!(
+            sse.contains(r#""input":{}"#),
+            "tool_use content_block_start must include input:{{}}, got:\n{sse}"
+        );
     }
 
     #[test]
