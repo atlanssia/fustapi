@@ -270,3 +270,151 @@ impl Router for std::sync::Arc<RealRouter> {
         (**self).chat_stream(request, allow_passthrough).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::{ProviderCapabilities, ProviderError};
+
+    struct MockProvider {
+        caps: ProviderCapabilities,
+        name: &'static str,
+    }
+
+    impl MockProvider {
+        fn new(name: &'static str, caps: ProviderCapabilities) -> Self {
+            Self { caps, name }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn chat_stream(
+            &self,
+            _request: UnifiedRequest,
+            _allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, ProviderError> {
+            Err(ProviderError::Internal("mock".to_string()))
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.caps
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    fn router_with(provider_name: &str, provider: Box<dyn Provider>, models: &[&str]) -> RealRouter {
+        let mut providers = HashMap::new();
+        providers.insert(provider_name.to_string(), provider);
+        let mut routes = HashMap::new();
+        for model in models {
+            routes.insert(
+                model.to_string(),
+                RouteEntry {
+                    provider_ids: vec![provider_name.to_string()],
+                    upstream_models: HashMap::new(),
+                },
+            );
+        }
+        RealRouter { providers, routes }
+    }
+
+    #[test]
+    fn resolve_known_model() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+            )),
+            &["gpt-4"],
+        );
+        assert_eq!(router.resolve("gpt-4").unwrap(), "p1");
+    }
+
+    #[test]
+    fn resolve_unknown_model_returns_error() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+            )),
+            &["gpt-4"],
+        );
+        assert!(matches!(router.resolve("unknown"), Err(RouterError::ModelNotFound(_))));
+    }
+
+    #[test]
+    fn list_models_returns_configured_models() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+            )),
+            &["gpt-4", "gpt-3.5-turbo"],
+        );
+        let mut models = router.list_models();
+        models.sort();
+        assert_eq!(models, vec!["gpt-3.5-turbo".to_string(), "gpt-4".to_string()]);
+    }
+
+    #[test]
+    fn resolve_upstream_model_returns_none_when_no_override() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+            )),
+            &["gpt-4"],
+        );
+        assert!(router.resolve_upstream_model("gpt-4").is_none());
+    }
+
+    #[test]
+    fn resolve_upstream_model_returns_override() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "p1".to_string(),
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+            )) as Box<dyn Provider>,
+        );
+        let mut upstream = HashMap::new();
+        upstream.insert("p1".to_string(), "upstream-model".to_string());
+        let mut routes = HashMap::new();
+        routes.insert(
+            "my-model".to_string(),
+            RouteEntry {
+                provider_ids: vec!["p1".to_string()],
+                upstream_models: upstream,
+            },
+        );
+        let router = RealRouter { providers, routes };
+        assert_eq!(router.resolve_upstream_model("my-model"), Some("upstream-model".to_string()));
+    }
+}

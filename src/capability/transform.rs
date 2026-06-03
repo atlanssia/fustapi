@@ -110,15 +110,6 @@ pub fn build_transforms(
     transforms
 }
 
-/// Apply a pipeline of transforms to a prompt, returning the modified prompt.
-pub fn apply_prompt_transforms(prompt: &str, transforms: &[Box<dyn RequestTransform>]) -> String {
-    let mut result = prompt.to_string();
-    for t in transforms {
-        result = t.transform_prompt(&result);
-    }
-    result
-}
-
 /// Apply a pipeline of transforms to a stream in forward order.
 pub fn apply_stream_transforms(
     stream: LLMStream,
@@ -268,27 +259,6 @@ mod tests {
     }
 
     // ── Pipeline tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn apply_prompt_transforms_with_empty_pipeline_is_identity() {
-        let transforms: Vec<Box<dyn RequestTransform>> = vec![];
-        let result = apply_prompt_transforms("original", &transforms);
-        assert_eq!(result, "original");
-    }
-
-    #[test]
-    fn apply_prompt_transforms_with_single_transform() {
-        let tools = vec![ToolDefinition {
-            name: "calculator".to_string(),
-            description: "Do math".to_string(),
-            parameters: serde_json::json!({"type": "object"}),
-        }];
-        let transforms: Vec<Box<dyn RequestTransform>> =
-            vec![Box::new(ToolEmulationTransform::new(tools))];
-        let result = apply_prompt_transforms("You are helpful.", &transforms);
-        assert!(result.contains("calculator"));
-        assert!(result.contains("You are helpful."));
-    }
 
     #[test]
     fn should_disable_passthrough_with_empty_pipeline() {

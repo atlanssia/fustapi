@@ -168,11 +168,9 @@ pub struct OpenAIUsage {
     pub total_tokens: usize,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum ParseError {
     InvalidJson(serde_json::Error),
-    MissingField(String),
     InvalidFormat(String),
 }
 
@@ -180,7 +178,6 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseError::InvalidJson(e) => write!(f, "invalid JSON: {e}"),
-            ParseError::MissingField(field) => write!(f, "missing required field: {field}"),
             ParseError::InvalidFormat(msg) => write!(f, "invalid format: {msg}"),
         }
     }
