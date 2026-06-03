@@ -193,7 +193,7 @@ async fn health_handler() -> impl IntoResponse {
         StatusCode::OK,
         Json(HealthResponse {
             status: "ok",
-            version: env!("CARGO_PKG_VERSION"),
+            version: include_str!(concat!(env!("OUT_DIR"), "/version.txt")),
         }),
     )
 }
