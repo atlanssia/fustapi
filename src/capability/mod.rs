@@ -4,7 +4,9 @@
 
 pub mod image;
 pub mod tool;
+pub mod transform;
 
 // Re-export for convenient use by other modules.
 pub use image::{ImageInput, ImageSource};
-pub use tool::{ToolCall, ToolDefinition, ToolMode};
+pub use tool::{ToolCall, ToolDefinition};
+pub use transform::RequestTransform;

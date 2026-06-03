@@ -183,44 +183,42 @@ impl Router for RealRouter {
 
         if let Some(provider) = self.get_provider_for_model(&model_name) {
             let caps = provider.capabilities();
-            let needs_emulation = caps.tool_calling
-                == crate::provider::ToolCallingSupport::Emulated
-                && request.tools.as_ref().is_some_and(|t| !t.is_empty());
+            let transforms = crate::capability::transform::build_transforms(
+                caps.tool_calling,
+                request.tools.clone(),
+            );
 
-            if needs_emulation {
-                let tools = request.tools.take().unwrap();
+            if crate::capability::transform::should_disable_passthrough(&transforms) {
+                allow_passthrough = false;
+            }
 
-                let mut system_msg_idx = None;
-                for (i, msg) in request.messages.iter().enumerate() {
-                    if msg.role == crate::provider::Role::System {
-                        system_msg_idx = Some(i);
-                        break;
+            // Apply transforms to request messages
+            for t in &transforms {
+                // Find system prompt and transform it
+                let system_idx = request.messages.iter().position(|m| m.role == crate::provider::Role::System);
+                if let Some(idx) = system_idx {
+                    request.messages[idx].content = t.transform_prompt(&request.messages[idx].content);
+                } else {
+                    let prompt = t.transform_prompt("You are a helpful AI assistant.");
+                    if prompt != "You are a helpful AI assistant." {
+                        request.messages.insert(
+                            0,
+                            crate::provider::Message {
+                                role: crate::provider::Role::System,
+                                content: prompt,
+                                images: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                extras: None,
+                            },
+                        );
                     }
                 }
+            }
 
-                if let Some(idx) = system_msg_idx {
-                    request.messages[idx].content = crate::capability::tool::inject_tool_schemas(
-                        &request.messages[idx].content,
-                        &tools,
-                    );
-                } else {
-                    request.messages.insert(
-                        0,
-                        crate::provider::Message {
-                            role: crate::provider::Role::System,
-                            content: crate::capability::tool::inject_tool_schemas(
-                                "You are a helpful AI assistant.",
-                                &tools,
-                            ),
-                            images: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                            extras: None,
-                        },
-                    );
-                }
-
-                allow_passthrough = false;
+            // Remove tools from request if transforms consumed them
+            if !transforms.is_empty() {
+                request.tools = None;
             }
 
             let stream_mode = provider.chat_stream(request, allow_passthrough).await?;
@@ -233,13 +231,12 @@ impl Router for RealRouter {
                         Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
                     });
 
-                    if needs_emulation {
-                        let emulated =
-                            crate::capability::tool::ToolEmulationStream::new(Box::pin(s));
-                        return Ok(crate::streaming::StreamMode::Normalized(Box::pin(emulated)));
-                    }
+                    let s = crate::capability::transform::apply_stream_transforms(
+                        Box::pin(s),
+                        &transforms,
+                    );
 
-                    return Ok(crate::streaming::StreamMode::Normalized(Box::pin(s)));
+                    return Ok(crate::streaming::StreamMode::Normalized(s));
                 }
                 crate::streaming::StreamMode::Passthrough(byte_stream) => {
                     return Ok(crate::streaming::StreamMode::Passthrough(byte_stream));

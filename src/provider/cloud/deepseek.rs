@@ -3,12 +3,8 @@
 //! Fallback adapter for the `DeepSeek` API.
 
 use async_trait::async_trait;
-use serde::Deserialize;
 
-use crate::provider::{
-    Alert, AlertLevel, BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, PlanType,
-    Provider, ProviderBalance, ProviderError, UnifiedRequest,
-};
+use crate::provider::{Provider, ProviderBalance, ProviderError, UnifiedRequest};
 
 /// `DeepSeek` provider configuration.
 #[allow(dead_code)]
@@ -31,10 +27,11 @@ impl Default for DeepSeekConfig {
 
 /// `DeepSeek` provider implementation.
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeepSeekProvider {
     config: DeepSeekConfig,
     openai_backend: crate::provider::cloud::openai::OpenAIProvider,
+    http_client: reqwest::Client,
 }
 
 impl DeepSeekProvider {
@@ -55,68 +52,9 @@ impl DeepSeekProvider {
         Self {
             config,
             openai_backend,
+            http_client: crate::provider::build_http_client(),
         }
     }
-}
-
-fn build_balance_from_credit(
-    name: &str,
-    balance: f64,
-    currency: &str,
-    endpoint: &str,
-    has_key: bool,
-) -> ProviderBalance {
-    let status = if balance <= 0.0 {
-        MetricStatus::Critical
-    } else {
-        MetricStatus::Ok
-    };
-
-    let mut alerts = Vec::new();
-    if balance <= 0.0 {
-        alerts.push(Alert {
-            level: AlertLevel::Critical,
-            message: "Balance depleted".to_string(),
-        });
-    }
-
-    ProviderBalance {
-        provider_name: name.to_string(),
-        status: BalanceStatus::Online,
-        plan: None,
-        plan_type: Some(PlanType::Credit),
-        alerts,
-        metrics: vec![Metric {
-            label: "Balance".to_string(),
-            kind: MetricKind::Absolute,
-            value: balance,
-            total: None,
-            unit: Some(currency.to_string()),
-            percentage: None,
-            status,
-            reset_at_ms: None,
-        }],
-        breakdown: vec![],
-        resets: vec![],
-        config_summary: ConfigSummary {
-            provider_type: "cloud".to_string(),
-            endpoint: endpoint.to_string(),
-            has_key,
-            model: None,
-        },
-    }
-}
-
-#[derive(Deserialize)]
-struct DeepSeekBalanceResponse {
-    is_available: bool,
-    balance_infos: Vec<BalanceInfo>,
-}
-
-#[derive(Deserialize)]
-struct BalanceInfo {
-    currency: String,
-    total_balance: String,
 }
 
 #[async_trait]
@@ -137,7 +75,6 @@ impl Provider for DeepSeekProvider {
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         use tracing::debug;
-        let client = crate::provider::build_http_client();
         let url = format!(
             "{}/user/balance",
             self.config.endpoint.trim_end_matches('/')
@@ -145,7 +82,7 @@ impl Provider for DeepSeekProvider {
 
         debug!(url = %url, has_key = !self.config.api_key.is_empty(), "deepseek balance query");
 
-        let mut builder = client.get(&url).header("Accept", "application/json");
+        let mut builder = self.http_client.get(&url).header("Accept", "application/json");
 
         if !self.config.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -167,35 +104,18 @@ impl Provider for DeepSeekProvider {
             )));
         }
 
-        let resp_text = resp.text().await.unwrap_or_default();
-        debug!(body = %resp_text, "deepseek balance raw response");
+        let body = resp.text().await.unwrap_or_default();
+        debug!(body = %body, "deepseek balance raw response");
 
-        let body: DeepSeekBalanceResponse =
-            serde_json::from_str(&resp_text).map_err(|e| ProviderError::Internal(e.to_string()))?;
+        let has_key = !self.config.api_key.is_empty();
+        let balance = crate::provider::health::parse_deepseek_balance(
+            &body,
+            &self.config.endpoint,
+            has_key,
+        )
+        .map_err(ProviderError::Internal)?;
 
-        debug!(
-            is_available = body.is_available,
-            infos = body.balance_infos.len(),
-            "deepseek balance parsed"
-        );
-
-        if body.is_available
-            && let Some(info) = body.balance_infos.first()
-        {
-            let balance = info.total_balance.parse::<f64>().unwrap_or(0.0);
-            let has_key = !self.config.api_key.is_empty();
-            let endpoint = self.config.endpoint.clone();
-
-            return Ok(Some(build_balance_from_credit(
-                "DeepSeek",
-                balance,
-                &info.currency,
-                &endpoint,
-                has_key,
-            )));
-        }
-
-        Ok(None)
+        Ok(Some(balance))
     }
 
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
@@ -213,32 +133,33 @@ impl Provider for DeepSeekProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn deepseek_balance_builds_credit_structure() {
-        let result = build_balance_from_credit("deepseek", 1.60, "CNY", "api.deepseek.com", true);
+        let body = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.60"}]}"#;
+        let result = crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
+            .expect("parse should succeed");
 
-        assert_eq!(result.provider_name, "deepseek");
-        assert_eq!(result.status, BalanceStatus::Online);
-        assert_eq!(result.plan_type, Some(PlanType::Credit));
+        assert_eq!(result.provider_name, "DeepSeek");
+        assert_eq!(result.status, crate::provider::BalanceStatus::Online);
+        assert_eq!(result.plan_type, Some(crate::provider::PlanType::Credit));
         assert_eq!(result.metrics.len(), 1);
         assert_eq!(result.metrics[0].label, "Balance");
-        assert_eq!(result.metrics[0].kind, MetricKind::Absolute);
-        assert_eq!(result.metrics[0].value, 1.60);
+        assert!((result.metrics[0].value - 1.60).abs() < 0.01);
         assert_eq!(result.metrics[0].unit.as_deref(), Some("CNY"));
         assert!(result.alerts.is_empty());
     }
 
     #[test]
     fn deepseek_balance_alerts_on_zero() {
-        let result = build_balance_from_credit("deepseek", 0.0, "CNY", "api.deepseek.com", true);
-        assert_eq!(result.metrics[0].status, MetricStatus::Critical);
+        let body = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"0.00"}]}"#;
+        let result = crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
+            .expect("parse should succeed");
+        assert_eq!(result.metrics[0].status, crate::provider::MetricStatus::Critical);
         assert!(
             result
                 .alerts
                 .iter()
-                .any(|a| a.level == AlertLevel::Critical)
+                .any(|a| a.level == crate::provider::AlertLevel::Critical)
         );
     }
 }

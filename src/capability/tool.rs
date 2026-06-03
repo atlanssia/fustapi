@@ -1,7 +1,6 @@
 //! Tool calling types and abstractions.
 //!
-//! Defines `ToolCall`, `ToolDefinition`, and `ToolMode` (native vs. emulated)
-//! for provider-agnostic tool calling support.
+//! Defines `ToolCall` and `ToolDefinition` for provider-agnostic tool calling support.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,15 +27,6 @@ pub struct ToolDefinition {
     pub description: String,
     /// JSON Schema describing the tool's parameters.
     pub parameters: Value,
-}
-
-/// Tool calling mode for a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolMode {
-    /// Provider natively supports tool calling (passes tool definitions directly).
-    Native,
-    /// Gateway emulates tool calling (parses LLM output into tool calls).
-    Emulated,
 }
 
 /// Parse error for tool call extraction.
