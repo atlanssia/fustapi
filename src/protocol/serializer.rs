@@ -107,8 +107,8 @@ impl AnthropicStreamState {
         // Two cases: (a) the chunk carries reasoning_content *and* done, so the
         // block opens and closes in a single chunk; (b) a bare [DONE] chunk
         // arrives while a reasoning block is still open from previous chunks.
-        let close_reasoning = chunk.done
-            && (self.reasoning_block_open || chunk.reasoning_content.is_some());
+        let close_reasoning =
+            chunk.done && (self.reasoning_block_open || chunk.reasoning_content.is_some());
 
         let s = super::anthropic::serialize_stream_event(
             chunk,

@@ -436,10 +436,20 @@ async fn anthropic_handler(
 /// Error type for protocol dispatch failures.
 #[derive(Debug)]
 pub enum ProtocolError {
-    Parse { message: String, protocol: Protocol },
-    Internal { message: String, protocol: Protocol },
+    Parse {
+        message: String,
+        protocol: Protocol,
+    },
+    Internal {
+        message: String,
+        protocol: Protocol,
+    },
     /// Upstream provider returned a client error — forward with original status.
-    Upstream { status: u16, message: String, protocol: Protocol },
+    Upstream {
+        status: u16,
+        message: String,
+        protocol: Protocol,
+    },
 }
 
 impl IntoResponse for ProtocolError {
@@ -451,9 +461,12 @@ impl IntoResponse for ProtocolError {
             ProtocolError::Internal { message, protocol } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, message, protocol)
             }
-            ProtocolError::Upstream { status, message, protocol } => {
-                let code = StatusCode::from_u16(status)
-                    .unwrap_or(StatusCode::BAD_GATEWAY);
+            ProtocolError::Upstream {
+                status,
+                message,
+                protocol,
+            } => {
+                let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
                 (code, message, protocol)
             }
         };

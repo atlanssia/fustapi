@@ -453,9 +453,9 @@ pub fn parse_openai_sse_stream(
                                     || fr == "error"
                                 {
                                     return Some((
-                                        Err(crate::streaming::StreamError::Provider(
-                                            format!("upstream error: {fr}"),
-                                        )),
+                                        Err(crate::streaming::StreamError::Provider(format!(
+                                            "upstream error: {fr}"
+                                        ))),
                                         (stream, buffer, tool_id, tool_name, tool_args),
                                     ));
                                 }
@@ -643,7 +643,10 @@ impl Provider for OpenAIProvider {
                 let status = resp.status();
                 let err_text = resp.text().await.unwrap_or_default();
                 return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                    ProviderError::Upstream { status: status.as_u16(), message: err_text }
+                    ProviderError::Upstream {
+                        status: status.as_u16(),
+                        message: err_text,
+                    }
                 } else {
                     ProviderError::Request(format!("provider error {status}: {err_text}"))
                 });
@@ -668,7 +671,10 @@ impl Provider for OpenAIProvider {
                 let status = resp_body.status();
                 let err_text = resp_body.text().await.unwrap_or_default();
                 return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                    ProviderError::Upstream { status: status.as_u16(), message: err_text }
+                    ProviderError::Upstream {
+                        status: status.as_u16(),
+                        message: err_text,
+                    }
                 } else {
                     ProviderError::Request(format!("provider error {status}: {err_text}"))
                 });

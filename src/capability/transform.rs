@@ -7,7 +7,7 @@
 //! signal whether passthrough mode must be disabled. The router applies all
 //! transforms without knowing their internals.
 
-use crate::capability::tool::{inject_tool_schemas, ToolDefinition, ToolEmulationStream};
+use crate::capability::tool::{ToolDefinition, ToolEmulationStream, inject_tool_schemas};
 use crate::streaming::LLMStream;
 
 // ── Trait ──────────────────────────────────────────────────────────────
@@ -240,13 +240,11 @@ mod tests {
         let t = ToolEmulationTransform::new(tools);
 
         // Stream that outputs a JSON tool call
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("{\"name\":\"test_tool\",\"arguments\":{}}".to_string()),
-                done: true,
-                ..Default::default()
-            }),
-        ];
+        let chunks = vec![Ok(LLMChunk {
+            content: Some("{\"name\":\"test_tool\",\"arguments\":{}}".to_string()),
+            done: true,
+            ..Default::default()
+        })];
         let stream: LLMStream = Box::pin(tokio_stream::iter(chunks));
         let mut result = t.transform_stream(stream);
 
@@ -268,13 +266,14 @@ mod tests {
 
     #[test]
     fn should_disable_passthrough_with_tool_emulation() {
-        let transforms: Vec<Box<dyn RequestTransform>> = vec![Box::new(
-            ToolEmulationTransform::new(vec![ToolDefinition {
-                name: "foo".to_string(),
-                description: "bar".to_string(),
-                parameters: serde_json::json!({"type": "object"}),
-            }]),
-        )];
+        let transforms: Vec<Box<dyn RequestTransform>> =
+            vec![Box::new(ToolEmulationTransform::new(vec![
+                ToolDefinition {
+                    name: "foo".to_string(),
+                    description: "bar".to_string(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            ]))];
         assert!(should_disable_passthrough(&transforms));
     }
 
@@ -337,17 +336,13 @@ mod tests {
 
     #[test]
     fn build_transforms_returns_empty_when_no_tools() {
-        let transforms =
-            build_transforms(crate::types::ToolCallingSupport::Emulated, None);
+        let transforms = build_transforms(crate::types::ToolCallingSupport::Emulated, None);
         assert!(transforms.is_empty());
     }
 
     #[test]
     fn build_transforms_returns_empty_for_empty_tools() {
-        let transforms = build_transforms(
-            crate::types::ToolCallingSupport::Emulated,
-            Some(vec![]),
-        );
+        let transforms = build_transforms(crate::types::ToolCallingSupport::Emulated, Some(vec![]));
         assert!(transforms.is_empty());
     }
 
@@ -376,10 +371,7 @@ mod tests {
             description: "bar".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         }]);
-        let transforms = build_transforms(
-            crate::types::ToolCallingSupport::Unsupported,
-            tools,
-        );
+        let transforms = build_transforms(crate::types::ToolCallingSupport::Unsupported, tools);
         assert!(transforms.is_empty());
     }
 }

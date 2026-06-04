@@ -82,7 +82,10 @@ impl Provider for DeepSeekProvider {
 
         debug!(url = %url, has_key = !self.config.api_key.is_empty(), "deepseek balance query");
 
-        let mut builder = self.http_client.get(&url).header("Accept", "application/json");
+        let mut builder = self
+            .http_client
+            .get(&url)
+            .header("Accept", "application/json");
 
         if !self.config.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -108,12 +111,9 @@ impl Provider for DeepSeekProvider {
         debug!(body = %body, "deepseek balance raw response");
 
         let has_key = !self.config.api_key.is_empty();
-        let balance = crate::provider::health::parse_deepseek_balance(
-            &body,
-            &self.config.endpoint,
-            has_key,
-        )
-        .map_err(ProviderError::Internal)?;
+        let balance =
+            crate::provider::health::parse_deepseek_balance(&body, &self.config.endpoint, has_key)
+                .map_err(ProviderError::Internal)?;
 
         Ok(Some(balance))
     }
@@ -135,9 +135,11 @@ impl Provider for DeepSeekProvider {
 mod tests {
     #[test]
     fn deepseek_balance_builds_credit_structure() {
-        let body = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.60"}]}"#;
-        let result = crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
-            .expect("parse should succeed");
+        let body =
+            r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.60"}]}"#;
+        let result =
+            crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
+                .expect("parse should succeed");
 
         assert_eq!(result.provider_name, "DeepSeek");
         assert_eq!(result.status, crate::provider::BalanceStatus::Online);
@@ -151,10 +153,15 @@ mod tests {
 
     #[test]
     fn deepseek_balance_alerts_on_zero() {
-        let body = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"0.00"}]}"#;
-        let result = crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
-            .expect("parse should succeed");
-        assert_eq!(result.metrics[0].status, crate::provider::MetricStatus::Critical);
+        let body =
+            r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"0.00"}]}"#;
+        let result =
+            crate::provider::health::parse_deepseek_balance(body, "api.deepseek.com", true)
+                .expect("parse should succeed");
+        assert_eq!(
+            result.metrics[0].status,
+            crate::provider::MetricStatus::Critical
+        );
         assert!(
             result
                 .alerts

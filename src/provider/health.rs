@@ -365,7 +365,12 @@ mod tests {
             .expect("parse should succeed");
 
         assert_eq!(balance.status, BalanceStatus::Error);
-        assert!(balance.alerts.iter().any(|a| a.message.contains("unhealthy")));
+        assert!(
+            balance
+                .alerts
+                .iter()
+                .any(|a| a.message.contains("unhealthy"))
+        );
     }
 
     #[test]
@@ -383,7 +388,12 @@ mod tests {
         let balance = parse_omlx_balance(body, "http://localhost:8000/v1", None)
             .expect("parse should succeed");
 
-        assert!(balance.alerts.iter().any(|a| a.level == AlertLevel::Critical && a.message.contains("96%")));
+        assert!(
+            balance
+                .alerts
+                .iter()
+                .any(|a| a.level == AlertLevel::Critical && a.message.contains("96%"))
+        );
     }
 
     #[test]
@@ -406,7 +416,8 @@ mod tests {
 
     #[test]
     fn deepseek_normal_balance() {
-        let body = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.60"}]}"#;
+        let body =
+            r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.60"}]}"#;
         let balance = parse_deepseek_balance(body, "https://api.deepseek.com", true)
             .expect("parse should succeed");
 
@@ -420,12 +431,18 @@ mod tests {
 
     #[test]
     fn deepseek_zero_balance_alerts() {
-        let body = r#"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"}]}"#;
+        let body =
+            r#"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"}]}"#;
         let balance = parse_deepseek_balance(body, "https://api.deepseek.com", true)
             .expect("parse should succeed");
 
         assert_eq!(balance.metrics[0].status, MetricStatus::Critical);
-        assert!(balance.alerts.iter().any(|a| a.message.contains("depleted")));
+        assert!(
+            balance
+                .alerts
+                .iter()
+                .any(|a| a.message.contains("depleted"))
+        );
     }
 
     #[test]

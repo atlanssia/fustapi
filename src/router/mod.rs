@@ -195,9 +195,13 @@ impl Router for RealRouter {
             // Apply transforms to request messages
             for t in &transforms {
                 // Find system prompt and transform it
-                let system_idx = request.messages.iter().position(|m| m.role == crate::provider::Role::System);
+                let system_idx = request
+                    .messages
+                    .iter()
+                    .position(|m| m.role == crate::provider::Role::System);
                 if let Some(idx) = system_idx {
-                    request.messages[idx].content = t.transform_prompt(&request.messages[idx].content);
+                    request.messages[idx].content =
+                        t.transform_prompt(&request.messages[idx].content);
                 } else {
                     let prompt = t.transform_prompt("You are a helpful AI assistant.");
                     if prompt != "You are a helpful AI assistant." {
@@ -304,7 +308,11 @@ mod tests {
         }
     }
 
-    fn router_with(provider_name: &str, provider: Box<dyn Provider>, models: &[&str]) -> RealRouter {
+    fn router_with(
+        provider_name: &str,
+        provider: Box<dyn Provider>,
+        models: &[&str],
+    ) -> RealRouter {
         let mut providers = HashMap::new();
         providers.insert(provider_name.to_string(), provider);
         let mut routes = HashMap::new();
@@ -351,7 +359,10 @@ mod tests {
             )),
             &["gpt-4"],
         );
-        assert!(matches!(router.resolve("unknown"), Err(RouterError::ModelNotFound(_))));
+        assert!(matches!(
+            router.resolve("unknown"),
+            Err(RouterError::ModelNotFound(_))
+        ));
     }
 
     #[test]
@@ -370,7 +381,10 @@ mod tests {
         );
         let mut models = router.list_models();
         models.sort();
-        assert_eq!(models, vec!["gpt-3.5-turbo".to_string(), "gpt-4".to_string()]);
+        assert_eq!(
+            models,
+            vec!["gpt-3.5-turbo".to_string(), "gpt-4".to_string()]
+        );
     }
 
     #[test]
@@ -415,6 +429,9 @@ mod tests {
             },
         );
         let router = RealRouter { providers, routes };
-        assert_eq!(router.resolve_upstream_model("my-model"), Some("upstream-model".to_string()));
+        assert_eq!(
+            router.resolve_upstream_model("my-model"),
+            Some("upstream-model".to_string())
+        );
     }
 }

@@ -896,7 +896,10 @@ mod tests {
         let thinking = &value["content"][0];
         assert_eq!(thinking["type"], "thinking");
         assert_eq!(thinking["thinking"], "Let me reason about this...");
-        assert!(thinking["signature"].is_string(), "signature must be present");
+        assert!(
+            thinking["signature"].is_string(),
+            "signature must be present"
+        );
         assert!(!thinking["signature"].as_str().unwrap().is_empty());
         // Must NOT use the "text" field for thinking content.
         assert!(thinking.get("text").is_none() || thinking["text"].is_null());
