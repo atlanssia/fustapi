@@ -9,7 +9,6 @@ use std::fmt;
 
 use crate::capability::{ImageInput, ImageSource, ToolCall, ToolDefinition};
 use crate::provider::{Message, Role, UnifiedRequest};
-use crate::streaming::LLMChunk;
 
 #[derive(Deserialize)]
 pub struct OpenAIRequest {
@@ -169,61 +168,9 @@ pub struct OpenAIUsage {
     pub total_tokens: usize,
 }
 
-#[derive(Serialize)]
-pub struct OpenAIStreamChunk {
-    pub id: String,
-    #[serde(rename = "object")]
-    pub obj: String,
-    pub created: u64,
-    pub model: String,
-    pub choices: Vec<OpenAIStreamChoice>,
-}
-
-#[derive(Serialize)]
-pub struct OpenAIStreamChoice {
-    pub index: usize,
-    pub delta: OpenAIDelta,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<&'static str>,
-}
-
-#[derive(Serialize)]
-pub struct OpenAIDelta {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<OpenAIStreamToolCall>>,
-}
-
-#[derive(Serialize)]
-pub struct OpenAIStreamToolCall {
-    pub index: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(rename = "type")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function: Option<OpenAIStreamFunction>,
-}
-
-#[derive(Serialize)]
-pub struct OpenAIStreamFunction {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<String>,
-}
-
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum ParseError {
     InvalidJson(serde_json::Error),
-    MissingField(String),
     InvalidFormat(String),
 }
 
@@ -231,7 +178,6 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseError::InvalidJson(e) => write!(f, "invalid JSON: {e}"),
-            ParseError::MissingField(field) => write!(f, "missing required field: {field}"),
             ParseError::InvalidFormat(msg) => write!(f, "invalid format: {msg}"),
         }
     }
@@ -510,46 +456,6 @@ pub fn serialize_response(
     serde_json::to_string(&response).map_err(SerializeError::Json)
 }
 
-#[must_use]
-pub fn serialize_stream_chunk(chunk: &LLMChunk, id: &str, model: &str, index: &usize) -> String {
-    if chunk.done {
-        return "data:[DONE]\n\n".to_string();
-    }
-    let mut delta = OpenAIDelta {
-        role: Some("assistant"),
-        content: chunk.content.clone(),
-        reasoning_content: chunk.reasoning_content.clone(),
-        tool_calls: None,
-    };
-    if let Some(tc) = &chunk.tool_call {
-        delta.tool_calls = Some(vec![OpenAIStreamToolCall {
-            index: *index,
-            id: Some(tc.id.clone().unwrap_or_else(|| format!("call_{index}"))),
-            kind: Some("function"),
-            function: Some(OpenAIStreamFunction {
-                name: Some(tc.name.clone()),
-                arguments: Some(tc.arguments.to_string()),
-            }),
-        }]);
-    }
-    let choice = OpenAIStreamChoice {
-        index: *index,
-        delta,
-        finish_reason: None,
-    };
-    let response = OpenAIStreamChunk {
-        id: id.to_string(),
-        obj: "chat.completion.chunk".to_string(),
-        created: 1_000_000_000_u64,
-        model: model.to_string(),
-        choices: vec![choice],
-    };
-    serde_json::to_string(&response).map_or_else(
-        |_| format!("data:{}\n\n", "{{\"error\":\"serialization failed\"}}"),
-        |s| format!("data:{s}\n\n"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,34 +564,6 @@ mod tests {
         assert_eq!(value["choices"][0]["message"]["content"], "Hello!");
         assert_eq!(value["choices"][0]["finish_reason"], "stop");
         assert_eq!(value["usage"]["total_tokens"], 15);
-    }
-
-    #[test]
-    fn test_serialize_stream_chunk() {
-        let chunk = LLMChunk {
-            reasoning_content: None,
-            content: Some("Hello".to_string()),
-            tool_call: None,
-            done: false,
-            usage: None,
-        };
-        let sse = serialize_stream_chunk(&chunk, "chatcmpl-1", "gpt-4", &0);
-        assert!(sse.starts_with("data:"));
-        assert!(sse.contains(r#""content":"Hello""#));
-        assert!(sse.ends_with("\n\n"));
-    }
-
-    #[test]
-    fn test_serialize_done_chunk() {
-        let chunk = LLMChunk {
-            reasoning_content: None,
-            content: None,
-            tool_call: None,
-            done: true,
-            usage: None,
-        };
-        let sse = serialize_stream_chunk(&chunk, "chatcmpl-1", "gpt-4", &0);
-        assert_eq!(sse.trim(), "data:[DONE]");
     }
 
     #[test]

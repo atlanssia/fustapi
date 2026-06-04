@@ -3,7 +3,13 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::provider::ToolCallingSupport;
+/// Level of tool calling support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallingSupport {
+    Native,
+    Emulated,
+    Unsupported,
+}
 
 /// Supported LLM provider types.
 ///
@@ -169,7 +175,6 @@ mod tests {
 
     #[test]
     fn tool_calling_modes() {
-        use crate::provider::ToolCallingSupport;
         assert_eq!(
             ProviderType::Omlx.tool_calling_mode(),
             ToolCallingSupport::Emulated

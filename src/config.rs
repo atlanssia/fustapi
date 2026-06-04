@@ -164,90 +164,9 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
     Ok(AppConfig { router, providers })
 }
 
-// ── Provider Factory ──────────────────────────────────────────────────
+// ── Provider Factory (re-exported from provider module) ────────────────
 
-/// Create a provider instance from a provider config entry.
-pub fn create_provider(_name: &str, cfg: &ProviderConfig) -> Box<dyn crate::provider::Provider> {
-    use crate::types::ProviderType as Pt;
-
-    let pt: Pt = match cfg.r#type.parse() {
-        Ok(pt) => pt,
-        Err(_) => {
-            tracing::warn!(
-                r#type = %cfg.r#type,
-                "Unknown provider type — falling back to omlx default"
-            );
-            return Box::new(crate::provider::omlx::OmlxProvider::default_provider());
-        }
-    };
-
-    let endpoint = if cfg.endpoint.is_empty() {
-        pt.default_endpoint().unwrap_or("").to_string()
-    } else {
-        cfg.endpoint.clone()
-    };
-
-    let api_key = cfg.api_key.clone().unwrap_or_default();
-    let model = cfg.model.clone();
-
-    match pt {
-        Pt::Omlx => Box::new(crate::provider::omlx::OmlxProvider::new(
-            crate::provider::omlx::OmlxConfig { endpoint, model },
-        )),
-        Pt::LmStudio => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-            crate::provider::cloud::openai::OpenAIConfig {
-                endpoint,
-                api_key,
-                model,
-                stream_options: pt.stream_options(),
-                provider_name: Some("LM Studio".to_string()),
-                tool_calling: pt.tool_calling_mode(),
-                image_input: true,
-                streaming: true,
-            },
-        )),
-        Pt::SgLang => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-            crate::provider::cloud::openai::OpenAIConfig {
-                endpoint,
-                api_key,
-                model,
-                stream_options: pt.stream_options(),
-                provider_name: Some("SGLang".to_string()),
-                tool_calling: pt.tool_calling_mode(),
-                image_input: true,
-                streaming: true,
-            },
-        )),
-        Pt::Glm | Pt::Zai => Box::new(crate::provider::cloud::glm::GlmProvider::new(
-            crate::provider::cloud::glm::GlmConfig {
-                endpoint,
-                api_key,
-                model,
-            },
-        )),
-        Pt::DeepSeek => Box::new(crate::provider::cloud::deepseek::DeepSeekProvider::new(
-            crate::provider::cloud::deepseek::DeepSeekConfig {
-                endpoint,
-                api_key,
-                model,
-            },
-        )),
-        Pt::OpenAI | Pt::OpenAICompatible => {
-            Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
-                crate::provider::cloud::openai::OpenAIConfig {
-                    endpoint,
-                    api_key,
-                    model,
-                    stream_options: pt.stream_options(),
-                    provider_name: None,
-                    tool_calling: pt.tool_calling_mode(),
-                    image_input: true,
-                    streaming: true,
-                },
-            ))
-        }
-    }
-}
+pub use crate::provider::create_provider;
 
 // ── Persistence (Control Plane Write Path) ────────────────────────────
 

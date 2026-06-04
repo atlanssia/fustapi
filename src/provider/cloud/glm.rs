@@ -4,13 +4,8 @@
 //! via the dedicated monitoring endpoint.
 
 use async_trait::async_trait;
-use serde::Deserialize;
 
-use crate::provider::{
-    Alert, AlertLevel, BalanceStatus, BreakdownItem, ConfigSummary, Metric, MetricKind,
-    MetricStatus, PlanType, Provider, ProviderBalance, ProviderError, ResetSchedule,
-    UnifiedRequest,
-};
+use crate::provider::{Provider, ProviderBalance, ProviderError, UnifiedRequest};
 
 /// GLM provider configuration.
 #[derive(Debug, Clone)]
@@ -21,10 +16,11 @@ pub struct GlmConfig {
 }
 
 /// GLM provider — OpenAI-compatible chat with balance monitoring.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GlmProvider {
     config: GlmConfig,
     openai_backend: crate::provider::cloud::openai::OpenAIProvider,
+    http_client: reqwest::Client,
 }
 
 impl GlmProvider {
@@ -45,6 +41,7 @@ impl GlmProvider {
         Self {
             config,
             openai_backend,
+            http_client: crate::provider::build_http_client(),
         }
     }
 
@@ -59,157 +56,6 @@ impl GlmProvider {
             "https://open.bigmodel.cn/api/monitor/usage/quota/limit".to_string()
         }
     }
-}
-
-fn build_provider_balance(
-    name: &str,
-    data: &QuotaData,
-    endpoint: &str,
-    has_key: bool,
-    model: Option<&str>,
-) -> ProviderBalance {
-    let level = data.level.as_deref().unwrap_or("");
-    let limits = data.limits.as_deref().unwrap_or(&[]);
-
-    let is_coding = endpoint.contains("/coding/");
-
-    let mut alerts = Vec::new();
-    let mut metrics = Vec::new();
-    let mut breakdown = Vec::new();
-    let mut resets = Vec::new();
-
-    for l in limits {
-        let pct = l.percentage.unwrap_or(0.0);
-        let status = MetricStatus::from_percentage(pct);
-
-        let type_label = match l.limit_type.as_deref() {
-            Some("TOKENS_LIMIT") => "Tokens",
-            Some("TIME_LIMIT") => "MCP",
-            other => other.unwrap_or("Usage"),
-        };
-
-        metrics.push(Metric {
-            label: type_label.to_string(),
-            kind: MetricKind::Percentage,
-            value: pct,
-            total: Some(100.0),
-            unit: Some("%".to_string()),
-            percentage: Some(pct),
-            status: status.clone(),
-            reset_at_ms: l.next_reset_time,
-        });
-
-        if pct >= 80.0 {
-            let alert_level = if pct >= 95.0 {
-                AlertLevel::Critical
-            } else {
-                AlertLevel::Warn
-            };
-            alerts.push(Alert {
-                level: alert_level,
-                message: format!("{} quota {:.0}% used", type_label, pct),
-            });
-        }
-
-        if let Some(ts) = l.next_reset_time {
-            resets.push(ResetSchedule {
-                label: format!("{} quota", type_label),
-                resets_at_ms: ts,
-            });
-        }
-
-        if let Some(ref details) = l.usage_details {
-            for d in details {
-                breakdown.push(BreakdownItem {
-                    label: d.model_code.clone().unwrap_or("?".into()),
-                    value: d.usage.unwrap_or(0) as f64,
-                    unit: "requests".to_string(),
-                });
-            }
-        }
-    }
-
-    ProviderBalance {
-        provider_name: name.to_string(),
-        status: BalanceStatus::Online,
-        plan: if level.is_empty() {
-            None
-        } else {
-            Some(level.to_string())
-        },
-        plan_type: if is_coding {
-            Some(PlanType::Coding)
-        } else {
-            Some(PlanType::Token)
-        },
-        alerts,
-        metrics,
-        breakdown,
-        resets,
-        config_summary: ConfigSummary {
-            provider_type: "cloud".to_string(),
-            endpoint: endpoint.to_string(),
-            has_key,
-            model: model.map(String::from),
-        },
-    }
-}
-
-// ── Quota API response types ──────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct GlmQuotaResponse {
-    #[allow(dead_code)]
-    code: Option<i32>,
-    #[allow(dead_code)]
-    success: Option<bool>,
-    data: Option<QuotaData>,
-}
-
-#[derive(Deserialize)]
-struct QuotaData {
-    level: Option<String>,
-    limits: Option<Vec<QuotaLimit>>,
-}
-
-#[derive(Deserialize)]
-struct QuotaLimit {
-    #[serde(rename = "type")]
-    limit_type: Option<String>,
-    /// Usage percentage (0–100).
-    percentage: Option<f64>,
-    /// Remaining quota amount (regular plan).
-    #[allow(dead_code)]
-    remaining: Option<f64>,
-    /// Total quota (regular plan).
-    #[allow(dead_code)]
-    #[serde(default)]
-    usage: Option<f64>,
-    /// Used amount (regular plan).
-    #[allow(dead_code)]
-    #[serde(rename = "currentValue", default)]
-    current_value: Option<f64>,
-    /// Quota unit (coding plan, e.g. 3 = tokens).
-    #[allow(dead_code)]
-    #[serde(default)]
-    unit: Option<u32>,
-    /// Quota number (coding plan, e.g. 5).
-    #[allow(dead_code)]
-    #[serde(default)]
-    number: Option<u32>,
-    /// Next reset time as Unix millis.
-    #[serde(rename = "nextResetTime", default)]
-    next_reset_time: Option<u64>,
-    /// Per-model usage breakdown (coding plan TIME_LIMIT).
-    #[serde(rename = "usageDetails", default)]
-    usage_details: Option<Vec<UsageDetail>>,
-}
-
-#[derive(Deserialize)]
-struct UsageDetail {
-    #[serde(rename = "modelCode")]
-    model_code: Option<String>,
-    usage: Option<u32>,
 }
 
 #[async_trait]
@@ -259,12 +105,12 @@ impl Provider for GlmProvider {
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         use tracing::debug;
-        let client = crate::provider::build_http_client();
         let url = self.balance_url();
 
         debug!(url = %url, has_key = !self.config.api_key.is_empty(), "glm balance query");
 
-        let resp = client
+        let resp = self
+            .http_client
             .get(&url)
             .header("Authorization", &self.config.api_key)
             .header("Content-Type", "application/json")
@@ -283,26 +129,16 @@ impl Provider for GlmProvider {
             )));
         }
 
-        let body: GlmQuotaResponse = resp
-            .json()
-            .await
-            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+        let body = resp.text().await.unwrap_or_default();
 
-        let Some(data) = body.data else {
-            return Ok(None);
-        };
-
-        let host = self.config.endpoint.clone();
-        let model = self.config.model.clone();
         let has_key = !self.config.api_key.is_empty();
-
-        Ok(Some(build_provider_balance(
-            "GLM",
-            &data,
-            &host,
+        crate::provider::health::parse_glm_balance(
+            &body,
+            &self.config.endpoint,
             has_key,
-            model.as_deref(),
-        )))
+            self.config.model.as_deref(),
+        )
+        .map_err(ProviderError::Internal)
     }
 
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
@@ -320,65 +156,26 @@ impl Provider for GlmProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn glm_balance_builds_correct_structure() {
-        let limits = vec![
-            QuotaLimit {
-                limit_type: Some("TOKENS_LIMIT".into()),
-                percentage: Some(72.0),
-                remaining: Some(28.0),
-                usage: Some(100.0),
-                current_value: Some(72.0),
-                unit: Some(3),
-                number: Some(5),
-                next_reset_time: Some(1778499600000),
-                usage_details: Some(vec![
-                    UsageDetail {
-                        model_code: Some("glm-4".into()),
-                        usage: Some(1240),
-                    },
-                    UsageDetail {
-                        model_code: Some("coder-1".into()),
-                        usage: Some(580),
-                    },
-                ]),
-            },
-            QuotaLimit {
-                limit_type: Some("TIME_LIMIT".into()),
-                percentage: Some(45.0),
-                remaining: None,
-                usage: None,
-                current_value: None,
-                unit: None,
-                number: None,
-                next_reset_time: None,
-                usage_details: None,
-            },
-        ];
-
-        let data = QuotaData {
-            level: Some("plus".into()),
-            limits: Some(limits),
-        };
-
-        let result = build_provider_balance(
-            "glm",
-            &data,
+        let body = r#"{"data":{"level":"plus","limits":[{"type":"TOKENS_LIMIT","percentage":72.0,"remaining":28.0,"usage":100.0,"currentValue":72.0,"unit":3,"number":5,"nextResetTime":1778499600000,"usageDetails":[{"modelCode":"glm-4","usage":1240},{"modelCode":"coder-1","usage":580}]},{"type":"TIME_LIMIT","percentage":45.0}]}}"#;
+        let result = crate::provider::health::parse_glm_balance(
+            body,
             "https://open.bigmodel.cn/api/coding/paas/v4",
             true,
             Some("glm-4-plus"),
-        );
+        )
+        .expect("parse should succeed")
+        .expect("should return Some");
 
-        assert_eq!(result.provider_name, "glm");
-        assert_eq!(result.status, BalanceStatus::Online);
+        assert_eq!(result.provider_name, "GLM");
+        assert_eq!(result.status, crate::provider::BalanceStatus::Online);
         assert_eq!(result.plan.as_deref(), Some("plus"));
-        assert_eq!(result.plan_type, Some(PlanType::Coding));
+        assert_eq!(result.plan_type, Some(crate::provider::PlanType::Coding));
         assert_eq!(result.metrics.len(), 2);
         assert_eq!(result.metrics[0].label, "Tokens");
         assert_eq!(result.metrics[0].percentage, Some(72.0));
-        assert_eq!(result.metrics[0].status, MetricStatus::Ok);
+        assert_eq!(result.metrics[0].status, crate::provider::MetricStatus::Ok);
         assert_eq!(result.metrics[0].reset_at_ms, Some(1778499600000));
         assert_eq!(result.metrics[1].label, "MCP");
         assert_eq!(result.breakdown.len(), 2);
@@ -388,30 +185,15 @@ mod tests {
 
     #[test]
     fn glm_balance_alerts_on_high_usage() {
-        let limits = vec![QuotaLimit {
-            limit_type: Some("TOKENS_LIMIT".into()),
-            percentage: Some(85.0),
-            remaining: Some(15.0),
-            usage: Some(100.0),
-            current_value: Some(85.0),
-            unit: Some(3),
-            number: Some(5),
-            next_reset_time: None,
-            usage_details: None,
-        }];
-
-        let data = QuotaData {
-            level: Some("plus".into()),
-            limits: Some(limits),
-        };
-
-        let result = build_provider_balance(
-            "glm",
-            &data,
+        let body = r#"{"data":{"level":"plus","limits":[{"type":"TOKENS_LIMIT","percentage":85.0,"remaining":15.0,"usage":100.0,"currentValue":85.0}]}}"#;
+        let result = crate::provider::health::parse_glm_balance(
+            body,
             "https://open.bigmodel.cn/api/coding/paas/v4",
             true,
             None,
-        );
+        )
+        .expect("parse should succeed")
+        .expect("should return Some");
         assert!(result.alerts.iter().any(|a| a.message.contains("85")));
     }
 }

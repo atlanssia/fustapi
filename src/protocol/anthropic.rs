@@ -427,13 +427,6 @@ fn parse_anthropic_messages(msg: AnthropicMessage) -> Result<Vec<Message>, Parse
     Ok(messages)
 }
 
-#[allow(dead_code)]
-/// Parsed content from Anthropic requests.
-enum AnthropicContent {
-    Text(String),
-    Parts(Vec<AnthropicContentBlock>),
-}
-
 #[derive(Deserialize, Serialize)]
 struct AnthropicContentBlockOut {
     #[serde(rename = "type")]

@@ -768,16 +768,40 @@ impl Provider for OpenAIProvider {
         // Build result from available data
         let mut status = BalanceStatus::Online;
         let mut metrics = Vec::new();
-        let mut alerts = Vec::new();
         let mut detected_model: Option<String> = None;
 
         if let Some((_is_healthy, Some(json_body))) = &health_ok {
-            // Rich JSON health response (omlx-style)
+            // Rich JSON health response — try structured parsing first
+            let has_engine_pool = json_body.get("engine_pool").is_some();
+            if has_engine_pool {
+                // Normalize the JSON so parse_omlx_balance can handle both
+                // omlx (final_ceiling) and openai-compatible (max_model_memory) formats
+                let mut normalized = json_body.clone();
+                if let Some(pool) = normalized.get_mut("engine_pool") {
+                    if pool.get("final_ceiling").is_none() {
+                        if let Some(max_mem) = pool.get("max_model_memory").cloned() {
+                            pool.as_object_mut()
+                                .map(|m| m.insert("final_ceiling".to_string(), max_mem));
+                        }
+                    }
+                }
+                if let Ok(balance) = crate::provider::health::parse_omlx_balance(
+                    &normalized.to_string(),
+                    &self.config.endpoint,
+                    self.config.model.as_deref(),
+                ) {
+                    return Ok(Some(ProviderBalance {
+                        provider_name: self.name().to_string(),
+                        ..balance
+                    }));
+                }
+            }
+
+            // Fallback: lightweight status extraction for non-engine_pool responses
             let status_str = json_body
                 .get("status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            // Accept: "healthy", "ok", "running", "up", "ready"
             let healthy = matches!(
                 status_str,
                 "healthy" | "ok" | "running" | "up" | "ready" | ""
@@ -785,84 +809,10 @@ impl Provider for OpenAIProvider {
             if !healthy && !status_str.is_empty() {
                 status = BalanceStatus::Error;
             }
-
             detected_model = json_body
                 .get("default_model")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-
-            let pool = &json_body["engine_pool"];
-            let model_count = pool
-                .get("model_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let loaded_count = pool
-                .get("loaded_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let max_mem = pool
-                .get("max_model_memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let cur_mem = pool
-                .get("current_model_memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-
-            let mem_pct = if max_mem > 0 {
-                (cur_mem as f64 / max_mem as f64 * 10000.0).round() / 100.0
-            } else {
-                0.0
-            };
-
-            if model_count > 0 || max_mem > 0 {
-                metrics.push(Metric {
-                    label: "Models".to_string(),
-                    kind: MetricKind::Absolute,
-                    value: model_count as f64,
-                    total: None,
-                    unit: Some("available".to_string()),
-                    percentage: None,
-                    status: MetricStatus::Ok,
-                    reset_at_ms: None,
-                });
-                metrics.push(Metric {
-                    label: "Loaded".to_string(),
-                    kind: MetricKind::Absolute,
-                    value: loaded_count as f64,
-                    total: Some(model_count as f64),
-                    unit: Some("models".to_string()),
-                    percentage: None,
-                    status: if loaded_count == 0 && model_count > 0 {
-                        MetricStatus::Warn
-                    } else {
-                        MetricStatus::Ok
-                    },
-                    reset_at_ms: None,
-                });
-                metrics.push(Metric {
-                    label: "VRAM".to_string(),
-                    kind: MetricKind::Percentage,
-                    value: mem_pct,
-                    total: Some(100.0),
-                    unit: Some("%".to_string()),
-                    percentage: Some(mem_pct),
-                    status: MetricStatus::from_percentage(mem_pct),
-                    reset_at_ms: None,
-                });
-
-                if mem_pct >= 95.0 {
-                    alerts.push(crate::provider::Alert {
-                        level: crate::provider::AlertLevel::Critical,
-                        message: format!("VRAM usage {:.0}% — cannot load more models", mem_pct),
-                    });
-                } else if mem_pct >= 80.0 {
-                    alerts.push(crate::provider::Alert {
-                        level: crate::provider::AlertLevel::Warn,
-                        message: format!("VRAM usage {:.0}% — approaching limit", mem_pct),
-                    });
-                }
-            }
         }
 
         // Fallback: use /v1/models data if no rich health info
@@ -893,7 +843,7 @@ impl Provider for OpenAIProvider {
             status,
             plan: detected_model.clone(),
             plan_type: None,
-            alerts,
+            alerts: vec![],
             metrics,
             breakdown: vec![],
             resets: vec![],

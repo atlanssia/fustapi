@@ -78,13 +78,27 @@ struct ModelListResponse {
 /// Binds to the configured address, starts the axum router, and handles
 /// graceful shutdown on SIGINT/SIGTERM.
 pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(config.router.clone()));
-    let db_path: Arc<PathBuf> = Arc::new(config.db_path.clone());
+    let app = build_app(config.router, config.db_path);
+    let addr = config.addr;
+    let listener = TcpListener::bind(addr).await?;
 
-    // Initialize metrics system (spawns background aggregator)
+    info!("Listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("Server shut down gracefully");
+    Ok(())
+}
+
+/// Build the axum Router with all routes configured.
+pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
+    let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(router));
+    let db_path: Arc<PathBuf> = Arc::new(db_path);
     let (metrics_emitter, metrics_reader) = metrics::init();
 
-    let app = Router::new()
+    Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
         .route("/ui/", axum::routing::get(web::ui_handler))
@@ -113,8 +127,6 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         // API routes
         .route("/health", get(health_handler))
         // ── OpenAI / Anthropic compatible endpoints ─────────────────
-        // Nested under both /v1 and /v1/v1 so clients that include /v1 in
-        // their base URL (e.g. OPENAI_BASE_URL=http://host/v1) still work.
         .nest(
             "/v1/v1",
             Router::new()
@@ -169,22 +181,10 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
         )
         .route("/", get(web::ui_handler))
         .fallback(fallback_handler)
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB body limit
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(axum::extract::Extension(db_path))
         .layer(axum::extract::Extension(router_store))
-        .layer(axum::extract::Extension(metrics_reader));
-
-    let addr = config.addr;
-    let listener = TcpListener::bind(addr).await?;
-
-    info!("Listening on {}", listener.local_addr()?);
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    info!("Server shut down gracefully");
-    Ok(())
+        .layer(axum::extract::Extension(metrics_reader))
 }
 
 /// GET /health — returns {"status": "ok"}.
