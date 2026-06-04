@@ -317,6 +317,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "http-body-util",
  "reqwest",
  "rusqlite",
  "serde",
@@ -325,6 +326,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
