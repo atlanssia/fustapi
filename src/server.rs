@@ -3,19 +3,24 @@
 //! Initializes the axum HTTP server, configures routes, and handles
 //! graceful shutdown. Single port serves Web UI + LLM API + Control Plane.
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::ServiceExt;
 use axum::{
     Json, Router,
+    body::Body,
     extract::DefaultBodyLimit,
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use serde::Serialize;
 use tokio::net::TcpListener;
+use tower::Layer;
+use tower::util::MapRequestLayer;
 use tracing::info;
 
 use crate::metrics::{self, MetricsEmitter};
@@ -84,7 +89,7 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
 
     info!("Listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
@@ -92,13 +97,46 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
     Ok(())
 }
 
+/// Rewrite `/v1/v1/*` request URIs to `/v1/*` so misconfigured clients
+/// still reach the correct handlers.
+fn normalize_double_prefix<B>(mut req: axum::http::Request<B>) -> axum::http::Request<B> {
+    let uri = req.uri().clone();
+    let path = uri.path();
+
+    if let Some(stripped) = path.strip_prefix("/v1/v1/") {
+        let new_path = format!("/v1/{stripped}");
+        let pq = match uri.query() {
+            Some(q) => format!("{new_path}?{q}"),
+            None => new_path,
+        };
+        let mut parts = axum::http::uri::Parts::default();
+        parts.path_and_query = Some(pq.parse().unwrap());
+        *req.uri_mut() = axum::http::Uri::from_parts(parts).unwrap();
+    }
+    req
+}
+
 /// Build the axum Router with all routes configured.
-pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
+///
+/// Returns a service (via [`MapRequestLayer`]) that rewrites `/v1/v1/*` URIs
+/// to `/v1/*` before routing, eliminating the need to register routes twice.
+pub fn build_app(
+    router: Arc<RealRouter>,
+    db_path: PathBuf,
+) -> impl tower::Service<
+    axum::http::Request<Body>,
+    Response = Response,
+    Error = Infallible,
+    Future = impl Send,
+> + Clone
++ Send
++ Sync
++ 'static {
     let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(router));
     let db_path: Arc<PathBuf> = Arc::new(db_path);
     let (metrics_emitter, metrics_reader) = metrics::init();
 
-    Router::new()
+    let inner = Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
         .route("/ui/", axum::routing::get(web::ui_handler))
@@ -127,35 +165,6 @@ pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
         // API routes
         .route("/health", get(health_handler))
         // ── OpenAI / Anthropic compatible endpoints ─────────────────
-        .nest(
-            "/v1/v1",
-            Router::new()
-                .route(
-                    "/chat/completions",
-                    post({
-                        let router = router_store.clone();
-                        let emitter = metrics_emitter.clone();
-                        move |headers, body| {
-                            chat_completions_handler(headers, body, router, emitter)
-                        }
-                    }),
-                )
-                .route(
-                    "/messages",
-                    post({
-                        let router = router_store.clone();
-                        let emitter = metrics_emitter.clone();
-                        move |headers, body| messages_handler(headers, body, router, emitter)
-                    }),
-                )
-                .route(
-                    "/models",
-                    get({
-                        let router = router_store.clone();
-                        move |headers| models_handler(headers, router)
-                    }),
-                ),
-        )
         .route(
             "/v1/chat/completions",
             post({
@@ -184,7 +193,11 @@ pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(axum::extract::Extension(db_path))
         .layer(axum::extract::Extension(router_store))
-        .layer(axum::extract::Extension(metrics_reader))
+        .layer(axum::extract::Extension(metrics_reader));
+
+    // Wrap the Router with MapRequestLayer so the URI rewrite happens
+    // *before* axum's route matching.
+    MapRequestLayer::new(normalize_double_prefix).layer(inner)
 }
 
 /// GET /health — returns {"status": "ok"}.

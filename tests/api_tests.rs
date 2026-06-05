@@ -21,7 +21,13 @@ fn unique_db_file() -> std::path::PathBuf {
     db_path.join("test.db")
 }
 
-fn build_app() -> axum::Router {
+fn build_app() -> impl tower::Service<
+    axum::http::Request<Body>,
+    Response = axum::response::Response,
+    Error = std::convert::Infallible,
+> + Clone
++ Send
++ 'static {
     let config = fustapi::config::default_config();
     let router = std::sync::Arc::new(fustapi::router::RealRouter::from_config(&config));
     let db_file = unique_db_file();
@@ -40,15 +46,31 @@ async fn oneshot(req: Request<Body>) -> (StatusCode, String) {
 
 /// Build a single shared app instance for multi-step tests that need state
 /// to persist between requests (e.g., create provider then delete it).
-fn shared_app() -> axum::Router {
+fn shared_app() -> impl tower::Service<
+    axum::http::Request<Body>,
+    Response = axum::response::Response,
+    Error = std::convert::Infallible,
+> + Clone
++ Send
++ 'static {
     let config = fustapi::config::default_config();
     let router = std::sync::Arc::new(fustapi::router::RealRouter::from_config(&config));
     let db_file = unique_db_file();
     fustapi::server::build_app(router, db_file)
 }
 
-async fn oneshot_shared(app: &mut axum::Router, req: Request<Body>) -> (StatusCode, String) {
-    let resp = tower::ServiceExt::oneshot(&mut *app, req).await.unwrap();
+async fn oneshot_shared<S>(app: &mut S, req: Request<Body>) -> (StatusCode, String)
+where
+    S: tower::Service<
+            axum::http::Request<Body>,
+            Response = axum::response::Response,
+            Error = std::convert::Infallible,
+        > + Clone
+        + Send
+        + 'static,
+{
+    let clone = (*app).clone();
+    let resp = tower::ServiceExt::oneshot(clone, req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body();
     let bytes = body.collect().await.unwrap().to_bytes();
