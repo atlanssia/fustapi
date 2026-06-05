@@ -4,13 +4,14 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use tokio_stream::StreamExt;
 
 use crate::provider::{
-    BalanceStatus, ConfigSummary, Metric, MetricKind, MetricStatus, Provider, ProviderBalance,
-    ProviderError, ToolCallingSupport, UnifiedRequest,
+    Provider, ProviderBalance, ProviderError, ToolCallingSupport, UnifiedRequest,
 };
 use crate::streaming::{LLMChunk, LLMStream};
+
+// Re-export the SSE parser for backward compatibility.
+pub use super::sse_parser::parse_openai_sse_stream;
 
 /// `OpenAI` provider configuration.
 #[derive(Debug, Clone)]
@@ -253,7 +254,7 @@ impl OpenAIProvider {
     }
 
     /// Fetch available models from the provider's `/v1/models` endpoint.
-    async fn fetch_model_list(&self) -> Result<Vec<String>, ProviderError> {
+    pub async fn fetch_model_list(&self) -> Result<Vec<String>, ProviderError> {
         let base = self
             .config
             .endpoint
@@ -366,252 +367,6 @@ async fn send_with_tcp_retry(
     }
 }
 
-pub fn parse_openai_sse_stream(
-    stream: impl futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static,
-) -> LLMStream {
-    use futures::stream;
-    let buffer = bytes::BytesMut::new();
-    let tool_id: Option<String> = None;
-    let tool_name: Option<String> = None;
-    let tool_args = String::new();
-
-    let s = stream::unfold(
-        (stream, buffer, tool_id, tool_name, tool_args),
-        |(mut stream, mut buffer, mut tool_id, mut tool_name, mut tool_args)| async move {
-            fn extract_usage(v: &serde_json::Value) -> Option<crate::metrics::TokenUsage> {
-                v.get("usage").and_then(|u| {
-                    let pt = u
-                        .get("prompt_tokens")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as u32;
-                    let ct = u
-                        .get("completion_tokens")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as u32;
-                    if pt > 0 || ct > 0 {
-                        Some(crate::metrics::TokenUsage {
-                            prompt_tokens: pt,
-                            completion_tokens: ct,
-                        })
-                    } else {
-                        None
-                    }
-                })
-            }
-            loop {
-                if let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-                    let line_bytes = buffer.split_to(pos + 1);
-                    let line = std::str::from_utf8(&line_bytes[..pos]).unwrap_or("").trim();
-
-                    if line.starts_with("data:") && line.len() > 5 {
-                        let data = line[5..].trim();
-                        if data == "[DONE]" || data == " [DONE]" || data == "[DONE] " {
-                            if let Some(name) = tool_name.take() {
-                                let args = serde_json::from_str(&tool_args)
-                                    .unwrap_or(serde_json::json!({}));
-                                let tc = crate::capability::ToolCall {
-                                    id: tool_id.take(),
-                                    name,
-                                    arguments: args,
-                                };
-                                return Some((
-                                    Ok(crate::streaming::LLMChunk {
-                                        reasoning_content: None,
-                                        usage: None,
-                                        content: None,
-                                        tool_call: Some(tc),
-                                        done: true,
-                                    }),
-                                    (stream, buffer, tool_id, tool_name, tool_args),
-                                ));
-                            }
-                            return Some((
-                                Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: None,
-                                    tool_call: None,
-                                    done: true,
-                                }),
-                                (stream, buffer, tool_id, tool_name, tool_args),
-                            ));
-                        }
-                        if !data.is_empty()
-                            && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
-                        {
-                            // Detect upstream errors reported via finish_reason (e.g., GLM's
-                            // "model_context_window_exceeded") — return as a stream error so
-                            // the client sees a meaningful message instead of an empty response.
-                            if let Some(fr) = v
-                                .get("choices")
-                                .and_then(|c| c.get(0))
-                                .and_then(|c| c.get("finish_reason"))
-                                .and_then(|v| v.as_str())
-                            {
-                                if fr.contains("context_window")
-                                    || fr.contains("context_length")
-                                    || fr == "error"
-                                {
-                                    return Some((
-                                        Err(crate::streaming::StreamError::Provider(format!(
-                                            "upstream error: {fr}"
-                                        ))),
-                                        (stream, buffer, tool_id, tool_name, tool_args),
-                                    ));
-                                }
-                            }
-
-                            // Handle usage-only chunk (sent when stream_options.include_usage is set).
-                            // This arrives as a chunk with an empty choices array and a populated usage field.
-                            if let Some(usage) = extract_usage(&v) {
-                                // Only emit a separate chunk if there's no content/toolcall delta.
-                                let has_choices = v
-                                    .get("choices")
-                                    .and_then(|c| c.as_array())
-                                    .is_some_and(|a| !a.is_empty());
-                                if !has_choices {
-                                    return Some((
-                                        Ok(crate::streaming::LLMChunk {
-                                            reasoning_content: None,
-                                            usage: Some(usage),
-                                            content: None,
-                                            tool_call: None,
-                                            done: false,
-                                        }),
-                                        (stream, buffer, tool_id, tool_name, tool_args),
-                                    ));
-                                }
-                            }
-
-                            let Some(choices) = v.get("choices") else {
-                                continue;
-                            };
-                            let Some(choice) = choices.get(0) else {
-                                continue;
-                            };
-                            let Some(delta) = choice.get("delta") else {
-                                continue;
-                            };
-                            let chunk_usage = extract_usage(&v);
-                            // Distinguish reasoning_content from content —
-                            // DeepSeek requires reasoning_content to be echoed back.
-                            let reasoning_str = delta
-                                .get("reasoning_content")
-                                .and_then(|c| c.as_str())
-                                .filter(|s| !s.is_empty());
-                            if let Some(reasoning) = reasoning_str {
-                                return Some((
-                                    Ok(crate::streaming::LLMChunk {
-                                        usage: None,
-                                        content: None,
-                                        reasoning_content: Some(reasoning.to_string()),
-                                        tool_call: None,
-                                        done: false,
-                                    }),
-                                    (stream, buffer, tool_id, tool_name, tool_args),
-                                ));
-                            }
-                            let content_str = delta
-                                .get("content")
-                                .and_then(|c| c.as_str())
-                                .filter(|s| !s.is_empty());
-                            if let Some(content) = content_str {
-                                return Some((
-                                    Ok(crate::streaming::LLMChunk {
-                                        usage: chunk_usage,
-                                        content: Some(content.to_string()),
-                                        reasoning_content: None,
-                                        tool_call: None,
-                                        done: false,
-                                    }),
-                                    (stream, buffer, tool_id, tool_name, tool_args),
-                                ));
-                            }
-                            if let Some(tool_calls) = delta.get("tool_calls")
-                                && let Some(tc) = tool_calls.get(0)
-                                && let Some(func) = tc.get("function")
-                            {
-                                let new_id =
-                                    tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                                let new_name = func.get("name").and_then(|n| n.as_str());
-                                let new_args =
-                                    func.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
-
-                                if let Some(name) = new_name {
-                                    let mut flush_tc = None;
-                                    if let Some(old_name) = tool_name.take() {
-                                        let parsed_args = serde_json::from_str(&tool_args)
-                                            .unwrap_or(serde_json::json!({}));
-                                        flush_tc = Some(crate::capability::ToolCall {
-                                            id: tool_id.take(),
-                                            name: old_name,
-                                            arguments: parsed_args,
-                                        });
-                                    }
-                                    tool_id = new_id;
-                                    tool_name = Some(name.to_string());
-                                    tool_args = new_args.to_string();
-
-                                    if flush_tc.is_some() {
-                                        return Some((
-                                            Ok(crate::streaming::LLMChunk {
-                                                reasoning_content: None,
-                                                usage: None,
-                                                content: None,
-                                                tool_call: flush_tc,
-                                                done: false,
-                                            }),
-                                            (stream, buffer, tool_id, tool_name, tool_args),
-                                        ));
-                                    }
-                                } else {
-                                    tool_args.push_str(new_args);
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                match stream.next().await {
-                    Some(Ok(bytes)) => {
-                        buffer.extend_from_slice(&bytes);
-                    }
-                    Some(Err(e)) => {
-                        return Some((
-                            Err(crate::streaming::StreamError::Provider(e.to_string())),
-                            (stream, buffer, tool_id, tool_name, tool_args),
-                        ));
-                    }
-                    None => {
-                        if let Some(name) = tool_name.take() {
-                            let args =
-                                serde_json::from_str(&tool_args).unwrap_or(serde_json::json!({}));
-                            let tc = crate::capability::ToolCall {
-                                id: tool_id.take(),
-                                name,
-                                arguments: args,
-                            };
-                            return Some((
-                                Ok(crate::streaming::LLMChunk {
-                                    reasoning_content: None,
-                                    usage: None,
-                                    content: None,
-                                    tool_call: Some(tc),
-                                    done: true,
-                                }),
-                                (stream, buffer, tool_id, tool_name, tool_args),
-                            ));
-                        }
-                        return None;
-                    }
-                }
-            }
-        },
-    );
-    Box::pin(s) as LLMStream
-}
-
 #[async_trait]
 impl Provider for OpenAIProvider {
     async fn chat_stream(
@@ -712,154 +467,41 @@ impl Provider for OpenAIProvider {
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
-        let is_local = self.config.endpoint.contains("localhost")
-            || self.config.endpoint.contains("127.0.0.1")
-            || self.config.endpoint.contains("::1");
-
-        let base = self
-            .config
-            .endpoint
-            .trim_end_matches("/v1")
-            .trim_end_matches('/');
-
-        // Strategy 1 (local only): Try /health endpoint
-        //   omlx returns rich JSON with engine_pool, vLLM/SGLang return empty 200
-        let health_ok = if is_local {
-            match self.client.get(format!("{base}/health")).send().await {
-                Ok(resp) if resp.status().is_success() => match resp.text().await {
-                    Ok(text) if text.trim().is_empty() => Some((true, None)),
-                    Ok(text) => {
-                        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
-                        parsed.ok().map(|v| (true, Some(v)))
-                    }
-                    Err(_) => Some((true, None)),
-                },
-                Ok(_) => Some((false, None)),
-                Err(_) => None,
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let name = self.name().to_string();
+        let fetch = Box::pin(async move {
+            let base = config
+                .endpoint
+                .trim_end_matches("/v1")
+                .trim_end_matches('/');
+            let local = super::health_prober::is_local(&config.endpoint);
+            let mut builder = client.get(format!("{}/v1/models", base));
+            if !config.api_key.is_empty() && !local {
+                builder = builder.header("Authorization", format!("Bearer {}", config.api_key));
             }
-        } else {
-            None
-        };
-
-        // Strategy 2: Try /v1/models for model listing (all endpoints)
-        //   Local: fallback when /health didn't return data
-        //   Remote: liveness check via OpenAI-compatible endpoint
-        let need_models = health_ok.is_none() || health_ok.as_ref().is_some_and(|(ok, _)| !ok);
-        let models_data: Option<Vec<String>> = if need_models {
-            self.fetch_model_list().await.ok()
-        } else {
-            None
-        };
-
-        // Nothing reachable at all → offline
-        if health_ok.is_none() && models_data.is_none() {
-            return Ok(Some(ProviderBalance {
-                provider_name: self.name().to_string(),
-                status: BalanceStatus::Offline,
-                plan: None,
-                plan_type: None,
-                alerts: vec![],
-                metrics: vec![],
-                breakdown: vec![],
-                resets: vec![],
-                config_summary: ConfigSummary {
-                    provider_type: "local".to_string(),
-                    endpoint: self.config.endpoint.clone(),
-                    has_key: !self.config.api_key.is_empty(),
-                    model: self.config.model.clone(),
-                },
-            }));
-        }
-
-        // Build result from available data
-        let mut status = BalanceStatus::Online;
-        let mut metrics = Vec::new();
-        let mut detected_model: Option<String> = None;
-
-        if let Some((_is_healthy, Some(json_body))) = &health_ok {
-            // Rich JSON health response — try structured parsing first
-            let has_engine_pool = json_body.get("engine_pool").is_some();
-            if has_engine_pool {
-                // Normalize the JSON so parse_omlx_balance can handle both
-                // omlx (final_ceiling) and openai-compatible (max_model_memory) formats
-                let mut normalized = json_body.clone();
-                if let Some(pool) = normalized.get_mut("engine_pool") {
-                    if pool.get("final_ceiling").is_none() {
-                        if let Some(max_mem) = pool.get("max_model_memory").cloned() {
-                            pool.as_object_mut()
-                                .map(|m| m.insert("final_ceiling".to_string(), max_mem));
-                        }
-                    }
-                }
-                if let Ok(balance) = crate::provider::health::parse_omlx_balance(
-                    &normalized.to_string(),
-                    &self.config.endpoint,
-                    self.config.model.as_deref(),
-                ) {
-                    return Ok(Some(ProviderBalance {
-                        provider_name: self.name().to_string(),
-                        ..balance
-                    }));
-                }
+            match builder.send().await {
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| {
+                        v.get("data")?.as_array().map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                                .collect()
+                        })
+                    })
+                    .ok_or_else(|| {
+                        ProviderError::Internal("Failed to parse models response".into())
+                    }),
+                Ok(_) => Err(ProviderError::Connection(
+                    "models endpoint returned non-success status".into(),
+                )),
+                Err(e) => Err(ProviderError::Connection(e.to_string())),
             }
-
-            // Fallback: lightweight status extraction for non-engine_pool responses
-            let status_str = json_body
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let healthy = matches!(
-                status_str,
-                "healthy" | "ok" | "running" | "up" | "ready" | ""
-            );
-            if !healthy && !status_str.is_empty() {
-                status = BalanceStatus::Error;
-            }
-            detected_model = json_body
-                .get("default_model")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-        }
-
-        // Fallback: use /v1/models data if no rich health info
-        if metrics.is_empty()
-            && let Some(model_ids) = &models_data
-        {
-            metrics.push(Metric {
-                label: "Models".to_string(),
-                kind: MetricKind::Absolute,
-                value: model_ids.len() as f64,
-                total: None,
-                unit: Some("loaded".to_string()),
-                percentage: None,
-                status: if model_ids.is_empty() {
-                    MetricStatus::Warn
-                } else {
-                    MetricStatus::Ok
-                },
-                reset_at_ms: None,
-            });
-            if detected_model.is_none() {
-                detected_model = model_ids.first().cloned();
-            }
-        }
-
-        Ok(Some(ProviderBalance {
-            provider_name: "local".to_string(),
-            status,
-            plan: detected_model.clone(),
-            plan_type: None,
-            alerts: vec![],
-            metrics,
-            breakdown: vec![],
-            resets: vec![],
-            config_summary: ConfigSummary {
-                provider_type: "local".to_string(),
-                endpoint: self.config.endpoint.clone(),
-                has_key: !self.config.api_key.is_empty(),
-                model: self.config.model.clone().or(detected_model),
-            },
-        }))
+        });
+        super::health_prober::probe_balance(&self.client, &self.config, &name, fetch).await
     }
 }
 
@@ -940,5 +582,433 @@ mod tests {
                 .iter()
                 .any(|c| c.content.is_some() || c.reasoning_content.is_some())
         );
+    }
+
+    // ── SSE stream characterization tests ────────────────────────────────
+
+    /// Helper: build a byte stream from raw SSE-formatted strings.
+    fn raw_sse_stream(
+        chunks: Vec<&str>,
+    ) -> impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + Unpin + 'static
+    {
+        let full = chunks
+            .into_iter()
+            .map(|s| bytes::Bytes::from(s.to_string()))
+            .collect::<Vec<_>>();
+        futures::stream::iter(full.into_iter().map(Ok::<_, reqwest::Error>))
+    }
+
+    /// Collect all chunks from an LLMStream into a Vec.
+    async fn collect_stream(
+        stream: LLMStream,
+    ) -> Vec<Result<LLMChunk, crate::streaming::StreamError>> {
+        use tokio_stream::StreamExt;
+        let mut s = stream;
+        let mut out = Vec::new();
+        while let Some(item) = s.next().await {
+            out.push(item);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn sse_content_delta_extraction() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        assert!(chunks.len() >= 2);
+        let content_chunks: Vec<&str> = chunks
+            .iter()
+            .filter_map(|c| c.as_ref().ok().and_then(|c| c.content.as_deref()))
+            .collect();
+        assert!(content_chunks.contains(&"Hello"));
+        assert!(content_chunks.contains(&" world"));
+    }
+
+    #[tokio::test]
+    async fn sse_reasoning_content_extraction() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me think\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let has_reasoning = chunks.iter().any(|c| {
+            c.as_ref()
+                .is_ok_and(|c| c.reasoning_content.as_deref() == Some("Let me think"))
+        });
+        assert!(has_reasoning, "should find reasoning_content chunk");
+        let has_content = chunks.iter().any(|c| {
+            c.as_ref()
+                .is_ok_and(|c| c.content.as_deref() == Some("answer"))
+        });
+        assert!(has_content, "should find content chunk");
+    }
+
+    #[tokio::test]
+    async fn sse_tool_call_accumulation_across_chunks() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\\\"Tokyo\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let tool_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| c.as_ref().ok().and_then(|c| c.tool_call.as_ref()))
+            .collect();
+        assert!(
+            !tool_chunks.is_empty(),
+            "should produce at least one tool call chunk"
+        );
+        let tc = tool_chunks.last().unwrap();
+        assert_eq!(tc.name, "get_weather");
+        assert_eq!(tc.id, Some("call_1".to_string()));
+        assert_eq!(tc.arguments["city"], "Tokyo");
+    }
+
+    #[tokio::test]
+    async fn sse_multiple_tool_calls_flushed_correctly() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"function\":{\"name\":\"fn_a\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"function\":{\"name\":\"fn_b\",\"arguments\":\"[]\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let tool_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| c.as_ref().ok().and_then(|c| c.tool_call.as_ref()))
+            .collect();
+        // fn_a flushed when fn_b starts, fn_b flushed at [DONE]
+        assert_eq!(tool_chunks.len(), 2, "should flush both tool calls");
+        assert_eq!(tool_chunks[0].name, "fn_a");
+        assert_eq!(tool_chunks[1].name, "fn_b");
+    }
+
+    #[tokio::test]
+    async fn sse_done_handling() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let last = chunks.last().expect("should have at least one chunk");
+        let last_chunk = last.as_ref().expect("should be Ok");
+        assert!(last_chunk.done, "last chunk should have done=true");
+    }
+
+    #[tokio::test]
+    async fn sse_done_with_pending_tool_call() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_x\",\"function\":{\"name\":\"my_fn\",\"arguments\":\"{\\\"a\\\":1}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let done_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.as_ref().is_ok_and(|c| c.done))
+            .collect();
+        assert_eq!(done_chunks.len(), 1);
+        let tc = done_chunks[0]
+            .as_ref()
+            .ok()
+            .unwrap()
+            .tool_call
+            .as_ref()
+            .expect("should have tool call");
+        assert_eq!(tc.name, "my_fn");
+    }
+
+    #[tokio::test]
+    async fn sse_usage_extraction_inline() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let has_usage = chunks.iter().any(|c| {
+            c.as_ref().is_ok_and(|c| {
+                c.usage
+                    .as_ref()
+                    .is_some_and(|u| u.prompt_tokens == 5 && u.completion_tokens == 3)
+            })
+        });
+        assert!(has_usage, "should find inline usage");
+    }
+
+    #[tokio::test]
+    async fn sse_usage_only_chunk() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50}}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let usage_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.as_ref().is_ok_and(|c| c.usage.is_some()))
+            .collect();
+        assert_eq!(usage_chunks.len(), 1);
+        let u = usage_chunks[0]
+            .as_ref()
+            .ok()
+            .unwrap()
+            .usage
+            .as_ref()
+            .unwrap();
+        assert_eq!(u.prompt_tokens, 100);
+        assert_eq!(u.completion_tokens, 50);
+    }
+
+    #[tokio::test]
+    async fn sse_context_window_exceeded_error() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"finish_reason\":\"model_context_window_exceeded\"}]}\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let has_error = chunks.iter().any(|c| {
+            c.as_ref()
+                .is_err_and(|e| format!("{e}").contains("context_window"))
+        });
+        assert!(has_error, "should detect context_window_exceeded error");
+    }
+
+    #[tokio::test]
+    async fn sse_error_finish_reason() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"finish_reason\":\"error\"}]}\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let has_error = chunks.iter().any(|c| {
+            c.as_ref()
+                .is_err_and(|e| format!("{e}").contains("upstream error"))
+        });
+        assert!(has_error, "should detect error finish_reason");
+    }
+
+    #[tokio::test]
+    async fn sse_context_length_error() {
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"finish_reason\":\"context_length_exceeded\"}]}\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let has_error = chunks.iter().any(|c| {
+            c.as_ref()
+                .is_err_and(|e| format!("{e}").contains("context_length"))
+        });
+        assert!(has_error, "should detect context_length_exceeded error");
+    }
+
+    #[tokio::test]
+    async fn sse_stream_end_with_pending_tool_call() {
+        // Stream ends (no more bytes) while a tool call is pending
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_z\",\"function\":{\"name\":\"pending_fn\",\"arguments\":\"{\\\"x\\\":2}\"}}]}}]}\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let done_with_tc = chunks.iter().any(|c| {
+            c.as_ref().is_ok_and(|c| {
+                c.done
+                    && c.tool_call
+                        .as_ref()
+                        .is_some_and(|tc| tc.name == "pending_fn")
+            })
+        });
+        assert!(
+            done_with_tc,
+            "should flush pending tool call when stream ends"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_empty_data_lines_ignored() {
+        let stream = raw_sse_stream(vec![
+            "data: \n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let content_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| c.as_ref().ok().and_then(|c| c.content.as_deref()))
+            .collect();
+        assert!(content_chunks.contains(&"ok"));
+    }
+
+    #[tokio::test]
+    async fn sse_network_error_propagated() {
+        // Build a real reqwest error by hitting an unreachable port, then wrap in a stream.
+        let client = reqwest::Client::new();
+        let result = client
+            .get("http://0.0.0.0:1")
+            .timeout(std::time::Duration::from_millis(1))
+            .send()
+            .await;
+        let err = result.unwrap_err();
+        let err_stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>,
+        > = Box::pin(futures::stream::once(async { Err(err) }));
+        let chunks = collect_stream(parse_openai_sse_stream(err_stream)).await;
+        assert!(chunks.len() == 1);
+        assert!(chunks[0].is_err(), "should propagate network error");
+    }
+
+    #[tokio::test]
+    async fn sse_multi_byte_chunk_splitting() {
+        // Test that SSE events split across multiple byte chunks are handled
+        let stream = raw_sse_stream(vec![
+            "data: {\"choices\":[{\"delta\":", // split mid-JSON
+            "{\"content\":\"hel\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\ndata: [DONE]\n\n",
+        ]);
+        let chunks = collect_stream(parse_openai_sse_stream(stream)).await;
+        let content: String = chunks
+            .iter()
+            .filter_map(|c| c.as_ref().ok().and_then(|c| c.content.clone()))
+            .collect();
+        assert_eq!(content, "hello");
+    }
+
+    // ── Health probing characterization tests ────────────────────────────
+
+    #[test]
+    fn is_local_detection() {
+        let is_local = |endpoint: &str| -> bool {
+            endpoint.contains("localhost")
+                || endpoint.contains("127.0.0.1")
+                || endpoint.contains("::1")
+        };
+        assert!(is_local("http://localhost:8080/v1"));
+        assert!(is_local("http://127.0.0.1:8000/v1"));
+        assert!(is_local("http://[::1]:8000/v1"));
+        assert!(!is_local("https://api.openai.com/v1"));
+        assert!(!is_local("https://open.bigmodel.cn/api/paas/v4"));
+    }
+
+    #[test]
+    fn build_request_body_filters_unknown_params() {
+        let provider = OpenAIProvider::new(OpenAIConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            model: Some("gpt-4".to_string()),
+            ..Default::default()
+        });
+        let request = UnifiedRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![],
+            tools: None,
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            extra_params: {
+                let mut map = serde_json::Map::new();
+                map.insert("top_p".to_string(), serde_json::json!(0.9));
+                map.insert("unknown_param".to_string(), serde_json::json!("bad"));
+                map.insert("seed".to_string(), serde_json::json!(42));
+                map
+            },
+        };
+        let body = provider.build_request_body(&request);
+        assert_eq!(body["top_p"], 0.9, "known param top_p should be forwarded");
+        assert_eq!(body["seed"], 42, "known param seed should be forwarded");
+        assert!(
+            body.get("unknown_param").is_none(),
+            "unknown param should be filtered out"
+        );
+    }
+
+    #[test]
+    fn build_request_body_includes_stream_options() {
+        let provider = OpenAIProvider::new(OpenAIConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test".to_string(),
+            model: Some("gpt-4".to_string()),
+            stream_options: true,
+            ..Default::default()
+        });
+        let request = UnifiedRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let body = provider.build_request_body(&request);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn build_request_body_no_stream_options_when_disabled() {
+        let provider = OpenAIProvider::new(OpenAIConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test".to_string(),
+            model: Some("gpt-4".to_string()),
+            stream_options: false,
+            ..Default::default()
+        });
+        let request = UnifiedRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let body = provider.build_request_body(&request);
+        assert!(
+            body.get("stream_options").is_none(),
+            "stream_options should not be present when disabled"
+        );
+    }
+
+    #[test]
+    fn build_request_body_with_tools() {
+        let provider = OpenAIProvider::new(OpenAIConfig::default());
+        let request = UnifiedRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: Some(vec![crate::capability::ToolDefinition {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            }]),
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let body = provider.build_request_body(&request);
+        let tools = body["tools"].as_array().expect("tools should be array");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn build_request_body_with_temperature_and_max_tokens() {
+        let provider = OpenAIProvider::new(OpenAIConfig::default());
+        let request = UnifiedRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: None,
+            stream: false,
+            temperature: Some(0.7),
+            max_tokens: Some(1024),
+            extra_params: serde_json::Map::new(),
+        };
+        let body = provider.build_request_body(&request);
+        // f32 -> JSON Number may lose precision, compare as approx f64
+        let temp = body["temperature"]
+            .as_f64()
+            .expect("temperature should be number");
+        assert!(
+            (temp - 0.7).abs() < 0.01,
+            "temperature should be ~0.7, got {temp}"
+        );
+        assert_eq!(body["max_tokens"], 1024);
     }
 }
