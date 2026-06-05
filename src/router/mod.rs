@@ -183,47 +183,16 @@ impl Router for RealRouter {
 
         if let Some(provider) = self.get_provider_for_model(&model_name) {
             let caps = provider.capabilities();
-            let transforms = crate::capability::transform::build_transforms(
+            let pipeline = crate::capability::pipeline::CapabilityPipeline::build(
                 caps.tool_calling,
                 request.tools.clone(),
             );
 
-            if crate::capability::transform::should_disable_passthrough(&transforms) {
+            if pipeline.should_disable_passthrough() {
                 allow_passthrough = false;
             }
 
-            // Apply transforms to request messages
-            for t in &transforms {
-                // Find system prompt and transform it
-                let system_idx = request
-                    .messages
-                    .iter()
-                    .position(|m| m.role == crate::provider::Role::System);
-                if let Some(idx) = system_idx {
-                    request.messages[idx].content =
-                        t.transform_prompt(&request.messages[idx].content);
-                } else {
-                    let prompt = t.transform_prompt("You are a helpful AI assistant.");
-                    if prompt != "You are a helpful AI assistant." {
-                        request.messages.insert(
-                            0,
-                            crate::provider::Message {
-                                role: crate::provider::Role::System,
-                                content: prompt,
-                                images: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                                extras: None,
-                            },
-                        );
-                    }
-                }
-            }
-
-            // Remove tools from request if transforms consumed them
-            if !transforms.is_empty() {
-                request.tools = None;
-            }
+            pipeline.apply_to_request(&mut request);
 
             let stream_mode = provider.chat_stream(request, allow_passthrough).await?;
 
@@ -235,10 +204,7 @@ impl Router for RealRouter {
                         Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
                     });
 
-                    let s = crate::capability::transform::apply_stream_transforms(
-                        Box::pin(s),
-                        &transforms,
-                    );
+                    let s = pipeline.apply_to_stream(Box::pin(s));
 
                     return Ok(crate::streaming::StreamMode::Normalized(s));
                 }
@@ -433,5 +399,290 @@ mod tests {
             router.resolve_upstream_model("my-model"),
             Some("upstream-model".to_string())
         );
+    }
+
+    // ── chat_stream characterization tests ───────────────────────────────
+
+    /// A mock provider that captures the request and returns a configurable stream.
+    /// This allows verifying that the router's capability orchestration modifies
+    /// the request correctly before it reaches the provider.
+    use std::sync::{Arc, Mutex};
+
+    struct CapturingMockProvider {
+        caps: ProviderCapabilities,
+        name: &'static str,
+        captured: Arc<Mutex<Option<UnifiedRequest>>>,
+        stream_chunks: Vec<crate::streaming::LLMChunk>,
+        return_passthrough: bool,
+    }
+
+    impl CapturingMockProvider {
+        fn new_emulated(
+            captured: Arc<Mutex<Option<UnifiedRequest>>>,
+            stream_chunks: Vec<crate::streaming::LLMChunk>,
+        ) -> Self {
+            Self {
+                caps: ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Emulated,
+                    image_input: false,
+                    streaming: true,
+                },
+                name: "emulated-mock",
+                captured,
+                stream_chunks,
+                return_passthrough: false,
+            }
+        }
+
+        fn new_native(
+            captured: Arc<Mutex<Option<UnifiedRequest>>>,
+            stream_chunks: Vec<crate::streaming::LLMChunk>,
+        ) -> Self {
+            Self {
+                caps: ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                },
+                name: "native-mock",
+                captured,
+                stream_chunks,
+                return_passthrough: false,
+            }
+        }
+
+        fn with_passthrough(mut self) -> Self {
+            self.return_passthrough = true;
+            self
+        }
+    }
+
+    #[async_trait]
+    impl Provider for CapturingMockProvider {
+        async fn chat_stream(
+            &self,
+            request: UnifiedRequest,
+            _allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, ProviderError> {
+            *self.captured.lock().unwrap() = Some(request);
+            if self.return_passthrough {
+                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
+                    tokio_stream::iter(vec![Ok(bytes::Bytes::from("passthrough"))]),
+                )))
+            } else {
+                let chunks: Vec<_> = self.stream_chunks.iter().map(|c| Ok(c.clone())).collect();
+                Ok(crate::streaming::StreamMode::Normalized(Box::pin(
+                    tokio_stream::iter(chunks),
+                )))
+            }
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.caps
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    fn make_tools() -> Vec<crate::capability::ToolDefinition> {
+        vec![crate::capability::ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get weather".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }]
+    }
+
+    fn make_request(
+        model: &str,
+        tools: Option<Vec<crate::capability::ToolDefinition>>,
+    ) -> UnifiedRequest {
+        UnifiedRequest {
+            model: model.to_string(),
+            messages: vec![crate::provider::Message {
+                role: crate::provider::Role::System,
+                content: "You are helpful.".to_string(),
+                images: None,
+                tool_calls: None,
+                tool_call_id: None,
+                extras: None,
+            }],
+            tools,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emulated_injects_tool_schemas_into_system_prompt() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_emulated(captured.clone(), vec![]);
+        let router = router_with("emulated-mock", Box::new(provider), &["test-model"]);
+
+        let req = make_request("test-model", Some(make_tools()));
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        let system_msg = cap
+            .messages
+            .iter()
+            .find(|m| m.role == crate::provider::Role::System)
+            .unwrap();
+        assert!(
+            system_msg.content.contains("get_weather"),
+            "tool schemas should be injected into system prompt"
+        );
+        assert!(
+            system_msg.content.contains("You are helpful."),
+            "original system prompt should be preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emulated_strips_tools_from_request() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_emulated(captured.clone(), vec![]);
+        let router = router_with("emulated-mock", Box::new(provider), &["test-model"]);
+
+        let req = make_request("test-model", Some(make_tools()));
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        assert!(
+            cap.tools.is_none(),
+            "tools should be stripped from request when emulated"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_native_passes_tools_through_unchanged() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_native(captured.clone(), vec![]);
+        let router = router_with("native-mock", Box::new(provider), &["test-model"]);
+
+        let tools = make_tools();
+        let req = make_request("test-model", Some(tools.clone()));
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        // Native tool calling: tools should still be present
+        assert!(
+            cap.tools.is_some(),
+            "tools should NOT be stripped for native tool calling"
+        );
+        assert_eq!(cap.tools.unwrap().len(), 1);
+
+        // System prompt should be unchanged
+        let system_msg = cap
+            .messages
+            .iter()
+            .find(|m| m.role == crate::provider::Role::System)
+            .unwrap();
+        assert_eq!(
+            system_msg.content, "You are helpful.",
+            "system prompt should be unchanged for native"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emulated_wraps_stream_with_tool_emulation() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        // Provider returns a JSON tool call in the stream
+        let chunks = vec![crate::streaming::LLMChunk {
+            content: Some("{\"name\":\"get_weather\",\"arguments\":{}}".to_string()),
+            done: true,
+            ..Default::default()
+        }];
+        let provider = CapturingMockProvider::new_emulated(captured.clone(), chunks);
+        let router = router_with("emulated-mock", Box::new(provider), &["test-model"]);
+
+        let req = make_request("test-model", Some(make_tools()));
+        let result = router.chat_stream(req, true).await.unwrap();
+
+        match result {
+            crate::streaming::StreamMode::Normalized(mut stream) => {
+                use tokio_stream::StreamExt;
+                let chunk = stream.next().await.unwrap().unwrap();
+                // ToolEmulationStream should parse the JSON into a tool_call
+                assert!(
+                    chunk.tool_call.is_some(),
+                    "stream should have tool_call parsed by ToolEmulationStream"
+                );
+                assert_eq!(chunk.tool_call.unwrap().name, "get_weather");
+            }
+            crate::streaming::StreamMode::Passthrough(_) => {
+                panic!("expected Normalized stream, got Passthrough");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emulated_creates_system_prompt_if_missing() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_emulated(captured.clone(), vec![]);
+        let router = router_with("emulated-mock", Box::new(provider), &["test-model"]);
+
+        // Request with NO system message
+        let mut req = make_request("test-model", Some(make_tools()));
+        req.messages = vec![crate::provider::Message {
+            role: crate::provider::Role::User,
+            content: "Hello".to_string(),
+            images: None,
+            tool_calls: None,
+            tool_call_id: None,
+            extras: None,
+        }];
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        // Should have created a system message at position 0 with tool schemas
+        assert_eq!(
+            cap.messages[0].role,
+            crate::provider::Role::System,
+            "system message should be inserted"
+        );
+        assert!(
+            cap.messages[0].content.contains("get_weather"),
+            "injected system prompt should contain tool schemas"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_upstream_model_override_applied() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_native(captured.clone(), vec![]);
+        let mut providers = HashMap::new();
+        providers.insert("p1".to_string(), Box::new(provider) as Box<dyn Provider>);
+        let mut upstream = HashMap::new();
+        upstream.insert("p1".to_string(), "real-upstream-model".to_string());
+        let mut routes = HashMap::new();
+        routes.insert(
+            "my-model".to_string(),
+            RouteEntry {
+                provider_ids: vec!["p1".to_string()],
+                upstream_models: upstream,
+            },
+        );
+        let router = RealRouter { providers, routes };
+
+        let req = make_request("my-model", None);
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        assert_eq!(
+            cap.model, "real-upstream-model",
+            "model should be overridden to upstream model"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_unknown_model_returns_error() {
+        let provider = CapturingMockProvider::new_native(Arc::new(Mutex::new(None)), vec![]);
+        let router = router_with("native-mock", Box::new(provider), &["known-model"]);
+
+        let req = make_request("unknown-model", None);
+        let result = router.chat_stream(req, true).await;
+        assert!(matches!(result, Err(RouterError::ModelNotFound(_))));
     }
 }
