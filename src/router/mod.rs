@@ -48,9 +48,6 @@ impl From<ProviderError> for RouterError {
             }
             ProviderError::Internal(msg) => RouterError::Internal(msg),
             ProviderError::Stream(msg) => RouterError::ProviderError(msg),
-            ProviderError::Capability(_) | ProviderError::Api(_) => {
-                RouterError::Internal("provider error".to_string())
-            }
         }
     }
 }

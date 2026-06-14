@@ -221,17 +221,9 @@ pub enum ProviderError {
     #[error("model not found: {0}")]
     ModelNotFound(String),
 
-    /// The requested capability (tool calling, images) is not supported.
-    #[error("capability not supported: {0}")]
-    Capability(String),
-
     /// Internal provider error (unexpected behavior).
     #[error("internal error: {0}")]
     Internal(String),
-
-    /// Provider API error.
-    #[error("api error: {0}")]
-    Api(String),
 
     /// Stream error.
     #[error("stream error: {0}")]
