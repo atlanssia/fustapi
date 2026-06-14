@@ -35,25 +35,6 @@ pub trait RequestTransform: Send + Sync {
     }
 }
 
-// ── Identity Transform ────────────────────────────────────────────────
-
-/// A no-op transform that passes everything through unchanged.
-pub struct IdentityTransform;
-
-impl RequestTransform for IdentityTransform {
-    fn transform_prompt(&self, prompt: &str) -> String {
-        prompt.to_string()
-    }
-
-    fn transform_stream(&self, stream: LLMStream) -> LLMStream {
-        stream
-    }
-
-    fn requires_passthrough_disable(&self) -> bool {
-        false
-    }
-}
-
 // ── Tool Emulation Transform ──────────────────────────────────────────
 
 /// Transform that injects tool schemas into the system prompt and wraps
@@ -89,42 +70,23 @@ impl RequestTransform for ToolEmulationTransform {
 
 // ── Pipeline ──────────────────────────────────────────────────────────
 
-/// Build transforms from provider capabilities and request context.
+/// Build a transform from provider capabilities and request context.
 ///
-/// Returns a list of transforms to apply based on whether the provider
-/// requires tool emulation and whether the request includes tool definitions.
+/// Returns an optional tool-emulation transform based on whether the
+/// provider requires tool emulation and the request includes tool definitions.
+/// `None` means pure passthrough — no transform needed.
 pub fn build_transforms(
     tool_calling: crate::types::ToolCallingSupport,
     tools: Option<Vec<ToolDefinition>>,
-) -> Vec<Box<dyn RequestTransform>> {
-    let mut transforms: Vec<Box<dyn RequestTransform>> = Vec::new();
-
-    if tool_calling == crate::types::ToolCallingSupport::Emulated {
-        if let Some(tool_defs) = tools {
-            if !tool_defs.is_empty() {
-                transforms.push(Box::new(ToolEmulationTransform::new(tool_defs)));
-            }
-        }
+) -> Option<ToolEmulationTransform> {
+    if tool_calling == crate::types::ToolCallingSupport::Emulated
+        && let Some(tool_defs) = tools
+        && !tool_defs.is_empty()
+    {
+        Some(ToolEmulationTransform::new(tool_defs))
+    } else {
+        None
     }
-
-    transforms
-}
-
-/// Apply a pipeline of transforms to a stream in forward order.
-pub fn apply_stream_transforms(
-    stream: LLMStream,
-    transforms: &[Box<dyn RequestTransform>],
-) -> LLMStream {
-    let mut result = stream;
-    for t in transforms {
-        result = t.transform_stream(result);
-    }
-    result
-}
-
-/// Check whether any transform in the pipeline requires disabling passthrough.
-pub fn should_disable_passthrough(transforms: &[Box<dyn RequestTransform>]) -> bool {
-    transforms.iter().any(|t| t.requires_passthrough_disable())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -134,47 +96,6 @@ mod tests {
     use super::*;
     use crate::streaming::LLMChunk;
     use tokio_stream::StreamExt;
-
-    // ── IdentityTransform tests ────────────────────────────────────────
-
-    #[test]
-    fn identity_transform_preserves_prompt() {
-        let t = IdentityTransform;
-        let prompt = "You are a helpful assistant.";
-        assert_eq!(t.transform_prompt(prompt), prompt);
-    }
-
-    #[tokio::test]
-    async fn identity_transform_preserves_stream() {
-        let t = IdentityTransform;
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("hello".to_string()),
-                ..Default::default()
-            }),
-            Ok(LLMChunk {
-                content: Some(" world".to_string()),
-                done: true,
-                ..Default::default()
-            }),
-        ];
-        let stream: LLMStream = Box::pin(tokio_stream::iter(chunks));
-        let mut result = t.transform_stream(stream);
-
-        let c1 = result.next().await.unwrap().unwrap();
-        assert_eq!(c1.content.as_deref(), Some("hello"));
-
-        let c2 = result.next().await.unwrap().unwrap();
-        assert_eq!(c2.content.as_deref(), Some(" world"));
-
-        assert!(result.next().await.is_none());
-    }
-
-    #[test]
-    fn identity_transform_does_not_require_passthrough_disable() {
-        let t = IdentityTransform;
-        assert!(!t.requires_passthrough_disable());
-    }
 
     // ── ToolEmulationTransform tests ───────────────────────────────────
 
@@ -256,94 +177,29 @@ mod tests {
         assert!(c.done);
     }
 
-    // ── Pipeline tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn should_disable_passthrough_with_empty_pipeline() {
-        let transforms: Vec<Box<dyn RequestTransform>> = vec![];
-        assert!(!should_disable_passthrough(&transforms));
-    }
-
-    #[test]
-    fn should_disable_passthrough_with_tool_emulation() {
-        let transforms: Vec<Box<dyn RequestTransform>> =
-            vec![Box::new(ToolEmulationTransform::new(vec![
-                ToolDefinition {
-                    name: "foo".to_string(),
-                    description: "bar".to_string(),
-                    parameters: serde_json::json!({"type": "object"}),
-                },
-            ]))];
-        assert!(should_disable_passthrough(&transforms));
-    }
-
-    #[test]
-    fn should_disable_passthrough_with_identity_only() {
-        let transforms: Vec<Box<dyn RequestTransform>> = vec![Box::new(IdentityTransform)];
-        assert!(!should_disable_passthrough(&transforms));
-    }
-
-    #[tokio::test]
-    async fn apply_stream_transforms_with_empty_pipeline_is_identity() {
-        let transforms: Vec<Box<dyn RequestTransform>> = vec![];
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("data".to_string()),
-            done: true,
-            ..Default::default()
-        })];
-        let stream: LLMStream = Box::pin(tokio_stream::iter(chunks));
-        let mut result = apply_stream_transforms(stream, &transforms);
-
-        let c = result.next().await.unwrap().unwrap();
-        assert_eq!(c.content.as_deref(), Some("data"));
-    }
-
-    #[tokio::test]
-    async fn apply_stream_transforms_with_tool_emulation() {
-        let tools = vec![ToolDefinition {
-            name: "my_tool".to_string(),
-            description: "does something".to_string(),
-            parameters: serde_json::json!({"type": "object"}),
-        }];
-        let transforms: Vec<Box<dyn RequestTransform>> =
-            vec![Box::new(ToolEmulationTransform::new(tools))];
-
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("{\"name\":\"my_tool\",\"arguments\":{}}".to_string()),
-            done: true,
-            ..Default::default()
-        })];
-        let stream: LLMStream = Box::pin(tokio_stream::iter(chunks));
-        let mut result = apply_stream_transforms(stream, &transforms);
-
-        let c = result.next().await.unwrap().unwrap();
-        assert!(c.tool_call.is_some());
-        assert_eq!(c.tool_call.unwrap().name, "my_tool");
-    }
-
     // ── build_transforms tests ─────────────────────────────────────────
 
     #[test]
-    fn build_transforms_returns_empty_for_native_tool_calling() {
+    fn build_transforms_returns_none_for_native_tool_calling() {
         let tools = Some(vec![ToolDefinition {
             name: "foo".to_string(),
             description: "bar".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         }]);
         let transforms = build_transforms(crate::types::ToolCallingSupport::Native, tools);
-        assert!(transforms.is_empty());
+        assert!(transforms.is_none());
     }
 
     #[test]
-    fn build_transforms_returns_empty_when_no_tools() {
+    fn build_transforms_returns_none_when_no_tools() {
         let transforms = build_transforms(crate::types::ToolCallingSupport::Emulated, None);
-        assert!(transforms.is_empty());
+        assert!(transforms.is_none());
     }
 
     #[test]
-    fn build_transforms_returns_empty_for_empty_tools() {
+    fn build_transforms_returns_none_for_empty_tools() {
         let transforms = build_transforms(crate::types::ToolCallingSupport::Emulated, Some(vec![]));
-        assert!(transforms.is_empty());
+        assert!(transforms.is_none());
     }
 
     #[test]
@@ -357,21 +213,22 @@ mod tests {
             crate::types::ToolCallingSupport::Emulated,
             Some(tools.clone()),
         );
-        assert_eq!(transforms.len(), 1);
+        assert!(transforms.is_some());
+        let t = transforms.unwrap();
         // Verify the transform works: inject into a prompt
-        let prompt = transforms[0].transform_prompt("System");
+        let prompt = t.transform_prompt("System");
         assert!(prompt.contains("search"));
-        assert!(transforms[0].requires_passthrough_disable());
+        assert!(t.requires_passthrough_disable());
     }
 
     #[test]
-    fn build_transforms_returns_empty_for_unsupported() {
+    fn build_transforms_returns_none_for_unsupported() {
         let tools = Some(vec![ToolDefinition {
             name: "foo".to_string(),
             description: "bar".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         }]);
         let transforms = build_transforms(crate::types::ToolCallingSupport::Unsupported, tools);
-        assert!(transforms.is_empty());
+        assert!(transforms.is_none());
     }
 }

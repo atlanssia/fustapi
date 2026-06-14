@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
+use crate::capability::transform::RequestTransform;
 use crate::config;
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 
@@ -180,16 +181,45 @@ impl Router for RealRouter {
 
         if let Some(provider) = self.get_provider_for_model(&model_name) {
             let caps = provider.capabilities();
-            let pipeline = crate::capability::pipeline::CapabilityPipeline::build(
+            let transform = crate::capability::transform::build_transforms(
                 caps.tool_calling,
                 request.tools.clone(),
             );
 
-            if pipeline.should_disable_passthrough() {
+            if transform.is_some() {
                 allow_passthrough = false;
             }
 
-            pipeline.apply_to_request(&mut request);
+            // Apply transform to request messages, if present
+            if let Some(t) = &transform {
+                // Find system prompt and transform it
+                let system_idx = request
+                    .messages
+                    .iter()
+                    .position(|m| m.role == crate::provider::Role::System);
+                if let Some(idx) = system_idx {
+                    request.messages[idx].content =
+                        t.transform_prompt(&request.messages[idx].content);
+                } else {
+                    let prompt = t.transform_prompt("You are a helpful AI assistant.");
+                    if prompt != "You are a helpful AI assistant." {
+                        request.messages.insert(
+                            0,
+                            crate::provider::Message {
+                                role: crate::provider::Role::System,
+                                content: prompt,
+                                images: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                extras: None,
+                            },
+                        );
+                    }
+                }
+
+                // Transform consumed the tools — remove them from the request
+                request.tools = None;
+            }
 
             let stream_mode = provider.chat_stream(request, allow_passthrough).await?;
 
@@ -201,7 +231,11 @@ impl Router for RealRouter {
                         Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
                     });
 
-                    let s = pipeline.apply_to_stream(Box::pin(s));
+                    let s = if let Some(t) = &transform {
+                        t.transform_stream(Box::pin(s))
+                    } else {
+                        Box::pin(s)
+                    };
 
                     return Ok(crate::streaming::StreamMode::Normalized(s));
                 }
