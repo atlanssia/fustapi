@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use super::Protocol;
 use crate::metrics::StreamTracker;
 use crate::streaming::StreamMode;
+use futures::StreamExt;
 
 // ── Public entry point ───────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ pub(crate) fn forward_as_sse_response(
     stream_mode: StreamMode,
     protocol: Protocol,
     model: &str,
-    mut tracker: StreamTracker,
+    tracker: StreamTracker,
 ) -> Response {
     match stream_mode {
         StreamMode::Normalized(stream) => {
@@ -34,6 +35,19 @@ pub(crate) fn forward_as_sse_response(
         }
         StreamMode::Passthrough(byte_stream) => {
             passthrough_sse_response(byte_stream, tracker)
+        }
+        StreamMode::NonStreaming(_) => {
+            // Non-streaming responses are handled by collect_non_streaming().
+            // This arm should not be reached in practice — forward_as_sse_response
+            // is only called for streaming requests.
+            tracing::warn!("NonStreaming reached in forward_as_sse_response — should not happen");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({
+                    "error": {"message": "internal routing error"}
+                })),
+            )
+                .into_response()
         }
     }
 }
@@ -46,8 +60,6 @@ fn normalized_sse_response(
     model: &str,
     mut tracker: StreamTracker,
 ) -> Response {
-    use futures::StreamExt;
-
     let model_name = model.to_string();
     let mut sent_role = false;
     let mut anthropic_state = super::serializer::AnthropicStreamState::new();
@@ -104,8 +116,6 @@ fn passthrough_sse_response(
     byte_stream: crate::streaming::ByteStream,
     mut tracker: StreamTracker,
 ) -> Response {
-    use futures::StreamExt;
-
     let mut buf = bytes::BytesMut::with_capacity(8192);
 
     let body_stream =

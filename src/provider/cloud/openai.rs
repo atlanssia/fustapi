@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::provider::{
     Provider, ProviderBalance, ProviderError, ToolCallingSupport, UnifiedRequest,
 };
-use crate::streaming::{LLMChunk, LLMStream};
+use crate::streaming::LLMChunk;
 
 // Re-export the SSE parser for backward compatibility.
 pub use super::sse_parser::parse_openai_sse_stream;
@@ -507,6 +507,7 @@ impl Provider for OpenAIProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streaming::LLMStream;
 
     fn chat_response_with_reasoning(reasoning: &str, content: &str) -> OpenAIChatResponse {
         OpenAIChatResponse {

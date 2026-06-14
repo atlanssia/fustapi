@@ -648,6 +648,9 @@ mod tests {
             crate::streaming::StreamMode::Passthrough(_) => {
                 panic!("expected Normalized stream, got Passthrough");
             }
+            crate::streaming::StreamMode::NonStreaming(_) => {
+                panic!("expected Normalized stream, got NonStreaming");
+            }
         }
     }
 
