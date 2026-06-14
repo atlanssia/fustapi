@@ -31,6 +31,22 @@ pub struct OpenAIConfig {
     pub image_input: bool,
     /// Streaming support override.
     pub streaming: bool,
+    /// Balance strategy — selects the provider-specific balance query logic.
+    pub balance_strategy: BalanceStrategy,
+}
+
+/// Provider-specific balance query strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BalanceStrategy {
+    /// Default: multi-strategy health probing (/health, /v1/models, offline detection).
+    #[default]
+    Default,
+    /// omlx: query /health endpoint and parse with parse_omlx_balance.
+    Omlx,
+    /// DeepSeek: query /user/balance endpoint and parse with parse_deepseek_balance.
+    DeepSeek,
+    /// GLM: query /api/monitor/usage/quota/limit and parse with parse_glm_balance.
+    Glm,
 }
 
 impl Default for OpenAIConfig {
@@ -44,6 +60,7 @@ impl Default for OpenAIConfig {
             tool_calling: ToolCallingSupport::Native,
             image_input: true,
             streaming: true,
+            balance_strategy: BalanceStrategy::Default,
         }
     }
 }
@@ -462,10 +479,60 @@ impl Provider for OpenAIProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        self.fetch_model_list().await
+        match self.config.balance_strategy {
+            BalanceStrategy::Glm => self.list_models_glm().await,
+            _ => self.fetch_model_list().await,
+        }
     }
 
     async fn balance(&self) -> Result<Option<ProviderBalance>, ProviderError> {
+        match self.config.balance_strategy {
+            BalanceStrategy::Default => self.balance_default().await,
+            BalanceStrategy::Omlx => self.balance_omlx().await,
+            BalanceStrategy::DeepSeek => self.balance_deepseek().await,
+            BalanceStrategy::Glm => self.balance_glm().await,
+        }
+    }
+}
+
+// ── Strategy implementations ─────────────────────────────────────────
+
+impl OpenAIProvider {
+    /// GLM uses `{endpoint}/models` (not `{base}/v1/models`) and sends the
+    /// API key directly without the "Bearer " prefix.
+    async fn list_models_glm(&self) -> Result<Vec<String>, ProviderError> {
+        let base = self.config.endpoint.trim_end_matches('/');
+        let url = format!("{base}/models");
+        let mut req = self.client.get(&url);
+        if !self.config.api_key.is_empty() {
+            req = req.header("Authorization", &self.config.api_key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(ProviderError::Connection(format!(
+                "GLM models endpoint returned {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("data")?.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .ok_or_else(|| ProviderError::Internal("Failed to parse GLM models response".into()))
+    }
+
+    async fn balance_default(&self) -> Result<Option<ProviderBalance>, ProviderError> {
         let client = self.client.clone();
         let config = self.config.clone();
         let name = self.name().to_string();
@@ -501,6 +568,113 @@ impl Provider for OpenAIProvider {
             }
         });
         super::health_prober::probe_balance(&self.client, &self.config, &name, fetch).await
+    }
+
+    async fn balance_omlx(&self) -> Result<Option<ProviderBalance>, ProviderError> {
+        let url = self
+            .config
+            .endpoint
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string()
+            + "/health";
+
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Request(format!(
+                "health query failed {status}: {err_text}"
+            )));
+        }
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        let balance = crate::provider::health::parse_omlx_balance(
+            &body,
+            &self.config.endpoint,
+            self.config.model.as_deref(),
+        )
+        .map_err(ProviderError::Internal)?;
+
+        Ok(Some(balance))
+    }
+
+    async fn balance_deepseek(&self) -> Result<Option<ProviderBalance>, ProviderError> {
+        let url = format!(
+            "{}/user/balance",
+            self.config.endpoint.trim_end_matches('/')
+        );
+        let mut builder = self.client.get(&url).header("Accept", "application/json");
+        if !self.config.api_key.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Request(format!(
+                "balance query failed {status}: {err_text}"
+            )));
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        let has_key = !self.config.api_key.is_empty();
+        let balance =
+            crate::provider::health::parse_deepseek_balance(&body, &self.config.endpoint, has_key)
+                .map_err(ProviderError::Internal)?;
+
+        Ok(Some(balance))
+    }
+
+    async fn balance_glm(&self) -> Result<Option<ProviderBalance>, ProviderError> {
+        let balance_url = if let Some(pos) = self.config.endpoint.find("/api/") {
+            let host = &self.config.endpoint[..pos];
+            format!("{host}/api/monitor/usage/quota/limit")
+        } else {
+            "https://open.bigmodel.cn/api/monitor/usage/quota/limit".to_string()
+        };
+
+        let resp = self
+            .client
+            .get(&balance_url)
+            .header("Authorization", &self.config.api_key)
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .map_err(|e| ProviderError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Request(format!(
+                "balance query failed {status}: {err_text}"
+            )));
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        let has_key = !self.config.api_key.is_empty();
+        crate::provider::health::parse_glm_balance(
+            &body,
+            &self.config.endpoint,
+            has_key,
+            self.config.model.as_deref(),
+        )
+        .map_err(ProviderError::Internal)
     }
 }
 

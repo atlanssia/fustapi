@@ -3,6 +3,7 @@
 //! Uses axum's tower::ServiceExt::oneshot() to test all endpoints
 //! without binding a real TCP listener.
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
@@ -21,13 +22,7 @@ fn unique_db_file() -> std::path::PathBuf {
     db_path.join("test.db")
 }
 
-fn build_app() -> impl tower::Service<
-    axum::http::Request<Body>,
-    Response = axum::response::Response,
-    Error = std::convert::Infallible,
-> + Clone
-+ Send
-+ 'static {
+fn build_app() -> Router {
     let config = fustapi::config::default_config();
     let router = std::sync::Arc::new(fustapi::router::RealRouter::from_config(&config));
     let db_file = unique_db_file();
@@ -46,29 +41,14 @@ async fn oneshot(req: Request<Body>) -> (StatusCode, String) {
 
 /// Build a single shared app instance for multi-step tests that need state
 /// to persist between requests (e.g., create provider then delete it).
-fn shared_app() -> impl tower::Service<
-    axum::http::Request<Body>,
-    Response = axum::response::Response,
-    Error = std::convert::Infallible,
-> + Clone
-+ Send
-+ 'static {
+fn shared_app() -> Router {
     let config = fustapi::config::default_config();
     let router = std::sync::Arc::new(fustapi::router::RealRouter::from_config(&config));
     let db_file = unique_db_file();
     fustapi::server::build_app(router, db_file)
 }
 
-async fn oneshot_shared<S>(app: &mut S, req: Request<Body>) -> (StatusCode, String)
-where
-    S: tower::Service<
-            axum::http::Request<Body>,
-            Response = axum::response::Response,
-            Error = std::convert::Infallible,
-        > + Clone
-        + Send
-        + 'static,
-{
+async fn oneshot_shared(app: &mut Router, req: Request<Body>) -> (StatusCode, String) {
     let clone = (*app).clone();
     let resp = tower::ServiceExt::oneshot(clone, req).await.unwrap();
     let status = resp.status();
@@ -242,12 +222,10 @@ async fn v1_models_anthropic_format() {
 }
 
 #[tokio::test]
-async fn v1_v1_nested_models() {
+async fn v1_v1_returns_404() {
     let req = empty_request("GET", "/v1/v1/models");
-    let (status, body) = oneshot(req).await;
-    assert_eq!(status, StatusCode::OK);
-    let v: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["object"], "list");
+    let (status, _body) = oneshot(req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1000,7 +978,7 @@ async fn concurrent_provider_creation() {
 }
 
 #[tokio::test]
-async fn chat_completions_v1_v1_nested() {
+async fn chat_completions_v1_v1_returns_404() {
     let req = json_request(
         "POST",
         "/v1/v1/chat/completions",
@@ -1010,7 +988,7 @@ async fn chat_completions_v1_v1_nested() {
         }),
     );
     let (status, _) = oneshot(req).await;
-    assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 // ═══════════════════════════════════════════════════════════════

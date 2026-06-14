@@ -3,24 +3,19 @@
 //! Initializes the axum HTTP server, configures routes, and handles
 //! graceful shutdown. Single port serves Web UI + LLM API + Control Plane.
 
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::ServiceExt;
 use axum::{
     Json, Router,
-    body::Body,
     extract::DefaultBodyLimit,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tower::Layer;
-use tower::util::MapRequestLayer;
 use tracing::info;
 
 use crate::metrics::{self, MetricsEmitter};
@@ -88,6 +83,14 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
     let listener = TcpListener::bind(addr).await?;
 
     info!("Listening on {}", listener.local_addr()?);
+    info!(
+        "Client config: ANTHROPIC_BASE_URL=http://{} (without /v1)",
+        listener.local_addr()?
+    );
+    info!(
+        "Client config: OPENAI_API_BASE=http://{}/v1",
+        listener.local_addr()?
+    );
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())
@@ -97,46 +100,13 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error +
     Ok(())
 }
 
-/// Rewrite `/v1/v1/*` request URIs to `/v1/*` so misconfigured clients
-/// still reach the correct handlers.
-fn normalize_double_prefix<B>(mut req: axum::http::Request<B>) -> axum::http::Request<B> {
-    let uri = req.uri().clone();
-    let path = uri.path();
-
-    if let Some(stripped) = path.strip_prefix("/v1/v1/") {
-        let new_path = format!("/v1/{stripped}");
-        let pq = match uri.query() {
-            Some(q) => format!("{new_path}?{q}"),
-            None => new_path,
-        };
-        let mut parts = axum::http::uri::Parts::default();
-        parts.path_and_query = Some(pq.parse().unwrap());
-        *req.uri_mut() = axum::http::Uri::from_parts(parts).unwrap();
-    }
-    req
-}
-
 /// Build the axum Router with all routes configured.
-///
-/// Returns a service (via [`MapRequestLayer`]) that rewrites `/v1/v1/*` URIs
-/// to `/v1/*` before routing, eliminating the need to register routes twice.
-pub fn build_app(
-    router: Arc<RealRouter>,
-    db_path: PathBuf,
-) -> impl tower::Service<
-    axum::http::Request<Body>,
-    Response = Response,
-    Error = Infallible,
-    Future = impl Send,
-> + Clone
-+ Send
-+ Sync
-+ 'static {
+pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
     let router_store: RouterStore = Arc::new(arc_swap::ArcSwap::new(router));
     let db_path: Arc<PathBuf> = Arc::new(db_path);
     let (metrics_emitter, metrics_reader) = metrics::init();
 
-    let inner = Router::new()
+    Router::new()
         // Web UI routes (served before API routes)
         .route("/ui", axum::routing::get(web::ui_handler))
         .route("/ui/", axum::routing::get(web::ui_handler))
@@ -193,11 +163,7 @@ pub fn build_app(
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(axum::extract::Extension(db_path))
         .layer(axum::extract::Extension(router_store))
-        .layer(axum::extract::Extension(metrics_reader));
-
-    // Wrap the Router with MapRequestLayer so the URI rewrite happens
-    // *before* axum's route matching.
-    MapRequestLayer::new(normalize_double_prefix).layer(inner)
+        .layer(axum::extract::Extension(metrics_reader))
 }
 
 /// GET /health — returns {"status": "ok"}.

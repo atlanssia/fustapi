@@ -1,14 +1,10 @@
-//! Cloud provider adapters (`DeepSeek`, `OpenAI`, GLM).
+//! Cloud provider adapters (OpenAI-compatible).
 //!
-//! These providers connect to cloud inference APIs as fallback when
-//! local providers are unavailable.
+//! All providers use `OpenAIProvider` with `BalanceStrategy` config to
+//! select provider-specific balance query logic.
 
-pub mod deepseek;
-pub mod glm;
 pub mod health_prober;
 pub mod openai;
 pub mod sse_parser;
 
-pub use deepseek::{DeepSeekConfig, DeepSeekProvider};
-pub use glm::{GlmConfig, GlmProvider};
-pub use openai::{OpenAIConfig, OpenAIProvider};
+pub use openai::{BalanceStrategy, OpenAIConfig, OpenAIProvider};

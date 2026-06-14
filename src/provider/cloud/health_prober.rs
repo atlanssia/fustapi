@@ -95,13 +95,12 @@ pub async fn probe_balance(
             // Normalize the JSON so parse_omlx_balance can handle both
             // omlx (final_ceiling) and openai-compatible (max_model_memory) formats
             let mut normalized = json_body.clone();
-            if let Some(pool) = normalized.get_mut("engine_pool") {
-                if pool.get("final_ceiling").is_none() {
-                    if let Some(max_mem) = pool.get("max_model_memory").cloned() {
-                        pool.as_object_mut()
-                            .map(|m| m.insert("final_ceiling".to_string(), max_mem));
-                    }
-                }
+            if let Some(pool) = normalized.get_mut("engine_pool")
+                && pool.get("final_ceiling").is_none()
+                && let Some(max_mem) = pool.get("max_model_memory").cloned()
+            {
+                pool.as_object_mut()
+                    .map(|m| m.insert("final_ceiling".to_string(), max_mem));
             }
             if let Ok(balance) = crate::provider::health::parse_omlx_balance(
                 &normalized.to_string(),

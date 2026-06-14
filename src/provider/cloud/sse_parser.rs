@@ -101,18 +101,16 @@ pub fn parse_openai_sse_stream(
                                 .and_then(|c| c.get(0))
                                 .and_then(|c| c.get("finish_reason"))
                                 .and_then(|v| v.as_str())
-                            {
-                                if fr.contains("context_window")
+                                && (fr.contains("context_window")
                                     || fr.contains("context_length")
-                                    || fr == "error"
-                                {
-                                    return Some((
-                                        Err(crate::streaming::StreamError::Provider(format!(
-                                            "upstream error: {fr}"
-                                        ))),
-                                        (stream, buffer, tool_id, tool_name, tool_args),
-                                    ));
-                                }
+                                    || fr == "error")
+                            {
+                                return Some((
+                                    Err(crate::streaming::StreamError::Provider(format!(
+                                        "upstream error: {fr}"
+                                    ))),
+                                    (stream, buffer, tool_id, tool_name, tool_args),
+                                ));
                             }
 
                             // Handle usage-only chunk (sent when stream_options.include_usage is set).

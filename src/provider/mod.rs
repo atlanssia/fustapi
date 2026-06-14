@@ -23,7 +23,19 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 r#type = %cfg.r#type,
                 "Unknown provider type — falling back to omlx default"
             );
-            return Box::new(crate::provider::omlx::OmlxProvider::default_provider());
+            return Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+                crate::provider::cloud::openai::OpenAIConfig {
+                    endpoint: "http://localhost:8000/v1".to_string(),
+                    api_key: "omlx".to_string(),
+                    model: None,
+                    stream_options: false,
+                    provider_name: Some("oMLX".to_string()),
+                    tool_calling: crate::provider::ToolCallingSupport::Emulated,
+                    image_input: true,
+                    streaming: true,
+                    balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
+                },
+            ));
         }
     };
 
@@ -37,8 +49,18 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
     let model = cfg.model.clone();
 
     match pt {
-        Pt::Omlx => Box::new(crate::provider::omlx::OmlxProvider::new(
-            crate::provider::omlx::OmlxConfig { endpoint, model },
+        Pt::Omlx => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
+                endpoint,
+                api_key: "omlx".to_string(),
+                model,
+                stream_options: false,
+                provider_name: Some("oMLX".to_string()),
+                tool_calling: pt.tool_calling_mode(),
+                image_input: true,
+                streaming: true,
+                balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
+            },
         )),
         Pt::LmStudio => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
@@ -50,6 +72,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: true,
                 streaming: true,
+                balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
         Pt::SgLang => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
@@ -62,20 +85,33 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: true,
                 streaming: true,
+                balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
-        Pt::Glm | Pt::Zai => Box::new(crate::provider::cloud::glm::GlmProvider::new(
-            crate::provider::cloud::glm::GlmConfig {
+        Pt::Glm | Pt::Zai => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
                 endpoint,
                 api_key,
                 model,
+                stream_options: false,
+                provider_name: Some("GLM".to_string()),
+                tool_calling: pt.tool_calling_mode(),
+                image_input: false,
+                streaming: true,
+                balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Glm,
             },
         )),
-        Pt::DeepSeek => Box::new(crate::provider::cloud::deepseek::DeepSeekProvider::new(
-            crate::provider::cloud::deepseek::DeepSeekConfig {
+        Pt::DeepSeek => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig {
                 endpoint,
                 api_key,
                 model,
+                stream_options: true,
+                provider_name: Some("DeepSeek".to_string()),
+                tool_calling: pt.tool_calling_mode(),
+                image_input: false,
+                streaming: true,
+                balance_strategy: crate::provider::cloud::openai::BalanceStrategy::DeepSeek,
             },
         )),
         Pt::OpenAI | Pt::OpenAICompatible => {
@@ -89,6 +125,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     tool_calling: pt.tool_calling_mode(),
                     image_input: true,
                     streaming: true,
+                    balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
                 },
             ))
         }
@@ -361,7 +398,112 @@ pub fn build_http_client() -> reqwest::Client {
 
 pub mod cloud;
 pub mod health;
-pub mod omlx;
+
+#[cfg(test)]
+mod wrapper_collapse_tests {
+    use super::*;
+
+    /// Factory produces correct capabilities for each provider type.
+    #[test]
+    fn factory_creates_omlx_provider() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "omlx".to_string(),
+            endpoint: "http://localhost:8000/v1".to_string(),
+            api_key: None,
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "oMLX");
+        assert_eq!(
+            provider.capabilities().tool_calling,
+            ToolCallingSupport::Emulated
+        );
+        assert!(provider.capabilities().image_input);
+        assert!(provider.capabilities().streaming);
+    }
+
+    #[test]
+    fn factory_creates_deepseek_provider() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "deepseek".to_string(),
+            endpoint: "https://api.deepseek.com".to_string(),
+            api_key: Some("test-key".to_string()),
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "DeepSeek");
+        assert_eq!(
+            provider.capabilities().tool_calling,
+            ToolCallingSupport::Native
+        );
+        assert!(!provider.capabilities().image_input);
+    }
+
+    #[test]
+    fn factory_creates_glm_provider() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "glm".to_string(),
+            endpoint: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
+            api_key: Some("test-key".to_string()),
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "GLM");
+        assert_eq!(
+            provider.capabilities().tool_calling,
+            ToolCallingSupport::Native
+        );
+        assert!(!provider.capabilities().image_input);
+    }
+
+    #[test]
+    fn factory_creates_zai_provider_as_glm() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "z.ai".to_string(),
+            endpoint: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
+            api_key: Some("test-key".to_string()),
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "GLM");
+    }
+
+    #[test]
+    fn factory_unknown_type_falls_back_to_omlx() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "unknown_type".to_string(),
+            endpoint: "http://localhost:8000/v1".to_string(),
+            api_key: None,
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "oMLX");
+    }
+
+    #[test]
+    fn factory_creates_lmstudio_provider() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "lmstudio".to_string(),
+            endpoint: "http://localhost:1234/v1".to_string(),
+            api_key: None,
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "LM Studio");
+    }
+
+    #[test]
+    fn factory_creates_sglang_provider() {
+        let cfg = crate::config::ProviderConfig {
+            r#type: "sglang".to_string(),
+            endpoint: "http://localhost:30000/v1".to_string(),
+            api_key: None,
+            model: None,
+        };
+        let provider = create_provider("test", &cfg);
+        assert_eq!(provider.name(), "SGLang");
+    }
+}
 
 #[cfg(test)]
 mod balance_struct_tests {

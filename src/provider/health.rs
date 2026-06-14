@@ -134,6 +134,7 @@ pub fn parse_omlx_balance(
 
 #[derive(Deserialize)]
 struct DeepSeekBalanceResponse {
+    #[allow(dead_code)]
     is_available: bool,
     balance_infos: Vec<DeepSeekBalanceInfo>,
 }
@@ -226,8 +227,10 @@ struct QuotaLimit {
     limit_type: String,
     percentage: f64,
     #[serde(default)]
+    #[allow(dead_code)]
     remaining: f64,
     #[serde(default)]
+    #[allow(dead_code)]
     usage: f64,
     #[serde(rename = "nextResetTime", default)]
     next_reset_time: Option<u64>,
