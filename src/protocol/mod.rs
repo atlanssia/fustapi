@@ -189,7 +189,9 @@ async fn collect_non_streaming(
                     };
 
                     let tool_calls = tool_calls_json.map(|arr| {
-                        arr.iter()
+                        let original_count = arr.len();
+                        let converted: Vec<_> = arr
+                            .iter()
                             .filter_map(|tc| {
                                 let name = tc
                                     .get("function")
@@ -207,7 +209,14 @@ async fn collect_non_streaming(
                                     arguments: args,
                                 })
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>();
+                        if converted.len() < original_count {
+                            tracing::warn!(
+                                dropped = original_count - converted.len(),
+                                "dropped malformed tool calls in Anthropic NonStreaming conversion"
+                            );
+                        }
+                        converted
                     });
                     let tool_calls_opt = tool_calls.filter(|v| !v.is_empty());
 
@@ -238,12 +247,9 @@ async fn collect_non_streaming(
                     })?;
 
                     let body: serde_json::Value =
-                        serde_json::from_str(&response_body).unwrap_or_else(|e| {
-                            serde_json::json!({"error": {"message": format!(
-                                "serialization error: {}",
-                                e
-                            )}})
-                        });
+                        serde_json::from_str(&response_body).expect(
+                            "serialize_response produced invalid JSON — this is a bug",
+                        );
                     Ok((StatusCode::OK, Json(body)).into_response())
                 }
             }
