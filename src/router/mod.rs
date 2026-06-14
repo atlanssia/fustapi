@@ -245,6 +245,9 @@ impl Router for RealRouter {
                 crate::streaming::StreamMode::Passthrough(byte_stream) => {
                     return Ok(crate::streaming::StreamMode::Passthrough(byte_stream));
                 }
+                crate::streaming::StreamMode::NonStreaming(json) => {
+                    return Ok(crate::streaming::StreamMode::NonStreaming(json));
+                }
             }
         }
         Err(RouterError::ModelNotFound(model_name))
