@@ -447,7 +447,6 @@ mod tests {
         name: &'static str,
         captured: Arc<Mutex<Option<UnifiedRequest>>>,
         stream_chunks: Vec<crate::streaming::LLMChunk>,
-        return_passthrough: bool,
     }
 
     impl CapturingMockProvider {
@@ -464,7 +463,6 @@ mod tests {
                 name: "emulated-mock",
                 captured,
                 stream_chunks,
-                return_passthrough: false,
             }
         }
 
@@ -481,13 +479,7 @@ mod tests {
                 name: "native-mock",
                 captured,
                 stream_chunks,
-                return_passthrough: false,
             }
-        }
-
-        fn with_passthrough(mut self) -> Self {
-            self.return_passthrough = true;
-            self
         }
     }
 
@@ -499,16 +491,10 @@ mod tests {
             _allow_passthrough: bool,
         ) -> Result<crate::streaming::StreamMode, ProviderError> {
             *self.captured.lock().unwrap() = Some(request);
-            if self.return_passthrough {
-                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
-                    tokio_stream::iter(vec![Ok(bytes::Bytes::from("passthrough"))]),
-                )))
-            } else {
-                let chunks: Vec<_> = self.stream_chunks.iter().map(|c| Ok(c.clone())).collect();
-                Ok(crate::streaming::StreamMode::Normalized(Box::pin(
-                    tokio_stream::iter(chunks),
-                )))
-            }
+            let chunks: Vec<_> = self.stream_chunks.iter().map(|c| Ok(c.clone())).collect();
+            Ok(crate::streaming::StreamMode::Normalized(Box::pin(
+                tokio_stream::iter(chunks),
+            )))
         }
         fn capabilities(&self) -> ProviderCapabilities {
             self.caps

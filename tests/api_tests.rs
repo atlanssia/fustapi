@@ -8,8 +8,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use tower::Service;
-use tower::ServiceExt;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -30,7 +28,7 @@ fn build_app() -> Router {
 }
 
 async fn oneshot(req: Request<Body>) -> (StatusCode, String) {
-    let mut app = build_app();
+    let app = build_app();
     let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body();
@@ -968,11 +966,11 @@ async fn concurrent_provider_creation() {
     let statuses: Vec<_> = results.into_iter().map(|r| r.unwrap()).collect();
     // At least one should succeed and at least one should conflict
     assert!(
-        statuses.iter().any(|s| *s == StatusCode::CREATED),
+        statuses.contains(&StatusCode::CREATED),
         "statuses: {statuses:?}"
     );
     assert!(
-        statuses.iter().any(|s| *s == StatusCode::CONFLICT),
+        statuses.contains(&StatusCode::CONFLICT),
         "statuses: {statuses:?}"
     );
 }
@@ -1439,7 +1437,7 @@ async fn sql_injection_preserves_database_integrity() {
             "endpoint": "http://localhost:8000/v1"
         }),
     );
-    let (s, _) = oneshot_shared(&mut app, req).await;
+    let (_s, _) = oneshot_shared(&mut app, req).await;
     // Server should handle gracefully
 
     // Verify original provider still exists
