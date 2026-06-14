@@ -30,9 +30,7 @@ pub(crate) fn forward_as_sse_response(
     tracker: StreamTracker,
 ) -> Response {
     match stream_mode {
-        StreamMode::Normalized(stream) => {
-            normalized_sse_response(stream, protocol, model, tracker)
-        }
+        StreamMode::Normalized(stream) => normalized_sse_response(stream, protocol, model, tracker),
         StreamMode::Passthrough(byte_stream) => {
             passthrough_sse_response(byte_stream, protocol, model, tracker)
         }
@@ -65,43 +63,36 @@ fn normalized_sse_response(
     let mut anthropic_state = super::serializer::AnthropicStreamState::new();
     let model_name_for_wrapper = model_name.clone();
 
-    let body_stream =
-        futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
-            Ok(chunk) => {
-                tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
-                if let Some(usage) = &chunk.usage {
-                    tracker.set_tokens(usage.clone());
+    let body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
+        Ok(chunk) => {
+            tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+            if let Some(usage) = &chunk.usage {
+                tracker.set_tokens(usage.clone());
+            }
+            let text = match protocol {
+                Protocol::OpenAI => {
+                    let include_role = !sent_role;
+                    sent_role = true;
+                    super::serializer::serialize_openai_chunk(&chunk, &model_name, include_role)
                 }
-                let text = match protocol {
-                    Protocol::OpenAI => {
-                        let include_role = !sent_role;
-                        sent_role = true;
-                        super::serializer::serialize_openai_chunk(
-                            &chunk,
-                            &model_name,
-                            include_role,
-                        )
-                    }
-                    Protocol::Anthropic => {
-                        anthropic_state.serialize_chunk(&chunk, &model_name)
-                    }
-                };
-                Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
-            }
-            Err(e) => {
-                tracker.set_success(false);
-                let err_json = serde_json::json!({
-                    "error": {
-                        "message": e.to_string(),
-                        "type": "internal_error"
-                    }
-                });
-                Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
-                    "data: {err_json}\n\n"
-                )))
-            }
-        })
-        .boxed();
+                Protocol::Anthropic => anthropic_state.serialize_chunk(&chunk, &model_name),
+            };
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
+        }
+        Err(e) => {
+            tracker.set_success(false);
+            let err_json = serde_json::json!({
+                "error": {
+                    "message": e.to_string(),
+                    "type": "internal_error"
+                }
+            });
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                "data: {err_json}\n\n"
+            )))
+        }
+    })
+    .boxed();
 
     if protocol == Protocol::Anthropic {
         wrap_anthropic(body_stream, &model_name_for_wrapper)
@@ -168,9 +159,7 @@ fn passthrough_sse_response(
 /// as required by the Anthropic streaming protocol.
 fn wrap_anthropic(
     body_stream: std::pin::Pin<
-        Box<
-            dyn futures::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>> + Send,
-        >,
+        Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>> + Send>,
     >,
     model: &str,
 ) -> Response {
@@ -180,9 +169,7 @@ fn wrap_anthropic(
 
     let combined = futures::StreamExt::chain(
         futures::StreamExt::chain(
-            futures::stream::once(async move {
-                Ok::<_, std::convert::Infallible>(start_bytes)
-            }),
+            futures::stream::once(async move { Ok::<_, std::convert::Infallible>(start_bytes) }),
             body_stream,
         ),
         futures::stream::once(async move { Ok::<_, std::convert::Infallible>(stop_bytes) }),

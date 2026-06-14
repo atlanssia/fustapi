@@ -111,7 +111,10 @@ async fn forward_streaming(
         .map_err(|e| map_router_error(e, protocol))?;
 
     Ok(stream_dispatch::forward_as_sse_response(
-        stream_mode, protocol, model, tracker,
+        stream_mode,
+        protocol,
+        model,
+        tracker,
     ))
 }
 
@@ -144,17 +147,12 @@ async fn collect_non_streaming(
     match stream_mode {
         crate::streaming::StreamMode::NonStreaming(json) => {
             // Extract usage for metrics from the upstream JSON response.
-            let usage = json.get("usage").map(|u| {
-                crate::metrics::TokenUsage {
-                    prompt_tokens: u
-                        .get("prompt_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32,
-                    completion_tokens: u
-                        .get("completion_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32,
-                }
+            let usage = json.get("usage").map(|u| crate::metrics::TokenUsage {
+                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                completion_tokens: u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
             });
             let first_token_ms = Some(guard.elapsed_ms());
             let usage_for_metrics = usage.clone();
@@ -167,18 +165,16 @@ async fn collect_non_streaming(
                 }
                 Protocol::Anthropic => {
                     // Convert OpenAI-format upstream JSON to Anthropic format.
-                    let choices = json["choices"]
-                        .as_array()
-                        .and_then(|arr| arr.first());
+                    let choices = json["choices"].as_array().and_then(|arr| arr.first());
                     let message = choices.and_then(|c| c.get("message"));
 
                     let content = message
                         .and_then(|m| m.get("content").and_then(|v| v.as_str()))
                         .unwrap_or("");
-                    let reasoning = message
-                        .and_then(|m| m.get("reasoning_content").and_then(|v| v.as_str()));
-                    let tool_calls_json = message
-                        .and_then(|m| m.get("tool_calls").and_then(|v| v.as_array()));
+                    let reasoning =
+                        message.and_then(|m| m.get("reasoning_content").and_then(|v| v.as_str()));
+                    let tool_calls_json =
+                        message.and_then(|m| m.get("tool_calls").and_then(|v| v.as_array()));
                     let upstream_finish_reason = choices
                         .and_then(|c| c.get("finish_reason").and_then(|v| v.as_str()))
                         .unwrap_or("stop");
@@ -196,8 +192,7 @@ async fn collect_non_streaming(
                                 let name = tc
                                     .get("function")
                                     .and_then(|f| f.get("name").and_then(|v| v.as_str()))?;
-                                let id =
-                                    tc.get("id").and_then(|v| v.as_str()).map(String::from);
+                                let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
                                 let args = tc
                                     .get("function")
                                     .and_then(|f| f.get("arguments").and_then(|v| v.as_str()))
@@ -221,11 +216,9 @@ async fn collect_non_streaming(
                     let tool_calls_opt = tool_calls.filter(|v| !v.is_empty());
 
                     let usage_ref = usage.as_ref();
-                    let prompt_tokens =
-                        usage_ref.map(|u| u.prompt_tokens as usize).unwrap_or(0);
-                    let completion_tokens = usage_ref
-                        .map(|u| u.completion_tokens as usize)
-                        .unwrap_or(0);
+                    let prompt_tokens = usage_ref.map(|u| u.prompt_tokens as usize).unwrap_or(0);
+                    let completion_tokens =
+                        usage_ref.map(|u| u.completion_tokens as usize).unwrap_or(0);
 
                     let response_body = anthropic::serialize_response(
                         "msg-gw",
@@ -246,10 +239,8 @@ async fn collect_non_streaming(
                         protocol,
                     })?;
 
-                    let body: serde_json::Value =
-                        serde_json::from_str(&response_body).expect(
-                            "serialize_response produced invalid JSON — this is a bug",
-                        );
+                    let body: serde_json::Value = serde_json::from_str(&response_body)
+                        .expect("serialize_response produced invalid JSON — this is a bug");
                     Ok((StatusCode::OK, Json(body)).into_response())
                 }
             }
@@ -290,8 +281,7 @@ async fn collect_non_streaming(
                 .filter_map(|c| c.reasoning_content.clone())
                 .collect::<String>();
 
-            let tool_calls: Vec<_> =
-                chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
+            let tool_calls: Vec<_> = chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
 
             let tool_calls_opt = if tool_calls.is_empty() {
                 None
@@ -311,10 +301,9 @@ async fn collect_non_streaming(
                 }
             };
 
-            let (prompt_tokens, completion_tokens) =
-                final_usage.as_ref().map_or((0, 0), |u| {
-                    (u.prompt_tokens as usize, u.completion_tokens as usize)
-                });
+            let (prompt_tokens, completion_tokens) = final_usage.as_ref().map_or((0, 0), |u| {
+                (u.prompt_tokens as usize, u.completion_tokens as usize)
+            });
 
             let response_body = match protocol {
                 Protocol::OpenAI => match openai::serialize_response(
@@ -490,8 +479,8 @@ impl IntoResponse for ProtocolError {
 mod tests {
     use super::*;
     use crate::metrics::TokenUsage;
-    use crate::streaming::{LLMChunk, StreamError};
     use crate::provider::UnifiedRequest;
+    use crate::streaming::{LLMChunk, StreamError};
     use async_trait::async_trait;
     use http_body_util::BodyExt;
     use std::sync::{Arc, Mutex};
@@ -657,7 +646,10 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-        assert_eq!(v["choices"][0]["message"]["reasoning_content"], "thinking...");
+        assert_eq!(
+            v["choices"][0]["message"]["reasoning_content"],
+            "thinking..."
+        );
         assert_eq!(v["choices"][0]["message"]["content"], "answer");
     }
 
@@ -853,11 +845,9 @@ mod tests {
             ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
                 *self.captured.lock().unwrap() = Some(allow_passthrough);
                 Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
-                    tokio_stream::once(Ok::<_, crate::streaming::StreamError>(
-                        bytes::Bytes::from(
-                            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
-                        ),
-                    )),
+                    tokio_stream::once(Ok::<_, crate::streaming::StreamError>(bytes::Bytes::from(
+                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
+                    ))),
                 )))
             }
         }
@@ -875,8 +865,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(),
-            "forward_streaming should succeed for Anthropic when no transforms");
+        assert!(
+            result.is_ok(),
+            "forward_streaming should succeed for Anthropic when no transforms"
+        );
         assert_eq!(
             *captured.lock().unwrap(),
             Some(true),
@@ -909,15 +901,10 @@ mod tests {
         ];
         let router = MockRouter::with_normalized_chunks(chunks);
         let guard = make_guard();
-        let result = collect_non_streaming(
-            &router,
-            make_request(),
-            "gpt-4",
-            Protocol::OpenAI,
-            guard,
-        )
-        .await
-        .unwrap();
+        let result =
+            collect_non_streaming(&router, make_request(), "gpt-4", Protocol::OpenAI, guard)
+                .await
+                .unwrap();
 
         let body = result.into_body();
         let bytes = body.collect().await.unwrap().to_bytes();
