@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
+use crate::capability::transform::RequestTransform;
 use crate::config;
 use crate::provider::{Provider, ProviderError, UnifiedRequest};
 
@@ -183,17 +184,17 @@ impl Router for RealRouter {
 
         if let Some(provider) = self.get_provider_for_model(&model_name) {
             let caps = provider.capabilities();
-            let transforms = crate::capability::transform::build_transforms(
+            let transform = crate::capability::transform::build_transforms(
                 caps.tool_calling,
                 request.tools.clone(),
             );
 
-            if crate::capability::transform::should_disable_passthrough(&transforms) {
+            if transform.is_some() {
                 allow_passthrough = false;
             }
 
-            // Apply transforms to request messages
-            for t in &transforms {
+            // Apply transform to request messages, if present
+            if let Some(t) = &transform {
                 // Find system prompt and transform it
                 let system_idx = request
                     .messages
@@ -218,10 +219,8 @@ impl Router for RealRouter {
                         );
                     }
                 }
-            }
 
-            // Remove tools from request if transforms consumed them
-            if !transforms.is_empty() {
+                // Transform consumed the tools — remove them from the request
                 request.tools = None;
             }
 
@@ -235,10 +234,11 @@ impl Router for RealRouter {
                         Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
                     });
 
-                    let s = crate::capability::transform::apply_stream_transforms(
-                        Box::pin(s),
-                        &transforms,
-                    );
+                    let s = if let Some(t) = &transform {
+                        t.transform_stream(Box::pin(s))
+                    } else {
+                        Box::pin(s)
+                    };
 
                     return Ok(crate::streaming::StreamMode::Normalized(s));
                 }
