@@ -14,7 +14,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -236,11 +236,21 @@ async fn messages_handler(
     }
 }
 
+/// Minimal model extractor — lightweight alternative to a full `serde_json::Value` parse.
+#[derive(Deserialize)]
+struct ModelField {
+    model: Option<String>,
+}
+
 /// Extract model name from body and resolve to provider name (best-effort).
+///
+/// Uses a minimal struct parse to extract only the `model` field, avoiding the
+/// allocation of an intermediate `serde_json::Value`. The body will be fully
+/// parsed again downstream by the protocol handler.
 fn resolve_provider_and_model(body: &str, router: &dyn crate::router::Router) -> (String, String) {
-    let model = serde_json::from_str::<serde_json::Value>(body)
+    let model = serde_json::from_str::<ModelField>(body)
         .ok()
-        .and_then(|v| v.get("model")?.as_str().map(String::from))
+        .and_then(|m| m.model)
         .unwrap_or_else(|| "unknown".to_string());
     let provider = router
         .resolve(&model)

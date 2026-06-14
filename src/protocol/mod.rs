@@ -48,12 +48,6 @@ pub fn detect_protocol(path: &str, headers: &axum::http::HeaderMap) -> Protocol 
     }
 }
 
-/// Check if request wants streaming.
-fn is_streaming(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .is_ok_and(|v| v.get("stream").is_some_and(|s| s.as_bool() == Some(true)))
-}
-
 /// Dispatch a request to the appropriate protocol handler.
 pub async fn dispatch_request(
     protocol: Protocol,
@@ -85,7 +79,7 @@ async fn openai_handler(
     let model_name = unified_req.model.clone();
     let provider_req = unified_req.clone();
 
-    if is_streaming(&body) {
+    if unified_req.stream {
         let tracker = guard.into_tracker();
         forward_streaming(router, provider_req, &model_name, Protocol::OpenAI, tracker).await
     } else {
@@ -418,7 +412,7 @@ async fn anthropic_handler(
 
     let model_name = unified_req.model.clone();
 
-    if is_streaming(&body) {
+    if unified_req.stream {
         let tracker = guard.into_tracker();
         forward_streaming(
             router,
