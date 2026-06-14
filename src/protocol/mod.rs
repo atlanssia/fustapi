@@ -104,7 +104,7 @@ async fn forward_streaming(
     protocol: Protocol,
     mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
-    let allow_passthrough = protocol == Protocol::OpenAI;
+    let allow_passthrough = true;
 
     // Sync tracker model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
@@ -819,6 +819,69 @@ mod tests {
             }
             other => panic!("expected Internal error, got {:?}", other),
         }
+    }
+
+    // ── Anthropic passthrough support ────────────────────────────────
+
+    #[tokio::test]
+    async fn streaming_anthropic_allows_passthrough_when_no_transforms() {
+        let captured: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+        let c = captured.clone();
+
+        struct CaptureRouter {
+            captured: Arc<Mutex<Option<bool>>>,
+        }
+
+        #[async_trait]
+        impl crate::router::Router for CaptureRouter {
+            fn resolve(&self, _model: &str) -> Result<String, crate::router::RouterError> {
+                Ok("mock".to_string())
+            }
+            fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
+                None
+            }
+            fn list_models(&self) -> Vec<String> {
+                vec!["test-model".to_string()]
+            }
+            fn list_providers(&self) -> Vec<String> {
+                vec!["mock".to_string()]
+            }
+            async fn chat_stream(
+                &self,
+                _request: UnifiedRequest,
+                allow_passthrough: bool,
+            ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
+                *self.captured.lock().unwrap() = Some(allow_passthrough);
+                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
+                    tokio_stream::once(Ok::<_, crate::streaming::StreamError>(
+                        bytes::Bytes::from(
+                            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
+                        ),
+                    )),
+                )))
+            }
+        }
+
+        let router = CaptureRouter { captured: c };
+        let guard = make_guard();
+        let tracker = guard.into_tracker();
+
+        let result = forward_streaming(
+            &router,
+            make_request(),
+            "claude-3",
+            Protocol::Anthropic,
+            tracker,
+        )
+        .await;
+
+        assert!(result.is_ok(),
+            "forward_streaming should succeed for Anthropic when no transforms");
+        assert_eq!(
+            *captured.lock().unwrap(),
+            Some(true),
+            "allow_passthrough should be true for Anthropic when no transforms needed"
+        );
     }
 
     // ── Backward compatibility: Normalized stream still works ───────

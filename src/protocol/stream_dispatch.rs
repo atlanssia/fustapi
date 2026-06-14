@@ -34,7 +34,7 @@ pub(crate) fn forward_as_sse_response(
             normalized_sse_response(stream, protocol, model, tracker)
         }
         StreamMode::Passthrough(byte_stream) => {
-            passthrough_sse_response(byte_stream, tracker)
+            passthrough_sse_response(byte_stream, protocol, model, tracker)
         }
         StreamMode::NonStreaming(_) => {
             // Non-streaming responses are handled by collect_non_streaming().
@@ -114,9 +114,12 @@ fn normalized_sse_response(
 
 fn passthrough_sse_response(
     byte_stream: crate::streaming::ByteStream,
+    protocol: Protocol,
+    model: &str,
     mut tracker: StreamTracker,
 ) -> Response {
     let mut buf = bytes::BytesMut::with_capacity(8192);
+    let model_for_wrap = model.to_string();
 
     let body_stream =
         futures::StreamExt::map(byte_stream, move |chunk_result| match chunk_result {
@@ -150,7 +153,13 @@ fn passthrough_sse_response(
             }
         });
 
-    sse_response(Box::pin(body_stream))
+    let pinned = Box::pin(body_stream);
+
+    if protocol == Protocol::Anthropic {
+        wrap_anthropic(pinned, &model_for_wrap)
+    } else {
+        sse_response(pinned)
+    }
 }
 
 // ── Anthropic wrapper ────────────────────────────────────────────────
