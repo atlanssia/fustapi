@@ -35,12 +35,18 @@ pub type LLMStream = std::pin::Pin<Box<dyn Stream<Item = Result<LLMChunk, Stream
 pub type ByteStream =
     std::pin::Pin<Box<dyn Stream<Item = Result<bytes::Bytes, StreamError>> + Send>>;
 
-/// Dual-mode stream output from the gateway.
+/// Stream output from the gateway.
 pub enum StreamMode {
     /// Normalized stream using the `LLMChunk` pipeline (supports capability transformations).
     Normalized(LLMStream),
     /// Zero-parse passthrough stream of raw bytes directly from the provider.
     Passthrough(ByteStream),
+    /// Non-streaming response: the full upstream JSON body, returned as-is.
+    ///
+    /// Used when the client sends `stream: false`, avoiding the SSE → chunks → re-serialize
+    /// round-trip. The provider reads the full response body, extracts token usage for
+    /// metrics, and returns the raw JSON for direct pass-through to the client.
+    NonStreaming(serde_json::Value),
 }
 
 /// Errors that can occur during streaming.

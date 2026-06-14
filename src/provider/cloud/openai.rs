@@ -435,18 +435,17 @@ impl Provider for OpenAIProvider {
                 });
             }
 
-            let resp_body = resp_body
-                .json::<OpenAIChatResponse>()
+            // Read the full response body and return as raw JSON, avoiding the
+            // parse → chunks → re-serialize round-trip.
+            let full_bytes = resp_body
+                .bytes()
                 .await
                 .map_err(|e| ProviderError::Internal(e.to_string()))?;
 
-            let chunks = Self::parse_response(&resp_body);
+            let json_value: serde_json::Value = serde_json::from_slice(&full_bytes)
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
 
-            let s = futures::stream::iter(chunks.into_iter().map(Ok));
-
-            Ok(crate::streaming::StreamMode::Normalized(
-                Box::pin(s) as LLMStream
-            ))
+            Ok(crate::streaming::StreamMode::NonStreaming(json_value))
         }
     }
 

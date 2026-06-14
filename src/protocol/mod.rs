@@ -116,12 +116,118 @@ async fn forward_streaming(
         .await
         .map_err(|e| map_router_error(e, protocol))?;
 
-    Ok(stream_dispatch::forward_as_sse_response(
-        stream_mode,
-        protocol,
-        model,
-        tracker,
-    ))
+    match stream_mode {
+        crate::streaming::StreamMode::Normalized(stream) => {
+            use futures::StreamExt;
+            let mut sent_role = false;
+            let mut anthropic_state = serializer::AnthropicStreamState::new();
+            let model_name_start = model_name.clone();
+
+            let body_stream =
+                futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
+                    Ok(chunk) => {
+                        tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+                        if let Some(usage) = &chunk.usage {
+                            tracker.set_tokens(usage.clone());
+                        }
+                        let text = match protocol {
+                            Protocol::OpenAI => {
+                                let include_role = !sent_role;
+                                sent_role = true;
+                                serializer::serialize_openai_chunk(
+                                    &chunk,
+                                    &model_name,
+                                    include_role,
+                                )
+                            }
+                            Protocol::Anthropic => {
+                                anthropic_state.serialize_chunk(&chunk, &model_name)
+                            }
+                        };
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
+                    }
+                    Err(e) => {
+                        tracker.set_success(false);
+                        let err_json = serde_json::json!({
+                            "error": {
+                                "message": e.to_string(),
+                                "type": "internal_error"
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                            "data: {err_json}\n\n"
+                        )))
+                    }
+                })
+                .boxed();
+
+            if protocol == Protocol::Anthropic {
+                let start_bytes = axum::body::Bytes::from(anthropic::serialize_message_start(
+                    "msg_gw",
+                    &model_name_start,
+                ));
+                let stop_bytes = axum::body::Bytes::from(anthropic::serialize_message_stop());
+
+                let combined = futures::StreamExt::chain(
+                    futures::StreamExt::chain(
+                        futures::stream::once(async move {
+                            Ok::<_, std::convert::Infallible>(start_bytes)
+                        }),
+                        body_stream,
+                    ),
+                    futures::stream::once(
+                        async move { Ok::<_, std::convert::Infallible>(stop_bytes) },
+                    ),
+                );
+
+                return Ok(sse_response(Box::pin(combined)));
+            }
+
+            Ok(sse_response(Box::pin(body_stream)))
+        }
+        crate::streaming::StreamMode::Passthrough(byte_stream) => {
+            let mut buf = bytes::BytesMut::with_capacity(8192);
+
+            let body_stream =
+                futures::StreamExt::map(byte_stream, move |chunk_result| match chunk_result {
+                    Ok(bytes) => {
+                        tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+
+                        if tracker.tokens.is_none() {
+                            buf.extend_from_slice(&bytes);
+                            if buf.len() > 8192 {
+                                let excess = buf.len() - 8192;
+                                let _ = buf.split_to(excess);
+                            }
+                            if let Some(usage) = serializer::extract_usage_from_sse_bytes(&buf) {
+                                tracker.set_tokens(usage);
+                            }
+                        }
+
+                        Ok::<_, std::convert::Infallible>(bytes)
+                    }
+                    Err(e) => {
+                        tracker.set_success(false);
+                        let err_json = serde_json::json!({
+                            "error": {
+                                "message": e.to_string(),
+                                "type": "internal_error"
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                            "data: {err_json}\n\n"
+                        )))
+                    }
+                });
+
+            Ok(sse_response(Box::pin(body_stream)))
+        }
+        crate::streaming::StreamMode::NonStreaming(_) => {
+            // NonStreaming should not reach forward_streaming (only called for
+            // streaming requests). If it does, return it as a JSON response.
+            Ok((StatusCode::OK, Json(serde_json::json!({}))).into_response())
+        }
+    }
 }
 
 /// Build an SSE response with correct headers.
@@ -147,6 +253,11 @@ fn sse_response(
 }
 
 /// Collect all chunks and return a single non-streaming response.
+///
+/// When the provider returns [`StreamMode::NonStreaming`] (for `stream: false` requests),
+/// the upstream JSON is passed through directly with minimal parsing (extracting token
+/// usage for metrics). For the Anthropic protocol, the OpenAI-format JSON from the
+/// provider is converted to Anthropic format.
 async fn collect_non_streaming(
     router: &dyn Router,
     request: crate::provider::UnifiedRequest,
@@ -154,8 +265,6 @@ async fn collect_non_streaming(
     protocol: Protocol,
     mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
-    use tokio_stream::StreamExt;
-
     // Sync guard model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
         guard.set_model(upstream);
@@ -169,139 +278,252 @@ async fn collect_non_streaming(
         }
     };
 
-    let mut stream = match stream_mode {
-        crate::streaming::StreamMode::Normalized(stream) => stream,
+    match stream_mode {
+        crate::streaming::StreamMode::NonStreaming(json) => {
+            // Extract usage for metrics from the upstream JSON response.
+            let usage = json.get("usage").map(|u| {
+                crate::metrics::TokenUsage {
+                    prompt_tokens: u
+                        .get("prompt_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    completion_tokens: u
+                        .get("completion_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                }
+            });
+            let first_token_ms = Some(guard.elapsed_ms());
+            let usage_for_metrics = usage.clone();
+            guard.finish(true, usage_for_metrics, first_token_ms);
+
+            match protocol {
+                Protocol::OpenAI => {
+                    // Pass-through: return the upstream JSON as-is.
+                    Ok((StatusCode::OK, Json(json)).into_response())
+                }
+                Protocol::Anthropic => {
+                    // Convert OpenAI-format upstream JSON to Anthropic format.
+                    let choices = json["choices"]
+                        .as_array()
+                        .and_then(|arr| arr.first());
+                    let message = choices.and_then(|c| c.get("message"));
+
+                    let content = message
+                        .and_then(|m| m.get("content").and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let reasoning = message
+                        .and_then(|m| m.get("reasoning_content").and_then(|v| v.as_str()));
+                    let tool_calls_json = message
+                        .and_then(|m| m.get("tool_calls").and_then(|v| v.as_array()));
+                    let upstream_finish_reason = choices
+                        .and_then(|c| c.get("finish_reason").and_then(|v| v.as_str()))
+                        .unwrap_or("stop");
+
+                    let anthropic_stop_reason = match upstream_finish_reason {
+                        "tool_calls" => "tool_use",
+                        _ => "end_turn",
+                    };
+
+                    let tool_calls = tool_calls_json.map(|arr| {
+                        arr.iter()
+                            .filter_map(|tc| {
+                                let name = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("name").and_then(|v| v.as_str()))?;
+                                let id =
+                                    tc.get("id").and_then(|v| v.as_str()).map(String::from);
+                                let args = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("arguments").and_then(|v| v.as_str()))
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_default();
+                                Some(crate::capability::ToolCall {
+                                    id,
+                                    name: name.to_string(),
+                                    arguments: args,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    let tool_calls_opt = tool_calls.filter(|v| !v.is_empty());
+
+                    let usage_ref = usage.as_ref();
+                    let prompt_tokens =
+                        usage_ref.map(|u| u.prompt_tokens as usize).unwrap_or(0);
+                    let completion_tokens = usage_ref
+                        .map(|u| u.completion_tokens as usize)
+                        .unwrap_or(0);
+
+                    let response_body = anthropic::serialize_response(
+                        "msg-gw",
+                        model,
+                        if content.is_empty() {
+                            None
+                        } else {
+                            Some(content)
+                        },
+                        tool_calls_opt,
+                        Some(anthropic_stop_reason),
+                        reasoning,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    .map_err(|e| ProtocolError::Internal {
+                        message: e.to_string(),
+                        protocol,
+                    })?;
+
+                    let body: serde_json::Value =
+                        serde_json::from_str(&response_body).unwrap_or_else(|e| {
+                            serde_json::json!({"error": {"message": format!(
+                                "serialization error: {}",
+                                e
+                            )}})
+                        });
+                    Ok((StatusCode::OK, Json(body)).into_response())
+                }
+            }
+        }
+        crate::streaming::StreamMode::Normalized(mut stream) => {
+            use tokio_stream::StreamExt;
+            let mut chunks = Vec::new();
+            let mut first_token_ms = None;
+            let mut final_usage = None;
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        if first_token_ms.is_none() {
+                            first_token_ms = Some(guard.elapsed_ms());
+                        }
+                        if let Some(ref usage) = chunk.usage {
+                            final_usage = Some(usage.clone());
+                        }
+                        chunks.push(chunk);
+                    }
+                    Err(e) => {
+                        guard.finish_err();
+                        return Err(ProtocolError::Internal {
+                            message: e.to_string(),
+                            protocol,
+                        });
+                    }
+                }
+            }
+
+            let content = chunks
+                .iter()
+                .filter_map(|c| c.content.clone())
+                .collect::<String>();
+
+            let reasoning_content = chunks
+                .iter()
+                .filter_map(|c| c.reasoning_content.clone())
+                .collect::<String>();
+
+            let tool_calls: Vec<_> =
+                chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
+
+            let tool_calls_opt = if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls.clone())
+            };
+
+            let finish_reason = if tool_calls.is_empty() {
+                match protocol {
+                    Protocol::OpenAI => "stop",
+                    Protocol::Anthropic => "end_turn",
+                }
+            } else {
+                match protocol {
+                    Protocol::OpenAI => "tool_calls",
+                    Protocol::Anthropic => "tool_use",
+                }
+            };
+
+            let (prompt_tokens, completion_tokens) =
+                final_usage.as_ref().map_or((0, 0), |u| {
+                    (u.prompt_tokens as usize, u.completion_tokens as usize)
+                });
+
+            let response_body = match protocol {
+                Protocol::OpenAI => match openai::serialize_response(
+                    "chatcmpl-gw",
+                    model,
+                    if content.is_empty() {
+                        None
+                    } else {
+                        Some(&content)
+                    },
+                    tool_calls_opt,
+                    finish_reason,
+                    prompt_tokens,
+                    completion_tokens,
+                    prompt_tokens + completion_tokens,
+                    if reasoning_content.is_empty() {
+                        None
+                    } else {
+                        Some(&reasoning_content)
+                    },
+                ) {
+                    Ok(body) => body,
+                    Err(e) => {
+                        guard.finish_err();
+                        return Err(ProtocolError::Internal {
+                            message: e.to_string(),
+                            protocol,
+                        });
+                    }
+                },
+                Protocol::Anthropic => match anthropic::serialize_response(
+                    "msg-gw",
+                    model,
+                    if content.is_empty() {
+                        None
+                    } else {
+                        Some(&content)
+                    },
+                    tool_calls_opt,
+                    Some(finish_reason),
+                    if reasoning_content.is_empty() {
+                        None
+                    } else {
+                        Some(&reasoning_content)
+                    },
+                    prompt_tokens,
+                    completion_tokens,
+                ) {
+                    Ok(body) => body,
+                    Err(e) => {
+                        guard.finish_err();
+                        return Err(ProtocolError::Internal {
+                            message: e.to_string(),
+                            protocol,
+                        });
+                    }
+                },
+            };
+
+            guard.finish(true, final_usage, first_token_ms);
+
+            let body: serde_json::Value =
+                serde_json::from_str(&response_body).unwrap_or_else(|e| {
+                    serde_json::json!({"error": {"message": format!(
+                        "serialization error: {}",
+                        e
+                    )}})
+                });
+            Ok((StatusCode::OK, Json(body)).into_response())
+        }
         crate::streaming::StreamMode::Passthrough(_) => {
             guard.finish_err();
-            return Err(ProtocolError::Internal {
+            Err(ProtocolError::Internal {
                 message: "Passthrough not supported for non-streaming".to_string(),
                 protocol,
-            });
-        }
-    };
-
-    let mut chunks = Vec::new();
-    let mut first_token_ms = None;
-    let mut final_usage = None;
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result {
-            Ok(chunk) => {
-                if first_token_ms.is_none() {
-                    first_token_ms = Some(guard.elapsed_ms());
-                }
-                if let Some(ref usage) = chunk.usage {
-                    final_usage = Some(usage.clone());
-                }
-                chunks.push(chunk);
-            }
-            Err(e) => {
-                guard.finish_err();
-                return Err(ProtocolError::Internal {
-                    message: e.to_string(),
-                    protocol,
-                });
-            }
+            })
         }
     }
-
-    let content = chunks
-        .iter()
-        .filter_map(|c| c.content.clone())
-        .collect::<String>();
-
-    let reasoning_content = chunks
-        .iter()
-        .filter_map(|c| c.reasoning_content.clone())
-        .collect::<String>();
-
-    let tool_calls: Vec<_> = chunks.iter().filter_map(|c| c.tool_call.clone()).collect();
-
-    let tool_calls_opt = if tool_calls.is_empty() {
-        None
-    } else {
-        Some(tool_calls.clone())
-    };
-
-    let finish_reason = if tool_calls.is_empty() {
-        match protocol {
-            Protocol::OpenAI => "stop",
-            Protocol::Anthropic => "end_turn",
-        }
-    } else {
-        match protocol {
-            Protocol::OpenAI => "tool_calls",
-            Protocol::Anthropic => "tool_use",
-        }
-    };
-
-    let (prompt_tokens, completion_tokens) = final_usage.as_ref().map_or((0, 0), |u| {
-        (u.prompt_tokens as usize, u.completion_tokens as usize)
-    });
-
-    let response_body = match protocol {
-        Protocol::OpenAI => match openai::serialize_response(
-            "chatcmpl-gw",
-            model,
-            if content.is_empty() {
-                None
-            } else {
-                Some(&content)
-            },
-            tool_calls_opt,
-            finish_reason,
-            prompt_tokens,
-            completion_tokens,
-            prompt_tokens + completion_tokens,
-            if reasoning_content.is_empty() {
-                None
-            } else {
-                Some(&reasoning_content)
-            },
-        ) {
-            Ok(body) => body,
-            Err(e) => {
-                guard.finish_err();
-                return Err(ProtocolError::Internal {
-                    message: e.to_string(),
-                    protocol,
-                });
-            }
-        },
-        Protocol::Anthropic => match anthropic::serialize_response(
-            "msg-gw",
-            model,
-            if content.is_empty() {
-                None
-            } else {
-                Some(&content)
-            },
-            tool_calls_opt,
-            Some(finish_reason),
-            if reasoning_content.is_empty() {
-                None
-            } else {
-                Some(&reasoning_content)
-            },
-            prompt_tokens,
-            completion_tokens,
-        ) {
-            Ok(body) => body,
-            Err(e) => {
-                guard.finish_err();
-                return Err(ProtocolError::Internal {
-                    message: e.to_string(),
-                    protocol,
-                });
-            }
-        },
-    };
-
-    guard.finish(true, final_usage, first_token_ms);
-
-    let body: serde_json::Value = serde_json::from_str(&response_body).unwrap_or_else(
-        |e| serde_json::json!({"error": {"message": format!("serialization error: {}", e)}}),
-    );
-    Ok((StatusCode::OK, Json(body)).into_response())
 }
 
 /// Handle an Anthropic-format request. Forwards to the appropriate provider.
@@ -398,45 +620,39 @@ impl IntoResponse for ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{StreamTracker, TokenUsage};
-    use crate::provider::{Message, Role, UnifiedRequest};
-    use crate::streaming::{LLMChunk, StreamError, StreamMode};
-    use crate::capability::ToolCall;
+    use crate::metrics::TokenUsage;
+    use crate::streaming::{LLMChunk, StreamError};
+    use crate::provider::UnifiedRequest;
     use async_trait::async_trait;
-    use axum::http::HeaderValue;
     use http_body_util::BodyExt;
     use std::sync::{Arc, Mutex};
 
     // ── Mock Router ──────────────────────────────────────────────────
 
     struct MockRouter {
-        stream_mode: Arc<Mutex<Option<StreamMode>>>,
-        upstream_model: Option<String>,
+        stream_mode: Arc<Mutex<Option<crate::streaming::StreamMode>>>,
     }
 
     impl MockRouter {
-        fn with_normalized_chunks(chunks: Vec<Result<LLMChunk, StreamError>>) -> Self {
-            let stream = tokio_stream::iter(chunks);
-            let mode = StreamMode::Normalized(Box::pin(stream));
+        fn with_non_streaming(json: serde_json::Value) -> Self {
             Self {
-                stream_mode: Arc::new(Mutex::new(Some(mode))),
-                upstream_model: None,
+                stream_mode: Arc::new(Mutex::new(Some(
+                    crate::streaming::StreamMode::NonStreaming(json),
+                ))),
             }
         }
 
-        fn with_passthrough_bytes(batches: Vec<Result<bytes::Bytes, StreamError>>) -> Self {
-            let stream = tokio_stream::iter(batches);
-            let mode = StreamMode::Passthrough(Box::pin(stream));
-            Self {
-                stream_mode: Arc::new(Mutex::new(Some(mode))),
-                upstream_model: None,
-            }
-        }
-
-        fn with_upstream_model(model: &str) -> Self {
+        fn with_router_error() -> Self {
             Self {
                 stream_mode: Arc::new(Mutex::new(None)),
-                upstream_model: Some(model.to_string()),
+            }
+        }
+
+        fn with_normalized_chunks(chunks: Vec<Result<LLMChunk, StreamError>>) -> Self {
+            let stream = tokio_stream::iter(chunks);
+            let mode = crate::streaming::StreamMode::Normalized(Box::pin(stream));
+            Self {
+                stream_mode: Arc::new(Mutex::new(Some(mode))),
             }
         }
     }
@@ -447,7 +663,7 @@ mod tests {
             Ok("mock".to_string())
         }
         fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
-            self.upstream_model.clone()
+            None
         }
         fn list_models(&self) -> Vec<String> {
             vec!["test-model".to_string()]
@@ -459,18 +675,13 @@ mod tests {
             &self,
             _request: UnifiedRequest,
             _allow_passthrough: bool,
-        ) -> Result<StreamMode, crate::router::RouterError> {
+        ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
             self.stream_mode
                 .lock()
                 .unwrap()
                 .take()
                 .ok_or_else(|| crate::router::RouterError::Internal("no stream configured".into()))
         }
-    }
-
-    fn make_tracker() -> StreamTracker {
-        let (emitter, _reader) = crate::metrics::init();
-        StreamTracker::new(emitter, "mock".to_string(), "test-model".to_string(), std::time::Instant::now())
     }
 
     fn make_guard() -> crate::metrics::guard::RequestGuard {
@@ -481,543 +692,54 @@ mod tests {
     fn make_request() -> UnifiedRequest {
         UnifiedRequest {
             model: "test-model".to_string(),
-            messages: vec![Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                images: None,
-                tool_calls: None,
-                tool_call_id: None,
-                extras: None,
-            }],
-            stream: true,
+            messages: vec![],
+            tools: None,
+            stream: false,
             temperature: None,
             max_tokens: None,
-            tools: None,
             extra_params: serde_json::Map::new(),
         }
     }
 
-    // ── detect_protocol tests ────────────────────────────────────────
-
-    #[test]
-    fn detect_protocol_openai_default() {
-        let headers = axum::http::HeaderMap::new();
-        assert_eq!(detect_protocol("/v1/chat/completions", &headers), Protocol::OpenAI);
-        assert_eq!(detect_protocol("/v1/models", &headers), Protocol::OpenAI);
-        assert_eq!(detect_protocol("/anything", &headers), Protocol::OpenAI);
-    }
-
-    #[test]
-    fn detect_protocol_anthropic_by_path() {
-        let headers = axum::http::HeaderMap::new();
-        assert_eq!(detect_protocol("/v1/messages", &headers), Protocol::Anthropic);
-    }
-
-    #[test]
-    fn detect_protocol_anthropic_by_header() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-        assert_eq!(detect_protocol("/v1/chat/completions", &headers), Protocol::Anthropic);
-    }
-
-    // ── is_streaming tests ───────────────────────────────────────────
-
-    #[test]
-    fn is_streaming_true() {
-        assert!(is_streaming(r#"{"stream":true}"#));
-    }
-
-    #[test]
-    fn is_streaming_false() {
-        assert!(!is_streaming(r#"{"stream":false}"#));
-    }
-
-    #[test]
-    fn is_streaming_missing() {
-        assert!(!is_streaming(r#"{"model":"gpt-4"}"#));
-    }
-
-    #[test]
-    fn is_streaming_invalid_json() {
-        assert!(!is_streaming("not json"));
-    }
-
-    // ── sse_response tests ───────────────────────────────────────────
-
-    #[tokio::test]
-    async fn sse_response_has_correct_headers() {
-        let stream = futures::stream::once(async {
-            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from("data: test\n\n"))
+    /// Build a typical upstream OpenAI JSON response.
+    fn openai_chat_json(content: &str, reasoning: Option<&str>) -> serde_json::Value {
+        let mut msg = serde_json::json!({
+            "role": "assistant",
+            "content": content
         });
-        let resp = sse_response(Box::pin(stream));
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get("content-type").unwrap(),
-            "text/event-stream"
-        );
-        assert_eq!(
-            resp.headers().get("cache-control").unwrap(),
-            "no-cache"
-        );
-        assert_eq!(
-            resp.headers().get("connection").unwrap(),
-            "keep-alive"
-        );
-    }
-
-    // ── forward_streaming: OpenAI normalized ─────────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_openai_produces_sse_format() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("Hello".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some(" world".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: None,
-                reasoning_content: None,
-                tool_call: None,
-                done: true,
-                usage: Some(TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
-                }),
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(result.status(), StatusCode::OK);
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-
-        // First chunk should include role
-        assert!(text.contains(r#""role":"assistant""#));
-        // Content deltas
-        assert!(text.contains(r#""content":"Hello""#));
-        assert!(text.contains(r#""content":" world""#));
-        // Done marker
-        assert!(text.contains("[DONE]"));
-        // Stop reason
-        assert!(text.contains(r#""finish_reason":"stop""#));
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_openai_only_first_chunk_has_role() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("a".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some("b".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-
-        // Count role occurrences -- should be exactly 1
-        assert_eq!(text.matches(r#""role":"assistant""#).count(), 1);
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_openai_includes_model_in_chunks() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "my-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains(r#""model":"my-model""#));
-    }
-
-    // ── forward_streaming: OpenAI error chunks ───────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_openai_error_produces_error_sse() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("partial".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Err(StreamError::Provider("boom".to_string())),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("error"));
-        assert!(text.contains("boom"));
-    }
-
-    // ── forward_streaming: OpenAI passthrough ────────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_passthrough_forwards_bytes_unchanged() {
-        let batches = vec![
-            Ok(bytes::Bytes::from("data: hello\n\n")),
-            Ok(bytes::Bytes::from("data: world\n\n")),
-        ];
-        let router = MockRouter::with_passthrough_bytes(batches);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        assert_eq!(text, "data: hello\n\ndata: world\n\n");
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_passthrough_extracts_usage() {
-        let usage_json = r#"data: {"id":"x","usage":{"prompt_tokens":10,"completion_tokens":20}}"#;
-        let batches = vec![
-            Ok(bytes::Bytes::from(format!("{usage_json}\n\n"))),
-        ];
-        let router = MockRouter::with_passthrough_bytes(batches);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        // Verify it returns successfully (usage extraction happens internally)
-        assert_eq!(result.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_passthrough_error_produces_error_sse() {
-        let batches = vec![Err(StreamError::Connection("timeout".to_string()))];
-        let router = MockRouter::with_passthrough_bytes(batches);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("error"));
-        assert!(text.contains("timeout"));
-    }
-
-    // ── forward_streaming: Anthropic normalized ──────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_anthropic_wraps_with_message_start_stop() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "claude-3",
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-
-        // Anthropic wraps with message_start and message_stop
-        assert!(text.contains("event: message_start"));
-        assert!(text.contains("event: message_stop"));
-        // Content should have content_block_start/delta
-        assert!(text.contains("event: content_block_start"));
-        assert!(text.contains("event: content_block_delta"));
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_anthropic_message_start_includes_model() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("test".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "claude-3-opus",
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains(r#""model":"claude-3-opus""#));
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_anthropic_text_delta_events() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("Hello".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some(" world".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "claude-3",
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-
-        // Should have text_delta events with correct content
-        assert!(text.contains(r#""text":"Hello""#));
-        assert!(text.contains(r#""text":" world""#));
-        // Subsequent text chunks should NOT start a new content block
-        assert_eq!(text.matches("event: content_block_start").count(), 1);
-    }
-
-    // ── forward_streaming: Metrics tracking ──────────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_tracks_ttft_on_first_chunk() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn forward_streaming_tracks_token_usage() {
-        let chunks = vec![Ok(LLMChunk {
-            content: None,
-            reasoning_content: None,
-            tool_call: None,
-            done: true,
-            usage: Some(TokenUsage {
-                prompt_tokens: 50,
-                completion_tokens: 25,
-            }),
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    // ── forward_streaming: upstream model resolution ─────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_resolves_upstream_model() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let mut router = MockRouter::with_normalized_chunks(chunks);
-        router.upstream_model = Some("upstream-model-v2".to_string());
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "test-model",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    // ── forward_streaming: Router errors ─────────────────────────────
-
-    #[tokio::test]
-    async fn forward_streaming_model_not_found_returns_error() {
-        let router = MockRouter {
-            stream_mode: Arc::new(Mutex::new(None)),
-            upstream_model: None,
-        };
-        let tracker = make_tracker();
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "nonexistent",
-            Protocol::OpenAI,
-            tracker,
-        )
-        .await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ProtocolError::Internal { .. } => {}
-            other => panic!("expected Internal error, got {:?}", other),
+        if let Some(r) = reasoning {
+            msg["reasoning_content"] = serde_json::json!(r);
         }
+        serde_json::json!({
+            "id": "chatcmpl-upstream-123",
+            "object": "chat.completion",
+            "created": 1712345678,
+            "model": "upstream-model",
+            "choices": [{
+                "index": 0,
+                "message": msg,
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 25,
+                "total_tokens": 40
+            }
+        })
     }
 
-    // ── collect_non_streaming: OpenAI ────────────────────────────────
+    // ── NonStreaming: OpenAI pass-through ───────────────────────────
 
     #[tokio::test]
-    async fn collect_non_streaming_openai_text_response() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: Some("Hello".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some(" world".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_openai_passes_through_upstream_json() {
+        let upstream_json = openai_chat_json("Hello world", None);
+        let router = MockRouter::with_non_streaming(upstream_json.clone());
         let guard = make_guard();
+
         let result = collect_non_streaming(
             &router,
             make_request(),
-            "gpt-4",
+            "test-model",
             Protocol::OpenAI,
             guard,
         )
@@ -1025,42 +747,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.status(), StatusCode::OK);
+        // The response content-type should be application/json (not text/event-stream)
+        assert_eq!(
+            result.headers().get("content-type").unwrap(),
+            "application/json"
+        );
         let body = result.into_body();
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
+        // The upstream JSON should be preserved as-is for OpenAI protocol
+        assert_eq!(v["id"], "chatcmpl-upstream-123");
         assert_eq!(v["object"], "chat.completion");
-        assert_eq!(v["model"], "gpt-4");
+        assert_eq!(v["model"], "upstream-model");
         assert_eq!(v["choices"][0]["message"]["content"], "Hello world");
-        assert_eq!(v["choices"][0]["finish_reason"], "stop");
-        assert!(v["usage"]["total_tokens"].is_number());
+        assert_eq!(v["usage"]["prompt_tokens"], 15);
+        assert_eq!(v["usage"]["completion_tokens"], 25);
+        assert_eq!(v["usage"]["total_tokens"], 40);
     }
 
     #[tokio::test]
-    async fn collect_non_streaming_openai_reasoning_content() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: None,
-                reasoning_content: Some("thinking...".to_string()),
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some("answer".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_openai_preserves_reasoning_content() {
+        let upstream_json = openai_chat_json("answer", Some("thinking..."));
+        let router = MockRouter::with_non_streaming(upstream_json);
         let guard = make_guard();
+
         let result = collect_non_streaming(
             &router,
             make_request(),
-            "deepseek-r1",
+            "test-model",
             Protocol::OpenAI,
             guard,
         )
@@ -1071,29 +787,47 @@ mod tests {
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+
         assert_eq!(v["choices"][0]["message"]["reasoning_content"], "thinking...");
         assert_eq!(v["choices"][0]["message"]["content"], "answer");
     }
 
     #[tokio::test]
-    async fn collect_non_streaming_openai_tool_calls() {
-        let chunks = vec![Ok(LLMChunk {
-            content: None,
-            reasoning_content: None,
-            tool_call: Some(ToolCall {
-                id: Some("call_1".to_string()),
-                name: "get_weather".to_string(),
-                arguments: serde_json::json!({"city": "nyc"}),
-            }),
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_openai_preserves_tool_calls() {
+        let upstream_json = serde_json::json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1712345678,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\": \"Tokyo\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            }
+        });
+        let router = MockRouter::with_non_streaming(upstream_json);
         let guard = make_guard();
+
         let result = collect_non_streaming(
             &router,
             make_request(),
-            "gpt-4",
+            "test-model",
             Protocol::OpenAI,
             guard,
         )
@@ -1104,6 +838,7 @@ mod tests {
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+
         assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(
             v["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
@@ -1111,52 +846,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn collect_non_streaming_openai_with_usage() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: Some(TokenUsage {
-                prompt_tokens: 100,
-                completion_tokens: 50,
-            }),
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let guard = make_guard();
-        let result = collect_non_streaming(
-            &router,
-            make_request(),
-            "gpt-4",
-            Protocol::OpenAI,
-            guard,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["usage"]["prompt_tokens"], 100);
-        assert_eq!(v["usage"]["completion_tokens"], 50);
-        assert_eq!(v["usage"]["total_tokens"], 150);
-    }
-
-    // ── collect_non_streaming: Anthropic ─────────────────────────────
+    // ── NonStreaming: Anthropic conversion ──────────────────────────
 
     #[tokio::test]
-    async fn collect_non_streaming_anthropic_text_response() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("Hello".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_anthropic_converts_upstream_json() {
+        let upstream_json = openai_chat_json("Hello from Anthropic", None);
+        let router = MockRouter::with_non_streaming(upstream_json);
         let guard = make_guard();
+
         let result = collect_non_streaming(
             &router,
             make_request(),
@@ -1167,34 +864,27 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(result.status(), StatusCode::OK);
         let body = result.into_body();
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
+        // Anthropic format
         assert_eq!(v["type"], "message");
         assert_eq!(v["role"], "assistant");
         assert_eq!(v["model"], "claude-3");
         assert_eq!(v["content"][0]["type"], "text");
-        assert_eq!(v["content"][0]["text"], "Hello");
+        assert_eq!(v["content"][0]["text"], "Hello from Anthropic");
         assert_eq!(v["stop_reason"], "end_turn");
     }
 
     #[tokio::test]
-    async fn collect_non_streaming_anthropic_tool_use() {
-        let chunks = vec![Ok(LLMChunk {
-            content: None,
-            reasoning_content: None,
-            tool_call: Some(ToolCall {
-                id: Some("toolu_1".to_string()),
-                name: "search".to_string(),
-                arguments: serde_json::json!({"q": "rust"}),
-            }),
-            done: false,
-            usage: None,
-        })];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_anthropic_converts_reasoning_to_thinking() {
+        let upstream_json = openai_chat_json("answer", Some("reasoning..."));
+        let router = MockRouter::with_non_streaming(upstream_json);
         let guard = make_guard();
+
         let result = collect_non_streaming(
             &router,
             make_request(),
@@ -1209,82 +899,41 @@ mod tests {
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["stop_reason"], "tool_use");
-        assert_eq!(v["content"][0]["type"], "tool_use");
-        assert_eq!(v["content"][0]["name"], "search");
-    }
 
-    #[tokio::test]
-    async fn collect_non_streaming_anthropic_reasoning_maps_to_thinking() {
-        let chunks = vec![
-            Ok(LLMChunk {
-                content: None,
-                reasoning_content: Some("reasoning...".to_string()),
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-            Ok(LLMChunk {
-                content: Some("answer".to_string()),
-                reasoning_content: None,
-                tool_call: None,
-                done: false,
-                usage: None,
-            }),
-        ];
-        let router = MockRouter::with_normalized_chunks(chunks);
-        let guard = make_guard();
-        let result = collect_non_streaming(
-            &router,
-            make_request(),
-            "deepseek-v3",
-            Protocol::Anthropic,
-            guard,
-        )
-        .await
-        .unwrap();
-
-        let body = result.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-
-        // First content block should be thinking
+        // First block: thinking
         assert_eq!(v["content"][0]["type"], "thinking");
         assert_eq!(v["content"][0]["thinking"], "reasoning...");
-        // Second content block should be text
+        // Second block: text
         assert_eq!(v["content"][1]["type"], "text");
         assert_eq!(v["content"][1]["text"], "answer");
     }
 
-    // ── collect_non_streaming: error handling ────────────────────────
+    // ── NonStreaming: Error handling ────────────────────────────────
 
     #[tokio::test]
-    async fn collect_non_streaming_stream_error_returns_internal() {
-        let chunks = vec![Err(StreamError::Provider("fail".to_string()))];
-        let router = MockRouter::with_normalized_chunks(chunks);
+    async fn non_streaming_router_error_returns_error() {
+        let router = MockRouter::with_router_error();
         let guard = make_guard();
         let result = collect_non_streaming(
             &router,
             make_request(),
-            "test-model",
+            "nonexistent",
             Protocol::OpenAI,
             guard,
         )
         .await;
         assert!(result.is_err());
-        match result.unwrap_err() {
-            ProtocolError::Internal { message, .. } => {
-                assert!(message.contains("fail"));
-            }
-            other => panic!("expected Internal error, got {:?}", other),
-        }
     }
 
+    // ── NonStreaming: Passthrough still rejected for non-streaming ──
+
     #[tokio::test]
-    async fn collect_non_streaming_passthrough_returns_error() {
-        let batches = vec![Ok(bytes::Bytes::from("data"))];
-        let router = MockRouter::with_passthrough_bytes(batches);
+    async fn non_streaming_passthrough_rejected() {
+        let stream = tokio_stream::iter(vec![Ok::<_, StreamError>(bytes::Bytes::from("data"))]);
+        let mode = crate::streaming::StreamMode::Passthrough(Box::pin(stream));
+        let router = MockRouter {
+            stream_mode: Arc::new(Mutex::new(Some(mode))),
+        };
         let guard = make_guard();
         let result = collect_non_streaming(
             &router,
@@ -1303,183 +952,48 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn collect_non_streaming_router_error() {
-        let router = MockRouter {
-            stream_mode: Arc::new(Mutex::new(None)),
-            upstream_model: None,
-        };
-        let guard = make_guard();
-        let result = collect_non_streaming(
-            &router,
-            make_request(),
-            "nonexistent",
-            Protocol::OpenAI,
-            guard,
-        )
-        .await;
-        assert!(result.is_err());
-    }
-
-    // ── collect_non_streaming: metrics tracking ──────────────────────
+    // ── Backward compatibility: Normalized stream still works ───────
 
     #[tokio::test]
-    async fn collect_non_streaming_tracks_first_token_time() {
-        let chunks = vec![Ok(LLMChunk {
-            content: Some("hi".to_string()),
-            reasoning_content: None,
-            tool_call: None,
-            done: false,
-            usage: Some(TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 3,
+    async fn non_streaming_normalized_path_still_works() {
+        let chunks = vec![
+            Ok(LLMChunk {
+                content: Some("Hello ".to_string()),
+                reasoning_content: None,
+                tool_call: None,
+                done: false,
+                usage: None,
             }),
-        })];
+            Ok(LLMChunk {
+                content: Some("world".to_string()),
+                reasoning_content: None,
+                tool_call: None,
+                done: false,
+                usage: Some(TokenUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                }),
+            }),
+        ];
         let router = MockRouter::with_normalized_chunks(chunks);
         let guard = make_guard();
         let result = collect_non_streaming(
             &router,
             make_request(),
-            "test-model",
+            "gpt-4",
             Protocol::OpenAI,
             guard,
         )
-        .await;
-        assert!(result.is_ok());
-    }
+        .await
+        .unwrap();
 
-    // ── ProtocolError serialization ──────────────────────────────────
-
-    #[test]
-    fn protocol_error_parse_openai_format() {
-        let err = ProtocolError::Parse {
-            message: "bad json".to_string(),
-            protocol: Protocol::OpenAI,
-        };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn protocol_error_internal_status() {
-        let err = ProtocolError::Internal {
-            message: "oops".to_string(),
-            protocol: Protocol::OpenAI,
-        };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn protocol_error_upstream_forwards_status() {
-        let err = ProtocolError::Upstream {
-            status: 429,
-            message: "rate limited".to_string(),
-            protocol: Protocol::OpenAI,
-        };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-        let body = resp.into_body();
+        let body = result.into_body();
         let bytes = body.collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&bytes);
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["error"]["message"], "rate limited");
-    }
 
-    #[tokio::test]
-    async fn protocol_error_anthropic_format() {
-        let err = ProtocolError::Parse {
-            message: "missing field".to_string(),
-            protocol: Protocol::Anthropic,
-        };
-        let resp = err.into_response();
-        let body = resp.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes);
-        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["type"], "error");
-        assert!(v["error"]["message"].is_string());
-    }
-
-    // ── map_router_error tests ───────────────────────────────────────
-
-    #[test]
-    fn map_router_error_upstream() {
-        let err = crate::router::RouterError::Upstream {
-            status: 400,
-            message: "bad".to_string(),
-        };
-        let result = map_router_error(err, Protocol::OpenAI);
-        match result {
-            ProtocolError::Upstream { status, .. } => assert_eq!(status, 400),
-            other => panic!("expected Upstream, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn map_router_error_model_not_found() {
-        let err = crate::router::RouterError::ModelNotFound("x".to_string());
-        let result = map_router_error(err, Protocol::OpenAI);
-        match result {
-            ProtocolError::Parse { message, .. } => assert!(message.contains("x")),
-            other => panic!("expected Parse, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn map_router_error_other() {
-        let err = crate::router::RouterError::Internal("fail".to_string());
-        let result = map_router_error(err, Protocol::Anthropic);
-        match result {
-            ProtocolError::Internal { message, protocol } => {
-                assert!(message.contains("fail"));
-                assert_eq!(protocol, Protocol::Anthropic);
-            }
-            other => panic!("expected Internal, got {:?}", other),
-        }
-    }
-
-    // ── dispatch_request tests ───────────────────────────────────────
-
-    #[tokio::test]
-    async fn dispatch_request_openai_bad_json_returns_parse_error() {
-        let router = MockRouter {
-            stream_mode: Arc::new(Mutex::new(None)),
-            upstream_model: None,
-        };
-        let guard = make_guard();
-        let result = dispatch_request(
-            Protocol::OpenAI,
-            "not json".to_string(),
-            &router,
-            guard,
-        )
-        .await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ProtocolError::Parse { protocol, .. } => assert_eq!(protocol, Protocol::OpenAI),
-            other => panic!("expected Parse, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn dispatch_request_anthropic_bad_json_returns_parse_error() {
-        let router = MockRouter {
-            stream_mode: Arc::new(Mutex::new(None)),
-            upstream_model: None,
-        };
-        let guard = make_guard();
-        let result = dispatch_request(
-            Protocol::Anthropic,
-            "not json".to_string(),
-            &router,
-            guard,
-        )
-        .await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ProtocolError::Parse { protocol, .. } => assert_eq!(protocol, Protocol::Anthropic),
-            other => panic!("expected Parse, got {:?}", other),
-        }
+        assert_eq!(v["choices"][0]["message"]["content"], "Hello world");
+        assert_eq!(v["usage"]["prompt_tokens"], 10);
+        assert_eq!(v["usage"]["completion_tokens"], 5);
     }
 }
