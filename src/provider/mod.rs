@@ -249,6 +249,19 @@ pub trait Provider: Send + Sync {
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
     }
+
+    /// Forward a raw Responses API request body to an upstream that supports
+    /// the Responses API. Returns Passthrough (streaming) or NonStreaming.
+    /// Default: unsupported. Override in providers that speak Responses.
+    async fn responses_passthrough(
+        &self,
+        _body: String,
+        _stream: bool,
+    ) -> Result<StreamMode, ProviderError> {
+        Err(ProviderError::Internal(
+            "responses_passthrough not supported".into(),
+        ))
+    }
 }
 
 /// Errors that can occur when interacting with a provider.

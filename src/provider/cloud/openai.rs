@@ -92,6 +92,15 @@ impl OpenAIProvider {
         &self.client
     }
 
+    /// Target URL for Responses API: `{endpoint}/responses`.
+    #[must_use]
+    pub(crate) fn responses_target_url(&self) -> String {
+        format!(
+            "{}/responses",
+            self.config.endpoint.trim_end_matches('/')
+        )
+    }
+
     /// Build the OpenAI-compatible request body from a `UnifiedRequest`.
     #[must_use]
     pub fn build_request_body(&self, request: &UnifiedRequest) -> serde_json::Value {
@@ -468,6 +477,56 @@ impl Provider for OpenAIProvider {
                 .map_err(|e| ProviderError::Internal(e.to_string()))?;
 
             Ok(crate::streaming::StreamMode::NonStreaming(json_value))
+        }
+    }
+
+    async fn responses_passthrough(
+        &self,
+        body: String,
+        stream: bool,
+    ) -> Result<crate::streaming::StreamMode, ProviderError> {
+        let url = self.responses_target_url();
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json");
+
+        if !self.config.api_key.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        // Forward the raw body verbatim — do not re-serialize.
+        let builder = builder.body(body);
+        let resp = send_with_tcp_retry(builder).await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
+                ProviderError::Upstream {
+                    status: status.as_u16(),
+                    message: err_text,
+                }
+            } else {
+                ProviderError::Request(format!("provider error {status}: {err_text}"))
+            });
+        }
+
+        if stream {
+            let byte_stream = futures::StreamExt::map(resp.bytes_stream(), |res| {
+                res.map_err(|e| crate::streaming::StreamError::Connection(e.to_string()))
+            });
+            Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
+                byte_stream,
+            )))
+        } else {
+            let full = resp
+                .bytes()
+                .await
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
+            let json: serde_json::Value = serde_json::from_slice(&full)
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
+            Ok(crate::streaming::StreamMode::NonStreaming(json))
         }
     }
 
@@ -1166,6 +1225,19 @@ mod tests {
         let tools = body["tools"].as_array().expect("tools should be array");
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn responses_target_url_is_endpoint_slash_responses() {
+        let cfg = OpenAIConfig {
+            endpoint: "http://localhost:11434/v1".into(),
+            ..Default::default()
+        };
+        let p = OpenAIProvider::new(cfg);
+        assert_eq!(
+            p.responses_target_url(),
+            "http://localhost:11434/v1/responses"
+        );
     }
 
     #[test]
