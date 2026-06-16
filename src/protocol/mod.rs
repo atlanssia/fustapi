@@ -503,13 +503,178 @@ async fn responses_handler_impl(
         };
         dispatch_responses_stream_mode(mode, guard, protocol)
     } else {
-        // Conversion mode placeholder — filled in by a later task.
-        guard.finish_err();
-        Err(ProtocolError::Internal {
-            message: "Responses conversion not yet implemented".into(),
-            protocol,
-        })
+        // Conversion mode: Responses client → Chat Completions upstream.
+        // Boundary validation (stateless principle): the gateway does not retain
+        // conversation state, so stateful Responses features must be rejected
+        // with a clear 400 rather than silently dropped.
+        if has_previous_response_id(&body) || has_store_true(&body) {
+            guard.finish_err();
+            return Err(ProtocolError::Parse {
+                message: "previous_response_id / store not supported in conversion mode; \
+                          send full input array"
+                    .into(),
+                protocol,
+            });
+        }
+        if has_builtin_tools(&body) {
+            guard.finish_err();
+            return Err(ProtocolError::Parse {
+                message: "built-in tools (web_search/file_search/computer_use) not supported \
+                          by upstream"
+                    .into(),
+                protocol,
+            });
+        }
+        let unified = match responses::parse_responses_request(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                guard.finish_err();
+                return Err(ProtocolError::Parse {
+                    message: e.to_string(),
+                    protocol,
+                });
+            }
+        };
+        let unified = if let Some(up) = router.resolve_upstream_model(&model) {
+            let mut u = unified;
+            u.model = up;
+            u
+        } else {
+            unified
+        };
+        // Force Normalized (allow_passthrough=false): the upstream speaks Chat
+        // Completions, so we must convert every chunk to the Responses wire format.
+        let stream_mode = match router.chat_stream(unified, false).await {
+            Ok(m) => m,
+            Err(e) => {
+                guard.finish_err();
+                return Err(map_router_error(e, protocol));
+            }
+        };
+        dispatch_responses_conversion(stream_mode, &model, guard, protocol)
     }
+}
+
+/// Check whether the request body carries a non-null `previous_response_id`.
+fn has_previous_response_id(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("previous_response_id").map(|f| f.as_str().is_some()))
+        .unwrap_or(false)
+}
+
+/// Check whether the request body sets `store: true`.
+fn has_store_true(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("store").and_then(|f| f.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Check whether the request body's `tools` array contains any non-function
+/// (built-in) tool entry (`web_search_preview`, `file_search`, `computer_use`, ...).
+fn has_builtin_tools(body: &str) -> bool {
+    let Some(v) = serde_json::from_str::<serde_json::Value>(body).ok() else {
+        return false;
+    };
+    let Some(tools) = v.get("tools").and_then(|t| t.as_array()) else {
+        return false;
+    };
+    tools.iter().any(|t| {
+        t.get("type")
+            .and_then(|ty| ty.as_str())
+            .map(|s| s != "function")
+            .unwrap_or(true)
+    })
+}
+
+/// Dispatch a conversion-mode `StreamMode` to a final HTTP response.
+///
+/// * `Normalized` → SSE response using [`serializer::ResponsesStreamState`] (the
+///   conversion path always normalizes — see `chat_stream(.., false)`).
+/// * `NonStreaming` → JSON response via [`responses::serialize_responses_response`].
+/// * `Passthrough` → programming error; conversion forces Normalized.
+fn dispatch_responses_conversion(
+    stream_mode: crate::streaming::StreamMode,
+    model: &str,
+    guard: crate::metrics::guard::RequestGuard,
+    protocol: Protocol,
+) -> Result<Response, ProtocolError> {
+    use crate::streaming::StreamMode;
+    match stream_mode {
+        StreamMode::NonStreaming(json) => {
+            let usage = json.get("usage").map(|u| crate::metrics::TokenUsage {
+                prompt_tokens: u
+                    .get("prompt_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                completion_tokens: u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+            });
+            let body = match responses::serialize_responses_response(&json, model) {
+                Ok(v) => v,
+                Err(e) => {
+                    guard.finish_err();
+                    return Err(ProtocolError::Internal {
+                        message: e,
+                        protocol,
+                    });
+                }
+            };
+            let first_token_ms = Some(guard.elapsed_ms());
+            guard.finish(true, usage, first_token_ms);
+            Ok((StatusCode::OK, Json(body)).into_response())
+        }
+        StreamMode::Normalized(stream) => {
+            let tracker = guard.into_tracker();
+            Ok(responses_conversion_sse(stream, model, tracker))
+        }
+        StreamMode::Passthrough(_) => {
+            guard.finish_err();
+            Err(ProtocolError::Internal {
+                message: "conversion mode must not produce Passthrough".into(),
+                protocol,
+            })
+        }
+    }
+}
+
+/// Build an SSE response from a Normalized chunk stream, serializing each chunk
+/// via [`serializer::ResponsesStreamState`] (Responses `response.*` events).
+fn responses_conversion_sse(
+    stream: crate::streaming::LLMStream,
+    model: &str,
+    mut tracker: crate::metrics::StreamTracker,
+) -> Response {
+    let model_name = model.to_string();
+    let mut state = serializer::ResponsesStreamState::new();
+
+    let body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
+        Ok(chunk) => {
+            tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+            if let Some(usage) = &chunk.usage {
+                tracker.set_tokens(usage.clone());
+            }
+            let text = state.serialize_chunk(&chunk, &model_name);
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
+        }
+        Err(e) => {
+            tracker.set_success(false);
+            let err_json = serde_json::json!({
+                "error": {
+                    "message": e.to_string(),
+                    "type": "internal_error"
+                }
+            });
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                "data: {err_json}\n\n"
+            )))
+        }
+    });
+
+    stream_dispatch::sse_response(Box::pin(body_stream))
 }
 
 /// Extract the `model` field from a JSON body (best-effort, defaults to "unknown").
