@@ -79,7 +79,7 @@ fn normalized_sse_response(
                 // Unreachable: dispatch_request short-circuits Responses before any
                 // streaming path is reached. Real implementation lands in a later task.
                 Protocol::Responses => {
-                    unreachable!("Responses not yet wired into forward_streaming")
+                    unreachable!("Responses uses its own dispatch path (dispatch_responses_conversion)")
                 }
             };
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))

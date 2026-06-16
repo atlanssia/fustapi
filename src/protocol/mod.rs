@@ -136,8 +136,9 @@ async fn collect_non_streaming(
     protocol: Protocol,
     mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
-    // Responses non-streaming conversion is implemented in a later task;
-    // dispatch_request currently short-circuits Responses before reaching here.
+    // Defensive guard: Responses non-streaming is handled by
+    // dispatch_responses_conversion; dispatch_request routes Responses
+    // through responses_handler_impl, never reaching collect_non_streaming.
     if protocol == Protocol::Responses {
         guard.finish_err();
         return Err(ProtocolError::Internal {

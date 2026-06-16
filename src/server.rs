@@ -225,8 +225,9 @@ async fn messages_handler(
 
 /// POST /v1/responses — OpenAI Responses API endpoint.
 ///
-/// Currently only passthrough mode (provider supports `responses_passthrough`)
-/// is wired up; conversion mode is a placeholder filled in by a later task.
+/// Handles Responses API requests with dual-mode dispatch:
+/// - Passthrough (provider `supports_responses`): byte-level forwarding
+/// - Conversion (Chat Completions upstream): protocol translation
 async fn responses_handler(
     headers: axum::http::HeaderMap,
     body: String,
