@@ -229,10 +229,7 @@ impl ResponsesStreamState {
                 "item_id": "rs_1",
                 "delta": rc,
             });
-            out.push_str(&sse_event(
-                "response.reasoning_summary_text.delta",
-                &delta,
-            ));
+            out.push_str(&sse_event("response.reasoning_summary_text.delta", &delta));
         }
 
         // 3. content (non-empty).
@@ -586,7 +583,21 @@ pub fn serialize_openai_chunk(chunk: &LLMChunk, model: &str, include_role: bool)
 /// Scans SSE data lines for usage fields from upstream providers that
 /// support `stream_options.include_usage`. Maintains a small sliding
 /// buffer to handle cross-chunk boundaries.
-pub fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenUsage> {
+///
+/// Field names are selected by `protocol`: the Responses API emits
+/// `input_tokens`/`output_tokens`, while OpenAI/Anthropic emit
+/// `prompt_tokens`/`completion_tokens`. The returned `TokenUsage`
+/// always uses the canonical `prompt_tokens`/`completion_tokens` fields.
+pub fn extract_usage_from_sse_bytes(
+    buf: &[u8],
+    protocol: super::Protocol,
+) -> Option<crate::metrics::TokenUsage> {
+    let (prompt_key, completion_key) = match protocol {
+        super::Protocol::Responses => ("input_tokens", "output_tokens"),
+        super::Protocol::OpenAI | super::Protocol::Anthropic => {
+            ("prompt_tokens", "completion_tokens")
+        }
+    };
     let text = String::from_utf8_lossy(buf);
     for line in text.lines() {
         let data = line
@@ -601,11 +612,11 @@ pub fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenU
             && let Some(usage) = v.get("usage")
         {
             let pt = usage
-                .get("prompt_tokens")
+                .get(prompt_key)
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as u32;
             let ct = usage
-                .get("completion_tokens")
+                .get(completion_key)
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as u32;
             if pt > 0 || ct > 0 {
@@ -938,7 +949,7 @@ mod tests {
     fn extract_usage_valid() {
         let data =
             b"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}\n\n";
-        let usage = extract_usage_from_sse_bytes(data).unwrap();
+        let usage = extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
     }
@@ -946,33 +957,41 @@ mod tests {
     #[test]
     fn extract_usage_skips_done_marker() {
         let data = b"data: [DONE]\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_skips_no_usage() {
         let data = b"data: {\"id\":\"x\",\"choices\":[]}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_zero_tokens_skipped() {
         let data = b"data: {\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_invalid_json_skipped() {
         let data = b"data: {not json}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_from_multiple_lines() {
         let data = b"data: {\"id\":\"x\"}\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8}}\n\n";
-        let usage = extract_usage_from_sse_bytes(data).unwrap();
+        let usage = extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).unwrap();
         assert_eq!(usage.prompt_tokens, 5);
         assert_eq!(usage.completion_tokens, 8);
+    }
+
+    #[test]
+    fn extract_usage_handles_responses_field_names() {
+        let sse = b"data: {\"type\":\"response.completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":7,\"total_tokens\":12}}\n\n";
+        let u = extract_usage_from_sse_bytes(sse, crate::protocol::Protocol::Responses).unwrap();
+        assert_eq!(u.prompt_tokens, 5);
+        assert_eq!(u.completion_tokens, 7);
     }
 
     // ── ResponsesStreamState tests ──────────────────────────────────

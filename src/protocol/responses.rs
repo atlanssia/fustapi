@@ -79,11 +79,7 @@ pub fn parse_responses_request(json_str: &str) -> Result<UnifiedRequest, serde_j
 
     // function tools only — built-in tools (web_search, file_search, etc.)
     // are filtered here; the caller validates/rejects anything unexpected.
-    let tools: Vec<ToolDefinition> = req
-        .tools
-        .iter()
-        .filter_map(parse_function_tool)
-        .collect();
+    let tools: Vec<ToolDefinition> = req.tools.iter().filter_map(parse_function_tool).collect();
     let tools_opt = if tools.is_empty() { None } else { Some(tools) };
 
     // temperature / max_output_tokens are surfaced as first-class fields;
@@ -329,14 +325,8 @@ mod tests {
             {"role":"user","content":[{"type":"input_text","text":"q"}]},
             {"role":"assistant","content":[{"type":"output_text","text":"a"}]}]}"#;
         let req = parse_responses_request(body).unwrap();
-        assert!(req
-            .messages
-            .iter()
-            .any(|m| m.role == Role::User));
-        assert!(req
-            .messages
-            .iter()
-            .any(|m| m.role == Role::Assistant));
+        assert!(req.messages.iter().any(|m| m.role == Role::User));
+        assert!(req.messages.iter().any(|m| m.role == Role::Assistant));
     }
 
     #[test]

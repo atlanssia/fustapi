@@ -128,7 +128,9 @@ fn passthrough_sse_response(
                         let excess = buf.len() - 8192;
                         let _ = buf.split_to(excess);
                     }
-                    if let Some(usage) = super::serializer::extract_usage_from_sse_bytes(&buf) {
+                    if let Some(usage) =
+                        super::serializer::extract_usage_from_sse_bytes(&buf, protocol)
+                    {
                         tracker.set_tokens(usage);
                     }
                 }
