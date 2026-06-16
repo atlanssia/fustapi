@@ -4,6 +4,7 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod responses;
 pub mod serializer;
 mod stream_dispatch;
 
