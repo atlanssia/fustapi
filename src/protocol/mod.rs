@@ -62,10 +62,7 @@ pub async fn dispatch_request(
     match protocol {
         Protocol::OpenAI => openai_handler(body, router, guard).await,
         Protocol::Anthropic => anthropic_handler(body, router, guard).await,
-        Protocol::Responses => Err(ProtocolError::Internal {
-            message: "Responses API not yet implemented".to_string(),
-            protocol: Protocol::Responses,
-        }),
+        Protocol::Responses => responses_handler_impl(body, router, guard).await,
     }
 }
 
@@ -262,7 +259,9 @@ async fn collect_non_streaming(
                 }
                 // Unreachable: the Responses guard at the top of this function
                 // returns early. Real implementation lands in a later task.
-                Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
+                Protocol::Responses => {
+                    unreachable!("Responses guarded at collect_non_streaming entry")
+                }
             }
         }
         crate::streaming::StreamMode::Normalized(mut stream) => {
@@ -314,14 +313,18 @@ async fn collect_non_streaming(
                     Protocol::OpenAI => "stop",
                     Protocol::Anthropic => "end_turn",
                     // Unreachable: guarded at collect_non_streaming entry.
-                    Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
+                    Protocol::Responses => {
+                        unreachable!("Responses guarded at collect_non_streaming entry")
+                    }
                 }
             } else {
                 match protocol {
                     Protocol::OpenAI => "tool_calls",
                     Protocol::Anthropic => "tool_use",
                     // Unreachable: guarded at collect_non_streaming entry.
-                    Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
+                    Protocol::Responses => {
+                        unreachable!("Responses guarded at collect_non_streaming entry")
+                    }
                 }
             };
 
@@ -442,6 +445,134 @@ async fn anthropic_handler(
         .await
     } else {
         collect_non_streaming(router, unified_req, &model_name, Protocol::Anthropic, guard).await
+    }
+}
+
+/// Handle a Responses-format request.
+///
+/// * If the selected provider advertises `supports_responses`, forward the raw
+///   body via [`Provider::responses_passthrough`] (zero-parse, end-to-end
+///   passthrough — the upstream already speaks the Responses wire format).
+/// * Otherwise, fall through to a conversion placeholder (filled in by a later
+///   task). Until that lands, the placeholder surfaces a clear `Internal` error.
+async fn responses_handler_impl(
+    body: String,
+    router: &dyn Router,
+    mut guard: crate::metrics::guard::RequestGuard,
+) -> Result<Response, ProtocolError> {
+    let protocol = Protocol::Responses;
+    let model = extract_model_field(&body);
+
+    // Sync guard model with the upstream model for accurate metrics.
+    if let Some(upstream) = router.resolve_upstream_model(&model) {
+        guard.set_model(upstream);
+    }
+
+    let provider_name = match router.resolve(&model) {
+        Ok(n) => n,
+        Err(e) => {
+            guard.finish_err();
+            return Err(map_router_error(e, protocol));
+        }
+    };
+    let provider = match router.get_provider(&provider_name) {
+        Some(p) => p,
+        None => {
+            guard.finish_err();
+            return Err(ProtocolError::Internal {
+                message: "provider not found".into(),
+                protocol,
+            });
+        }
+    };
+
+    let caps = provider.capabilities();
+    let stream = extract_stream_field(&body);
+
+    if caps.supports_responses {
+        let mode = match provider.responses_passthrough(body, stream).await {
+            Ok(m) => m,
+            Err(e) => {
+                guard.finish_err();
+                return Err(map_router_error(
+                    crate::router::RouterError::from(e),
+                    protocol,
+                ));
+            }
+        };
+        dispatch_responses_stream_mode(mode, guard, protocol)
+    } else {
+        // Conversion mode placeholder — filled in by a later task.
+        guard.finish_err();
+        Err(ProtocolError::Internal {
+            message: "Responses conversion not yet implemented".into(),
+            protocol,
+        })
+    }
+}
+
+/// Extract the `model` field from a JSON body (best-effort, defaults to "unknown").
+fn extract_model_field(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("model")?.as_str().map(String::from))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Extract the `stream` flag from a JSON body (defaults to `false`).
+fn extract_stream_field(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("stream")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// Map a Responses `usage` object (`input_tokens` / `output_tokens`) into the
+/// gateway's [`TokenUsage`].
+fn extract_responses_usage(usage: &serde_json::Value) -> crate::metrics::TokenUsage {
+    crate::metrics::TokenUsage {
+        prompt_tokens: usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        completion_tokens: usage
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    }
+}
+
+/// Dispatch a Responses passthrough `StreamMode` to a final HTTP response.
+///
+/// * `NonStreaming` → return the upstream JSON as-is (with usage→metrics).
+/// * `Passthrough`  → forward as an SSE response through `stream_dispatch`.
+/// * `Normalized`   → programming error; passthrough must never normalize.
+fn dispatch_responses_stream_mode(
+    stream_mode: crate::streaming::StreamMode,
+    guard: crate::metrics::guard::RequestGuard,
+    protocol: Protocol,
+) -> Result<Response, ProtocolError> {
+    use crate::streaming::StreamMode;
+    match stream_mode {
+        StreamMode::NonStreaming(json) => {
+            let usage = json.get("usage").map(extract_responses_usage);
+            let elapsed_ms = guard.elapsed_ms();
+            guard.finish(true, usage, Some(elapsed_ms));
+            Ok((StatusCode::OK, Json(json)).into_response())
+        }
+        StreamMode::Passthrough(bytes) => {
+            let tracker = guard.into_tracker();
+            Ok(stream_dispatch::forward_as_sse_response(
+                StreamMode::Passthrough(bytes),
+                protocol,
+                "",
+                tracker,
+            ))
+        }
+        StreamMode::Normalized(_) => Err(ProtocolError::Internal {
+            message: "responses_passthrough returned Normalized".into(),
+            protocol,
+        }),
     }
 }
 
@@ -881,9 +1012,7 @@ mod tests {
         ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
             *self.allow_passthrough.lock().unwrap() = Some(allow_passthrough);
             Ok(crate::streaming::StreamMode::Normalized(Box::pin(
-                tokio_stream::iter(
-                    vec![] as Vec<Result<LLMChunk, StreamError>>,
-                ),
+                tokio_stream::iter(vec![] as Vec<Result<LLMChunk, StreamError>>),
             )))
         }
     }

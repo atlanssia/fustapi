@@ -131,9 +131,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     tool_calling: pt.tool_calling_mode(),
                     image_input: true,
                     streaming: true,
-                    supports_responses: cfg
-                        .supports_responses
-                        .unwrap_or(pt == Pt::OpenAI),
+                    supports_responses: cfg.supports_responses.unwrap_or(pt == Pt::OpenAI),
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
                 },
             ))

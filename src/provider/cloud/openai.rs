@@ -95,10 +95,7 @@ impl OpenAIProvider {
     /// Target URL for Responses API: `{endpoint}/responses`.
     #[must_use]
     pub(crate) fn responses_target_url(&self) -> String {
-        format!(
-            "{}/responses",
-            self.config.endpoint.trim_end_matches('/')
-        )
+        format!("{}/responses", self.config.endpoint.trim_end_matches('/'))
     }
 
     /// Build the OpenAI-compatible request body from a `UnifiedRequest`.

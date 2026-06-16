@@ -2923,3 +2923,16 @@ async fn messages_invalid_role() {
     let (status, _) = oneshot(req).await;
     assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
 }
+
+// ── Responses: route registration ──
+
+#[tokio::test]
+async fn responses_endpoint_exists() {
+    let req = json_request("POST", "/v1/responses", json!({"model":"x","input":"hi"}));
+    let (status, _body) = oneshot(req).await;
+    assert_ne!(
+        status,
+        StatusCode::NOT_FOUND,
+        "/v1/responses must be routed"
+    );
+}
