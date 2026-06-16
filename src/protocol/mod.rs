@@ -98,7 +98,7 @@ async fn forward_streaming(
     protocol: Protocol,
     mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
-    let allow_passthrough = true;
+    let allow_passthrough = protocol == Protocol::OpenAI;
 
     // Sync tracker model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
@@ -813,67 +813,86 @@ mod tests {
         }
     }
 
-    // ── Anthropic passthrough support ────────────────────────────────
+    // ── forward_streaming: protocol-aware passthrough ────────────────
+    //
+    // Passthrough requires upstream byte format == entry protocol format.
+    // All fustapi providers are OpenAI-compatible (CC-up), so:
+    //   - OpenAI entry  → passthrough OK (format match)
+    //   - Anthropic entry → must convert (would otherwise be mixed-format garbage:
+    //                          stream_dispatch wrap_anthropic on OpenAI bytes)
+
+    struct PassthroughCaptureRouter {
+        allow_passthrough: Arc<Mutex<Option<bool>>>,
+    }
+
+    #[async_trait]
+    impl crate::router::Router for PassthroughCaptureRouter {
+        fn resolve(&self, _model: &str) -> Result<String, crate::router::RouterError> {
+            Ok("mock".to_string())
+        }
+        fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
+            None
+        }
+        fn list_models(&self) -> Vec<String> {
+            vec!["test-model".to_string()]
+        }
+        fn list_providers(&self) -> Vec<String> {
+            vec!["mock".to_string()]
+        }
+        async fn chat_stream(
+            &self,
+            _request: UnifiedRequest,
+            allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
+            *self.allow_passthrough.lock().unwrap() = Some(allow_passthrough);
+            Ok(crate::streaming::StreamMode::Normalized(Box::pin(
+                tokio_stream::iter(
+                    vec![] as Vec<Result<LLMChunk, StreamError>>,
+                ),
+            )))
+        }
+    }
 
     #[tokio::test]
-    async fn streaming_anthropic_allows_passthrough_when_no_transforms() {
-        let captured: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
-        let c = captured.clone();
-
-        struct CaptureRouter {
-            captured: Arc<Mutex<Option<bool>>>,
-        }
-
-        #[async_trait]
-        impl crate::router::Router for CaptureRouter {
-            fn resolve(&self, _model: &str) -> Result<String, crate::router::RouterError> {
-                Ok("mock".to_string())
-            }
-            fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
-                None
-            }
-            fn list_models(&self) -> Vec<String> {
-                vec!["test-model".to_string()]
-            }
-            fn list_providers(&self) -> Vec<String> {
-                vec!["mock".to_string()]
-            }
-            async fn chat_stream(
-                &self,
-                _request: UnifiedRequest,
-                allow_passthrough: bool,
-            ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
-                *self.captured.lock().unwrap() = Some(allow_passthrough);
-                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
-                    tokio_stream::once(Ok::<_, crate::streaming::StreamError>(bytes::Bytes::from(
-                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
-                    ))),
-                )))
-            }
-        }
-
-        let router = CaptureRouter { captured: c };
-        let guard = make_guard();
-        let tracker = guard.into_tracker();
-
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "claude-3",
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await;
-
-        assert!(
-            result.is_ok(),
-            "forward_streaming should succeed for Anthropic when no transforms"
-        );
+    async fn forward_streaming_anthropic_forces_conversion_not_passthrough() {
+        let router = PassthroughCaptureRouter {
+            allow_passthrough: Arc::new(Mutex::new(None)),
+        };
+        let req = UnifiedRequest {
+            model: "m".into(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let tracker = make_guard().into_tracker();
+        let _ = forward_streaming(&router, req, "m", Protocol::Anthropic, tracker).await;
         assert_eq!(
-            *captured.lock().unwrap(),
-            Some(true),
-            "allow_passthrough should be true for Anthropic when no transforms needed"
+            *router.allow_passthrough.lock().unwrap(),
+            Some(false),
+            "Anthropic entry must force conversion (allow_passthrough=false), not passthrough"
         );
+    }
+
+    #[tokio::test]
+    async fn forward_streaming_openai_allows_passthrough() {
+        let router = PassthroughCaptureRouter {
+            allow_passthrough: Arc::new(Mutex::new(None)),
+        };
+        let req = UnifiedRequest {
+            model: "m".into(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let tracker = make_guard().into_tracker();
+        let _ = forward_streaming(&router, req, "m", Protocol::OpenAI, tracker).await;
+        assert_eq!(*router.allow_passthrough.lock().unwrap(), Some(true));
     }
 
     // ── Backward compatibility: Normalized stream still works ───────
