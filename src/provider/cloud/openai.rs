@@ -31,6 +31,10 @@ pub struct OpenAIConfig {
     pub image_input: bool,
     /// Streaming support override.
     pub streaming: bool,
+    /// Whether the upstream supports the Responses API natively.
+    /// Default `true` for the canonical `OpenAI` endpoint; `create_provider`
+    /// sets it explicitly per provider type.
+    pub supports_responses: bool,
     /// Balance strategy — selects the provider-specific balance query logic.
     pub balance_strategy: BalanceStrategy,
 }
@@ -60,6 +64,7 @@ impl Default for OpenAIConfig {
             tool_calling: ToolCallingSupport::Native,
             image_input: true,
             streaming: true,
+            supports_responses: true,
             balance_strategy: BalanceStrategy::Default,
         }
     }
@@ -471,6 +476,7 @@ impl Provider for OpenAIProvider {
             tool_calling: self.config.tool_calling,
             image_input: self.config.image_input,
             streaming: self.config.streaming,
+            supports_responses: self.config.supports_responses,
         }
     }
 
