@@ -505,10 +505,19 @@ async fn responses_handler_impl(
         dispatch_responses_stream_mode(mode, guard, protocol)
     } else {
         // Conversion mode: Responses client → Chat Completions upstream.
+        // Parse body once; thread through boundary checks + request parser
+        // to avoid re-parsing the same JSON (issue #1, code review).
+        let parsed: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                guard.finish_err();
+                return Err(ProtocolError::Parse { message: e.to_string(), protocol });
+            }
+        };
         // Boundary validation (stateless principle): the gateway does not retain
         // conversation state, so stateful Responses features must be rejected
         // with a clear 400 rather than silently dropped.
-        if has_previous_response_id(&body) || has_store_true(&body) {
+        if has_previous_response_id(&parsed) || has_store_true(&parsed) {
             guard.finish_err();
             return Err(ProtocolError::Parse {
                 message: "previous_response_id / store not supported in conversion mode; \
@@ -517,7 +526,7 @@ async fn responses_handler_impl(
                 protocol,
             });
         }
-        if has_builtin_tools(&body) {
+        if has_builtin_tools_value(&parsed) {
             guard.finish_err();
             return Err(ProtocolError::Parse {
                 message: "built-in tools (web_search/file_search/computer_use) not supported \
@@ -556,29 +565,27 @@ async fn responses_handler_impl(
     }
 }
 
-/// Check whether the request body carries a non-null `previous_response_id`.
-fn has_previous_response_id(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("previous_response_id").map(|f| f.as_str().is_some()))
+/// Check whether the pre-parsed request body carries a non-empty `previous_response_id`.
+fn has_previous_response_id(parsed: &serde_json::Value) -> bool {
+    parsed
+        .get("previous_response_id")
+        .and_then(|f| f.as_str())
+        .map(|s| !s.is_empty())
         .unwrap_or(false)
 }
 
-/// Check whether the request body sets `store: true`.
-fn has_store_true(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("store").and_then(|f| f.as_bool()))
+/// Check whether the pre-parsed request body sets `store: true`.
+fn has_store_true(parsed: &serde_json::Value) -> bool {
+    parsed
+        .get("store")
+        .and_then(|f| f.as_bool())
         .unwrap_or(false)
 }
 
-/// Check whether the request body's `tools` array contains any non-function
+/// Check whether the pre-parsed request body's `tools` array contains any non-function
 /// (built-in) tool entry (`web_search_preview`, `file_search`, `computer_use`, ...).
-fn has_builtin_tools(body: &str) -> bool {
-    let Some(v) = serde_json::from_str::<serde_json::Value>(body).ok() else {
-        return false;
-    };
-    let Some(tools) = v.get("tools").and_then(|t| t.as_array()) else {
+fn has_builtin_tools_value(parsed: &serde_json::Value) -> bool {
+    let Some(tools) = parsed.get("tools").and_then(|t| t.as_array()) else {
         return false;
     };
     tools.iter().any(|t| {

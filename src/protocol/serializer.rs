@@ -1020,4 +1020,107 @@ mod tests {
         assert!(out2.contains("response.output_text.delta"));
         assert!(out2.contains("response.completed"));
     }
+
+    #[test]
+    fn responses_stream_reasoning_then_text_transition() {
+        let mut s = ResponsesStreamState::new();
+        let rc = LLMChunk {
+            reasoning_content: Some("think".into()),
+            ..Default::default()
+        };
+        let out1 = s.serialize_chunk(&rc, "m");
+        assert!(out1.contains("response.created"));
+        assert!(
+            out1.contains("response.output_item.added"),
+            "must open reasoning item"
+        );
+        assert!(out1.contains("\"type\":\"reasoning\""));
+
+        let txt = LLMChunk {
+            content: Some("answer".into()),
+            ..Default::default()
+        };
+        let out2 = s.serialize_chunk(&txt, "m");
+        // reasoning item must be closed before message is opened
+        assert!(
+            out2.contains("response.output_item.done"),
+            "must close reasoning item before opening message: {out2}"
+        );
+        assert!(
+            out2.contains("response.output_item.added"),
+            "must open message item after reasoning: {out2}"
+        );
+    }
+
+    #[test]
+    fn responses_stream_function_call_item() {
+        let mut s = ResponsesStreamState::new();
+        let fc = LLMChunk {
+            tool_call: Some(crate::capability::ToolCall {
+                id: Some("tc_1".into()),
+                name: "get_weather".into(),
+                arguments: serde_json::json!({"city":"NYC"}),
+            }),
+            done: true,
+            usage: Some(crate::metrics::TokenUsage {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+            }),
+            ..Default::default()
+        };
+        let out = s.serialize_chunk(&fc, "m");
+        assert!(out.contains("response.created"));
+        assert!(out.contains("\"type\":\"function_call\""));
+        assert!(out.contains("response.function_call_arguments.delta"));
+        assert!(out.contains("response.function_call_arguments.done"));
+        assert!(out.contains("response.completed"));
+    }
+
+    #[test]
+    fn responses_stream_full_item_lifecycle() {
+        let mut s = ResponsesStreamState::new();
+        // reasoning
+        s.serialize_chunk(
+            &LLMChunk {
+                reasoning_content: Some("think".into()),
+                ..Default::default()
+            },
+            "m",
+        );
+        // text
+        s.serialize_chunk(
+            &LLMChunk {
+                content: Some("text".into()),
+                ..Default::default()
+            },
+            "m",
+        );
+        // tool call + done
+        let out = s.serialize_chunk(
+            &LLMChunk {
+                tool_call: Some(crate::capability::ToolCall {
+                    id: Some("tc_2".into()),
+                    name: "f".into(),
+                    arguments: serde_json::json!({}),
+                }),
+                done: true,
+                usage: Some(crate::metrics::TokenUsage {
+                    prompt_tokens: 3,
+                    completion_tokens: 2,
+                }),
+                ..Default::default()
+            },
+            "m",
+        );
+        assert!(out.contains("response.completed"));
+        assert!(out.contains("\"type\":\"function_call\""));
+        let items: Vec<&str> = out
+            .lines()
+            .filter(|l| l.contains("response.output_item.done"))
+            .collect();
+        assert!(
+            !items.is_empty(),
+            "must close at least one output item: {out}"
+        );
+    }
 }
