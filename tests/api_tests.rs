@@ -2923,3 +2923,108 @@ async fn messages_invalid_role() {
     let (status, _) = oneshot(req).await;
     assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
 }
+
+// ── Responses: route registration ──
+
+#[tokio::test]
+async fn responses_endpoint_exists() {
+    let req = json_request("POST", "/v1/responses", json!({"model":"x","input":"hi"}));
+    let (status, _body) = oneshot(req).await;
+    assert_ne!(
+        status,
+        StatusCode::NOT_FOUND,
+        "/v1/responses must be routed"
+    );
+}
+
+// ── Responses: boundary validation (stateless conversion mode) ──
+//
+// These tests register a chat-completions provider (supports_responses=false)
+// so the handler reaches the conversion branch where the boundary checks fire.
+
+/// Build a shared app with a registered omlx provider + route for "test-model".
+async fn app_with_conversion_provider() -> Router {
+    let mut app = shared_app();
+    let req = json_request(
+        "POST",
+        "/api/providers",
+        json!({
+            "name": "conv-test-p",
+            "type": "omlx",
+            "endpoint": "http://localhost:8000/v1"
+        }),
+    );
+    let (status, _) = oneshot_shared(&mut app, req).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let req = json_request(
+        "POST",
+        "/api/routes",
+        json!({"model": "test-model", "providers": ["conv-test-p"]}),
+    );
+    let (status, body) = oneshot_shared(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    app
+}
+
+#[tokio::test]
+async fn responses_previous_response_id_rejected() {
+    let mut app = app_with_conversion_provider().await;
+    let req = json_request(
+        "POST",
+        "/v1/responses",
+        json!({"model":"test-model","input":"hi","previous_response_id":"resp_abc"}),
+    );
+    let (status, body) = oneshot_shared(&mut app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("previous_response_id") || body.contains("input"),
+        "error message should mention previous_response_id or input: {body}"
+    );
+}
+
+#[tokio::test]
+async fn responses_store_true_rejected() {
+    let mut app = app_with_conversion_provider().await;
+    let req = json_request(
+        "POST",
+        "/v1/responses",
+        json!({"model":"test-model","input":"hi","store":true}),
+    );
+    let (status, body) = oneshot_shared(&mut app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("store"),
+        "error message should mention store: {body}"
+    );
+}
+
+#[tokio::test]
+async fn responses_builtin_tool_rejected() {
+    let mut app = app_with_conversion_provider().await;
+    let req = json_request(
+        "POST",
+        "/v1/responses",
+        json!({"model":"test-model","input":"hi","tools":[{"type":"web_search_preview"}]}),
+    );
+    let (status, _body) = oneshot_shared(&mut app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn responses_function_tool_passes_boundary() {
+    // Function tools are valid; the boundary check must not fire. The request
+    // will subsequently fail when the (non-existent) omlx endpoint is hit, but
+    // that failure must NOT be a 400 boundary rejection.
+    let mut app = app_with_conversion_provider().await;
+    let req = json_request(
+        "POST",
+        "/v1/responses",
+        json!({"model":"test-model","input":"hi","tools":[{"type":"function","name":"f","parameters":{}}]}),
+    );
+    let (status, body) = oneshot_shared(&mut app, req).await;
+    assert_ne!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "function tools must not be rejected by the boundary check: {body}"
+    );
+}

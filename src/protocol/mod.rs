@@ -4,6 +4,7 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod responses;
 pub mod serializer;
 mod stream_dispatch;
 
@@ -37,12 +38,15 @@ fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
 pub enum Protocol {
     OpenAI,
     Anthropic,
+    Responses,
 }
 
 /// Detect protocol from request path and headers.
 #[must_use]
 pub fn detect_protocol(path: &str, headers: &axum::http::HeaderMap) -> Protocol {
-    if path.starts_with("/v1/messages") || headers.get("anthropic-version").is_some() {
+    if path.starts_with("/v1/responses") {
+        Protocol::Responses
+    } else if path.starts_with("/v1/messages") || headers.get("anthropic-version").is_some() {
         Protocol::Anthropic
     } else {
         Protocol::OpenAI // default for /v1/ and all other paths
@@ -59,6 +63,7 @@ pub async fn dispatch_request(
     match protocol {
         Protocol::OpenAI => openai_handler(body, router, guard).await,
         Protocol::Anthropic => anthropic_handler(body, router, guard).await,
+        Protocol::Responses => responses_handler_impl(body, router, guard).await,
     }
 }
 
@@ -98,7 +103,7 @@ async fn forward_streaming(
     protocol: Protocol,
     mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
-    let allow_passthrough = true;
+    let allow_passthrough = protocol == Protocol::OpenAI;
 
     // Sync tracker model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
@@ -131,6 +136,16 @@ async fn collect_non_streaming(
     protocol: Protocol,
     mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
+    // Responses non-streaming conversion is implemented in a later task;
+    // dispatch_request currently short-circuits Responses before reaching here.
+    if protocol == Protocol::Responses {
+        guard.finish_err();
+        return Err(ProtocolError::Internal {
+            message: "Responses API not yet implemented".to_string(),
+            protocol: Protocol::Responses,
+        });
+    }
+
     // Sync guard model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
         guard.set_model(upstream);
@@ -243,6 +258,11 @@ async fn collect_non_streaming(
                         .expect("serialize_response produced invalid JSON — this is a bug");
                     Ok((StatusCode::OK, Json(body)).into_response())
                 }
+                // Unreachable: the Responses guard at the top of this function
+                // returns early. Real implementation lands in a later task.
+                Protocol::Responses => {
+                    unreachable!("Responses guarded at collect_non_streaming entry")
+                }
             }
         }
         crate::streaming::StreamMode::Normalized(mut stream) => {
@@ -293,11 +313,19 @@ async fn collect_non_streaming(
                 match protocol {
                     Protocol::OpenAI => "stop",
                     Protocol::Anthropic => "end_turn",
+                    // Unreachable: guarded at collect_non_streaming entry.
+                    Protocol::Responses => {
+                        unreachable!("Responses guarded at collect_non_streaming entry")
+                    }
                 }
             } else {
                 match protocol {
                     Protocol::OpenAI => "tool_calls",
                     Protocol::Anthropic => "tool_use",
+                    // Unreachable: guarded at collect_non_streaming entry.
+                    Protocol::Responses => {
+                        unreachable!("Responses guarded at collect_non_streaming entry")
+                    }
                 }
             };
 
@@ -361,6 +389,10 @@ async fn collect_non_streaming(
                         });
                     }
                 },
+                // Unreachable: guarded at collect_non_streaming entry.
+                Protocol::Responses => {
+                    unreachable!("Responses guarded at collect_non_streaming entry")
+                }
             };
 
             guard.finish(true, final_usage, first_token_ms);
@@ -417,6 +449,296 @@ async fn anthropic_handler(
     }
 }
 
+/// Handle a Responses-format request.
+///
+/// * If the selected provider advertises `supports_responses`, forward the raw
+///   body via [`Provider::responses_passthrough`] (zero-parse, end-to-end
+///   passthrough — the upstream already speaks the Responses wire format).
+/// * Otherwise, fall through to a conversion placeholder (filled in by a later
+///   task). Until that lands, the placeholder surfaces a clear `Internal` error.
+async fn responses_handler_impl(
+    body: String,
+    router: &dyn Router,
+    mut guard: crate::metrics::guard::RequestGuard,
+) -> Result<Response, ProtocolError> {
+    let protocol = Protocol::Responses;
+    let model = extract_model_field(&body);
+
+    // Sync guard model with the upstream model for accurate metrics.
+    if let Some(upstream) = router.resolve_upstream_model(&model) {
+        guard.set_model(upstream);
+    }
+
+    let provider_name = match router.resolve(&model) {
+        Ok(n) => n,
+        Err(e) => {
+            guard.finish_err();
+            return Err(map_router_error(e, protocol));
+        }
+    };
+    let provider = match router.get_provider(&provider_name) {
+        Some(p) => p,
+        None => {
+            guard.finish_err();
+            return Err(ProtocolError::Internal {
+                message: "provider not found".into(),
+                protocol,
+            });
+        }
+    };
+
+    let caps = provider.capabilities();
+    let stream = extract_stream_field(&body);
+
+    if caps.supports_responses {
+        let mode = match provider.responses_passthrough(body, stream).await {
+            Ok(m) => m,
+            Err(e) => {
+                guard.finish_err();
+                return Err(map_router_error(
+                    crate::router::RouterError::from(e),
+                    protocol,
+                ));
+            }
+        };
+        dispatch_responses_stream_mode(mode, guard, protocol)
+    } else {
+        // Conversion mode: Responses client → Chat Completions upstream.
+        // Boundary validation (stateless principle): the gateway does not retain
+        // conversation state, so stateful Responses features must be rejected
+        // with a clear 400 rather than silently dropped.
+        if has_previous_response_id(&body) || has_store_true(&body) {
+            guard.finish_err();
+            return Err(ProtocolError::Parse {
+                message: "previous_response_id / store not supported in conversion mode; \
+                          send full input array"
+                    .into(),
+                protocol,
+            });
+        }
+        if has_builtin_tools(&body) {
+            guard.finish_err();
+            return Err(ProtocolError::Parse {
+                message: "built-in tools (web_search/file_search/computer_use) not supported \
+                          by upstream"
+                    .into(),
+                protocol,
+            });
+        }
+        let unified = match responses::parse_responses_request(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                guard.finish_err();
+                return Err(ProtocolError::Parse {
+                    message: e.to_string(),
+                    protocol,
+                });
+            }
+        };
+        let unified = if let Some(up) = router.resolve_upstream_model(&model) {
+            let mut u = unified;
+            u.model = up;
+            u
+        } else {
+            unified
+        };
+        // Force Normalized (allow_passthrough=false): the upstream speaks Chat
+        // Completions, so we must convert every chunk to the Responses wire format.
+        let stream_mode = match router.chat_stream(unified, false).await {
+            Ok(m) => m,
+            Err(e) => {
+                guard.finish_err();
+                return Err(map_router_error(e, protocol));
+            }
+        };
+        dispatch_responses_conversion(stream_mode, &model, guard, protocol)
+    }
+}
+
+/// Check whether the request body carries a non-null `previous_response_id`.
+fn has_previous_response_id(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("previous_response_id").map(|f| f.as_str().is_some()))
+        .unwrap_or(false)
+}
+
+/// Check whether the request body sets `store: true`.
+fn has_store_true(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("store").and_then(|f| f.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Check whether the request body's `tools` array contains any non-function
+/// (built-in) tool entry (`web_search_preview`, `file_search`, `computer_use`, ...).
+fn has_builtin_tools(body: &str) -> bool {
+    let Some(v) = serde_json::from_str::<serde_json::Value>(body).ok() else {
+        return false;
+    };
+    let Some(tools) = v.get("tools").and_then(|t| t.as_array()) else {
+        return false;
+    };
+    tools.iter().any(|t| {
+        t.get("type")
+            .and_then(|ty| ty.as_str())
+            .map(|s| s != "function")
+            .unwrap_or(true)
+    })
+}
+
+/// Dispatch a conversion-mode `StreamMode` to a final HTTP response.
+///
+/// * `Normalized` → SSE response using [`serializer::ResponsesStreamState`] (the
+///   conversion path always normalizes — see `chat_stream(.., false)`).
+/// * `NonStreaming` → JSON response via [`responses::serialize_responses_response`].
+/// * `Passthrough` → programming error; conversion forces Normalized.
+fn dispatch_responses_conversion(
+    stream_mode: crate::streaming::StreamMode,
+    model: &str,
+    guard: crate::metrics::guard::RequestGuard,
+    protocol: Protocol,
+) -> Result<Response, ProtocolError> {
+    use crate::streaming::StreamMode;
+    match stream_mode {
+        StreamMode::NonStreaming(json) => {
+            let usage = json.get("usage").map(|u| crate::metrics::TokenUsage {
+                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                completion_tokens: u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+            });
+            let body = match responses::serialize_responses_response(&json, model) {
+                Ok(v) => v,
+                Err(e) => {
+                    guard.finish_err();
+                    return Err(ProtocolError::Internal {
+                        message: e,
+                        protocol,
+                    });
+                }
+            };
+            let first_token_ms = Some(guard.elapsed_ms());
+            guard.finish(true, usage, first_token_ms);
+            Ok((StatusCode::OK, Json(body)).into_response())
+        }
+        StreamMode::Normalized(stream) => {
+            let tracker = guard.into_tracker();
+            Ok(responses_conversion_sse(stream, model, tracker))
+        }
+        StreamMode::Passthrough(_) => {
+            guard.finish_err();
+            Err(ProtocolError::Internal {
+                message: "conversion mode must not produce Passthrough".into(),
+                protocol,
+            })
+        }
+    }
+}
+
+/// Build an SSE response from a Normalized chunk stream, serializing each chunk
+/// via [`serializer::ResponsesStreamState`] (Responses `response.*` events).
+fn responses_conversion_sse(
+    stream: crate::streaming::LLMStream,
+    model: &str,
+    mut tracker: crate::metrics::StreamTracker,
+) -> Response {
+    let model_name = model.to_string();
+    let mut state = serializer::ResponsesStreamState::new();
+
+    let body_stream = futures::StreamExt::map(stream, move |chunk_result| match chunk_result {
+        Ok(chunk) => {
+            tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
+            if let Some(usage) = &chunk.usage {
+                tracker.set_tokens(usage.clone());
+            }
+            let text = state.serialize_chunk(&chunk, &model_name);
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
+        }
+        Err(e) => {
+            tracker.set_success(false);
+            let err_json = serde_json::json!({
+                "error": {
+                    "message": e.to_string(),
+                    "type": "internal_error"
+                }
+            });
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                "data: {err_json}\n\n"
+            )))
+        }
+    });
+
+    stream_dispatch::sse_response(Box::pin(body_stream))
+}
+
+/// Extract the `model` field from a JSON body (best-effort, defaults to "unknown").
+fn extract_model_field(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("model")?.as_str().map(String::from))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Extract the `stream` flag from a JSON body (defaults to `false`).
+fn extract_stream_field(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("stream")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// Map a Responses `usage` object (`input_tokens` / `output_tokens`) into the
+/// gateway's [`TokenUsage`].
+fn extract_responses_usage(usage: &serde_json::Value) -> crate::metrics::TokenUsage {
+    crate::metrics::TokenUsage {
+        prompt_tokens: usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        completion_tokens: usage
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    }
+}
+
+/// Dispatch a Responses passthrough `StreamMode` to a final HTTP response.
+///
+/// * `NonStreaming` → return the upstream JSON as-is (with usage→metrics).
+/// * `Passthrough`  → forward as an SSE response through `stream_dispatch`.
+/// * `Normalized`   → programming error; passthrough must never normalize.
+fn dispatch_responses_stream_mode(
+    stream_mode: crate::streaming::StreamMode,
+    guard: crate::metrics::guard::RequestGuard,
+    protocol: Protocol,
+) -> Result<Response, ProtocolError> {
+    use crate::streaming::StreamMode;
+    match stream_mode {
+        StreamMode::NonStreaming(json) => {
+            let usage = json.get("usage").map(extract_responses_usage);
+            let elapsed_ms = guard.elapsed_ms();
+            guard.finish(true, usage, Some(elapsed_ms));
+            Ok((StatusCode::OK, Json(json)).into_response())
+        }
+        StreamMode::Passthrough(bytes) => {
+            let tracker = guard.into_tracker();
+            Ok(stream_dispatch::forward_as_sse_response(
+                StreamMode::Passthrough(bytes),
+                protocol,
+                "",
+                tracker,
+            ))
+        }
+        StreamMode::Normalized(_) => Err(ProtocolError::Internal {
+            message: "responses_passthrough returned Normalized".into(),
+            protocol,
+        }),
+    }
+}
+
 /// Error type for protocol dispatch failures.
 #[derive(Debug)]
 pub enum ProtocolError {
@@ -466,6 +788,13 @@ impl IntoResponse for ProtocolError {
                 "type": "error",
                 "error": {
                     "type": if status.is_client_error() { "invalid_request_error" } else { "api_error" },
+                    "message": error_msg
+                }
+            }),
+            // Responses follows the OpenAI error envelope shape.
+            Protocol::Responses => serde_json::json!({
+                "error": {
+                    "type": if status.is_client_error() { "invalid_request_error" } else { "server_error" },
                     "message": error_msg
                 }
             }),
@@ -813,66 +1142,107 @@ mod tests {
         }
     }
 
-    // ── Anthropic passthrough support ────────────────────────────────
+    // ── forward_streaming: protocol-aware passthrough ────────────────
+    //
+    // Passthrough requires upstream byte format == entry protocol format.
+    // All fustapi providers are OpenAI-compatible (CC-up), so:
+    //   - OpenAI entry  → passthrough OK (format match)
+    //   - Anthropic entry → must convert (would otherwise be mixed-format garbage:
+    //                          stream_dispatch wrap_anthropic on OpenAI bytes)
+
+    struct PassthroughCaptureRouter {
+        allow_passthrough: Arc<Mutex<Option<bool>>>,
+    }
+
+    #[async_trait]
+    impl crate::router::Router for PassthroughCaptureRouter {
+        fn resolve(&self, _model: &str) -> Result<String, crate::router::RouterError> {
+            Ok("mock".to_string())
+        }
+        fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
+            None
+        }
+        fn list_models(&self) -> Vec<String> {
+            vec!["test-model".to_string()]
+        }
+        fn list_providers(&self) -> Vec<String> {
+            vec!["mock".to_string()]
+        }
+        async fn chat_stream(
+            &self,
+            _request: UnifiedRequest,
+            allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
+            *self.allow_passthrough.lock().unwrap() = Some(allow_passthrough);
+            Ok(crate::streaming::StreamMode::Normalized(Box::pin(
+                tokio_stream::iter(vec![] as Vec<Result<LLMChunk, StreamError>>),
+            )))
+        }
+    }
 
     #[tokio::test]
-    async fn streaming_anthropic_allows_passthrough_when_no_transforms() {
-        let captured: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
-        let c = captured.clone();
+    async fn forward_streaming_anthropic_forces_conversion_not_passthrough() {
+        let router = PassthroughCaptureRouter {
+            allow_passthrough: Arc::new(Mutex::new(None)),
+        };
+        let req = UnifiedRequest {
+            model: "m".into(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let tracker = make_guard().into_tracker();
+        let _ = forward_streaming(&router, req, "m", Protocol::Anthropic, tracker).await;
+        assert_eq!(
+            *router.allow_passthrough.lock().unwrap(),
+            Some(false),
+            "Anthropic entry must force conversion (allow_passthrough=false), not passthrough"
+        );
+    }
 
-        struct CaptureRouter {
-            captured: Arc<Mutex<Option<bool>>>,
-        }
+    #[tokio::test]
+    async fn forward_streaming_openai_allows_passthrough() {
+        let router = PassthroughCaptureRouter {
+            allow_passthrough: Arc::new(Mutex::new(None)),
+        };
+        let req = UnifiedRequest {
+            model: "m".into(),
+            messages: vec![],
+            tools: None,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+            extra_params: serde_json::Map::new(),
+        };
+        let tracker = make_guard().into_tracker();
+        let _ = forward_streaming(&router, req, "m", Protocol::OpenAI, tracker).await;
+        assert_eq!(*router.allow_passthrough.lock().unwrap(), Some(true));
+    }
 
-        #[async_trait]
-        impl crate::router::Router for CaptureRouter {
-            fn resolve(&self, _model: &str) -> Result<String, crate::router::RouterError> {
-                Ok("mock".to_string())
-            }
-            fn resolve_upstream_model(&self, _model: &str) -> Option<String> {
-                None
-            }
-            fn list_models(&self) -> Vec<String> {
-                vec!["test-model".to_string()]
-            }
-            fn list_providers(&self) -> Vec<String> {
-                vec!["mock".to_string()]
-            }
-            async fn chat_stream(
-                &self,
-                _request: UnifiedRequest,
-                allow_passthrough: bool,
-            ) -> Result<crate::streaming::StreamMode, crate::router::RouterError> {
-                *self.captured.lock().unwrap() = Some(allow_passthrough);
-                Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
-                    tokio_stream::once(Ok::<_, crate::streaming::StreamError>(bytes::Bytes::from(
-                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
-                    ))),
-                )))
-            }
-        }
+    // ── detect_protocol: /v1/responses routing ──────────────────────
 
-        let router = CaptureRouter { captured: c };
-        let guard = make_guard();
-        let tracker = guard.into_tracker();
+    #[test]
+    fn detect_protocol_responses_path() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            detect_protocol("/v1/responses", &headers),
+            Protocol::Responses
+        );
+    }
 
-        let result = forward_streaming(
-            &router,
-            make_request(),
-            "claude-3",
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await;
-
-        assert!(
-            result.is_ok(),
-            "forward_streaming should succeed for Anthropic when no transforms"
+    #[test]
+    fn detect_protocol_responses_does_not_clobber_others() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            detect_protocol("/v1/chat/completions", &headers),
+            Protocol::OpenAI
         );
         assert_eq!(
-            *captured.lock().unwrap(),
-            Some(true),
-            "allow_passthrough should be true for Anthropic when no transforms needed"
+            detect_protocol("/v1/messages", &headers),
+            Protocol::Anthropic
         );
     }
 

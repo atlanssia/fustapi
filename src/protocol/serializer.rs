@@ -147,6 +147,330 @@ impl AnthropicStreamState {
     }
 }
 
+/// State machine for converting a normalized `LLMChunk` stream into
+/// OpenAI Responses API (`response.*`) SSE events.
+///
+/// Mirrors [`AnthropicStreamState`]'s role for the Anthropic protocol. The
+/// Responses protocol requires explicit output-item / content-part lifecycle
+/// events (`output_item.added`, `content_part.added`, `output_text.delta`,
+/// `output_item.done`, ...) around text, reasoning, and function-call items.
+///
+/// This struct tracks which items/parts are open so they are closed in the
+/// correct order when transitioning between block types or when the stream
+/// terminates.
+pub struct ResponsesStreamState {
+    started: bool,
+    message_open: bool,
+    text_part_open: bool,
+    reasoning_open: bool,
+    usage: Option<crate::metrics::TokenUsage>,
+    response_id: String,
+}
+
+impl Default for ResponsesStreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ResponsesStreamState {
+    pub fn new() -> Self {
+        Self {
+            started: false,
+            message_open: false,
+            text_part_open: false,
+            reasoning_open: false,
+            usage: None,
+            response_id: format!("resp_{}", short_id()),
+        }
+    }
+
+    /// Serialize an `LLMChunk` into Responses API SSE events, managing the
+    /// output-item / content-part lifecycle. Returns the SSE text (one or
+    /// more `event: / data:` lines).
+    pub fn serialize_chunk(&mut self, chunk: &LLMChunk, model: &str) -> String {
+        let mut out = String::new();
+
+        // 1. First chunk: emit response.created once.
+        if !self.started {
+            let created = serde_json::json!({
+                "type": "response.created",
+                "response": {
+                    "id": self.response_id,
+                    "object": "response",
+                    "status": "in_progress",
+                    "model": model,
+                }
+            });
+            out.push_str(&sse_event("response.created", &created));
+            self.started = true;
+        }
+
+        // 2. reasoning_content (non-empty).
+        if let Some(ref rc) = chunk.reasoning_content
+            && !rc.is_empty()
+        {
+            // Close any open text_part / message before reasoning.
+            self.close_text_and_message(&mut out);
+            if !self.reasoning_open {
+                let added = serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": []
+                    }
+                });
+                out.push_str(&sse_event("response.output_item.added", &added));
+                self.reasoning_open = true;
+            }
+            let delta = serde_json::json!({
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "delta": rc,
+            });
+            out.push_str(&sse_event("response.reasoning_summary_text.delta", &delta));
+        }
+
+        // 3. content (non-empty).
+        if let Some(ref content) = chunk.content
+            && !content.is_empty()
+        {
+            // Close reasoning block if open.
+            if self.reasoning_open {
+                let done = serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": []
+                    }
+                });
+                out.push_str(&sse_event("response.output_item.done", &done));
+                self.reasoning_open = false;
+            }
+            if !self.message_open {
+                let added = serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": []
+                    }
+                });
+                out.push_str(&sse_event("response.output_item.added", &added));
+                self.message_open = true;
+            }
+            if !self.text_part_open {
+                let part = serde_json::json!({
+                    "type": "response.content_part.added",
+                    "item_id": "msg_1",
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": []
+                    }
+                });
+                out.push_str(&sse_event("response.content_part.added", &part));
+                self.text_part_open = true;
+            }
+            let delta = serde_json::json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "delta": content,
+            });
+            out.push_str(&sse_event("response.output_text.delta", &delta));
+        }
+
+        // 4. tool_call.
+        if let Some(ref tc) = chunk.tool_call {
+            // Close any open text_part / message before tool call.
+            self.close_text_and_message(&mut out);
+            // Also close reasoning if open.
+            if self.reasoning_open {
+                let done = serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {"type": "reasoning", "id": "rs_1", "summary": []}
+                });
+                out.push_str(&sse_event("response.output_item.done", &done));
+                self.reasoning_open = false;
+            }
+
+            let tcid = tc.id.clone().unwrap_or_else(|| "call_gw".to_string());
+            let args_str = if tc.arguments.is_string() {
+                tc.arguments.as_str().unwrap_or("").to_string()
+            } else {
+                serde_json::to_string(&tc.arguments).unwrap_or_default()
+            };
+
+            let added = serde_json::json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "function_call",
+                    "id": tcid,
+                    "call_id": tcid,
+                    "name": tc.name,
+                    "arguments": ""
+                }
+            });
+            out.push_str(&sse_event("response.output_item.added", &added));
+
+            let arg_delta = serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": tcid,
+                "delta": args_str,
+            });
+            out.push_str(&sse_event(
+                "response.function_call_arguments.delta",
+                &arg_delta,
+            ));
+
+            let arg_done = serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": tcid,
+                "arguments": args_str,
+            });
+            out.push_str(&sse_event(
+                "response.function_call_arguments.done",
+                &arg_done,
+            ));
+
+            let item_done = serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": tcid,
+                    "call_id": tcid,
+                    "name": tc.name,
+                    "arguments": args_str
+                }
+            });
+            out.push_str(&sse_event("response.output_item.done", &item_done));
+        }
+
+        // 5. done.
+        if chunk.done {
+            // Store usage if provided.
+            if chunk.usage.is_some() {
+                self.usage = chunk.usage.clone();
+            }
+
+            // Close any open text_part + message.
+            self.close_text_and_message(&mut out);
+
+            // Build usage block (may be absent if provider omits it).
+            let usage_json = self.usage.as_ref().map(|u| {
+                let pt = u.prompt_tokens as u64;
+                let ct = u.completion_tokens as u64;
+                serde_json::json!({
+                    "input_tokens": pt,
+                    "output_tokens": ct,
+                    "total_tokens": pt + ct,
+                })
+            });
+
+            let mut response = serde_json::json!({
+                "id": self.response_id,
+                "object": "response",
+                "status": "completed",
+                "model": model,
+            });
+            if let Some(u) = usage_json {
+                response["usage"] = u;
+            }
+
+            let completed = serde_json::json!({
+                "type": "response.completed",
+                "response": response,
+            });
+            out.push_str(&sse_event("response.completed", &completed));
+        }
+
+        out
+    }
+
+    /// Close an open `output_text` part and the `msg_1` message item, emitting
+    /// the corresponding `done` events. Resets both flags. No-op if neither
+    /// is open.
+    fn close_text_and_message(&mut self, out: &mut String) {
+        if self.text_part_open {
+            let text_done = serde_json::json!({
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "text": "",
+            });
+            out.push_str(&sse_event("response.output_text.done", &text_done));
+            self.text_part_open = false;
+        }
+        if self.message_open {
+            let item_done = serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": []
+                }
+            });
+            out.push_str(&sse_event("response.output_item.done", &item_done));
+            self.message_open = false;
+        }
+    }
+}
+
+/// Format a single SSE event: `event: <name>\ndata: <json>\n\n`.
+///
+/// This mirrors the inline formatting used by [`AnthropicStreamState`]
+/// (`format!("event: X\ndata: {}\n\n", ...)`) so wire output is consistent
+/// across protocols.
+fn sse_event(name: &str, payload: &serde_json::Value) -> String {
+    format!(
+        "event: {name}\ndata: {}\n\n",
+        serde_json::to_string(payload).unwrap_or_default()
+    )
+}
+
+/// Generate a short, lowercase alphanumeric id for `resp_<id>`.
+///
+/// Uses a `OnceLock`-seeded PRNG; sufficient for a per-stream response id and
+/// avoids pulling in `uuid`. The Responses protocol does not constrain the
+/// shape beyond the `resp_` prefix used by OpenAI's reference server.
+fn short_id() -> String {
+    use std::sync::OnceLock;
+    static SEED: OnceLock<u64> = OnceLock::new();
+    let seed = *SEED.get_or_init(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+    });
+
+    // Simple xorshift to derive 24 hex chars from the seed + a thread-local
+    // counter. Determinism within a process is acceptable: ids only need to be
+    // unique within a stream, and the seed is process-time-based.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut x = seed.wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed));
+    let mut buf = String::with_capacity(24);
+    for _ in 0..24 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let nibble = (x & 0xF) as u8;
+        let c = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        buf.push(c as char);
+    }
+    buf
+}
+
 /// Serialize an `LLMChunk` into an OpenAI SSE chunk string.
 pub fn serialize_openai_chunk(chunk: &LLMChunk, model: &str, include_role: bool) -> String {
     let ts = current_timestamp();
@@ -259,7 +583,21 @@ pub fn serialize_openai_chunk(chunk: &LLMChunk, model: &str, include_role: bool)
 /// Scans SSE data lines for usage fields from upstream providers that
 /// support `stream_options.include_usage`. Maintains a small sliding
 /// buffer to handle cross-chunk boundaries.
-pub fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenUsage> {
+///
+/// Field names are selected by `protocol`: the Responses API emits
+/// `input_tokens`/`output_tokens`, while OpenAI/Anthropic emit
+/// `prompt_tokens`/`completion_tokens`. The returned `TokenUsage`
+/// always uses the canonical `prompt_tokens`/`completion_tokens` fields.
+pub fn extract_usage_from_sse_bytes(
+    buf: &[u8],
+    protocol: super::Protocol,
+) -> Option<crate::metrics::TokenUsage> {
+    let (prompt_key, completion_key) = match protocol {
+        super::Protocol::Responses => ("input_tokens", "output_tokens"),
+        super::Protocol::OpenAI | super::Protocol::Anthropic => {
+            ("prompt_tokens", "completion_tokens")
+        }
+    };
     let text = String::from_utf8_lossy(buf);
     for line in text.lines() {
         let data = line
@@ -274,11 +612,11 @@ pub fn extract_usage_from_sse_bytes(buf: &[u8]) -> Option<crate::metrics::TokenU
             && let Some(usage) = v.get("usage")
         {
             let pt = usage
-                .get("prompt_tokens")
+                .get(prompt_key)
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as u32;
             let ct = usage
-                .get("completion_tokens")
+                .get(completion_key)
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as u32;
             if pt > 0 || ct > 0 {
@@ -611,7 +949,7 @@ mod tests {
     fn extract_usage_valid() {
         let data =
             b"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}\n\n";
-        let usage = extract_usage_from_sse_bytes(data).unwrap();
+        let usage = extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
     }
@@ -619,32 +957,67 @@ mod tests {
     #[test]
     fn extract_usage_skips_done_marker() {
         let data = b"data: [DONE]\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_skips_no_usage() {
         let data = b"data: {\"id\":\"x\",\"choices\":[]}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_zero_tokens_skipped() {
         let data = b"data: {\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_invalid_json_skipped() {
         let data = b"data: {not json}\n\n";
-        assert!(extract_usage_from_sse_bytes(data).is_none());
+        assert!(extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).is_none());
     }
 
     #[test]
     fn extract_usage_from_multiple_lines() {
         let data = b"data: {\"id\":\"x\"}\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8}}\n\n";
-        let usage = extract_usage_from_sse_bytes(data).unwrap();
+        let usage = extract_usage_from_sse_bytes(data, crate::protocol::Protocol::OpenAI).unwrap();
         assert_eq!(usage.prompt_tokens, 5);
         assert_eq!(usage.completion_tokens, 8);
+    }
+
+    #[test]
+    fn extract_usage_handles_responses_field_names() {
+        let sse = b"data: {\"type\":\"response.completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":7,\"total_tokens\":12}}\n\n";
+        let u = extract_usage_from_sse_bytes(sse, crate::protocol::Protocol::Responses).unwrap();
+        assert_eq!(u.prompt_tokens, 5);
+        assert_eq!(u.completion_tokens, 7);
+    }
+
+    // ── ResponsesStreamState tests ──────────────────────────────────
+
+    #[test]
+    fn responses_stream_emits_created_then_text_delta() {
+        let mut s = ResponsesStreamState::new();
+        let c1 = LLMChunk {
+            content: Some("he".into()),
+            ..Default::default()
+        };
+        let c2 = LLMChunk {
+            content: Some("llo".into()),
+            done: true,
+            usage: Some(crate::metrics::TokenUsage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+            }),
+            ..Default::default()
+        };
+        let out1 = s.serialize_chunk(&c1, "m");
+        assert!(out1.contains("response.created"));
+        assert!(out1.contains("response.output_item.added"));
+        assert!(out1.contains("response.output_text.delta"));
+        let out2 = s.serialize_chunk(&c2, "m");
+        assert!(out2.contains("response.output_text.delta"));
+        assert!(out2.contains("response.completed"));
     }
 }

@@ -207,6 +207,7 @@ fn handle_providers(command: ProvidersCommand, bootstrap: &fustapi::config::Boot
                     api_key,
                     model: upstream_model,
                     r#type: pt.to_string(),
+                    supports_responses: None,
                 },
             );
             if let Err(e) = fustapi::config::save_to_db(&config, &db_path) {

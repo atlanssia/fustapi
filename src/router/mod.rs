@@ -68,6 +68,15 @@ pub trait Router: Send + Sync {
     /// Get list of configured providers.
     fn list_providers(&self) -> Vec<String>;
 
+    /// Look up a provider instance by name.
+    ///
+    /// Used by Responses passthrough to read the provider's capabilities
+    /// (e.g., `supports_responses`) before dispatching. The default impl
+    /// returns `None` for mock/test routers; production routers override it.
+    fn get_provider(&self, _name: &str) -> Option<&dyn crate::provider::Provider> {
+        None
+    }
+
     /// Stream a chat completion through the selected provider.
     async fn chat_stream(
         &self,
@@ -137,6 +146,14 @@ impl RealRouter {
             })
             .map(|v| &**v)
     }
+
+    /// Look up a provider instance by its configured name.
+    ///
+    /// Enables handlers (e.g., Responses passthrough) to read provider
+    /// capabilities directly without re-resolving a model→provider route.
+    pub fn get_provider(&self, name: &str) -> Option<&dyn Provider> {
+        self.providers.get(name).map(|p| &**p)
+    }
 }
 
 #[async_trait]
@@ -163,6 +180,11 @@ impl Router for RealRouter {
     }
     fn list_providers(&self) -> Vec<String> {
         self.providers.keys().cloned().collect()
+    }
+    fn get_provider(&self, name: &str) -> Option<&dyn crate::provider::Provider> {
+        // Delegate to the inherent method so trait callers (`&dyn Router`)
+        // resolve to the production lookup rather than the default `None`.
+        RealRouter::get_provider(self, name)
     }
     async fn chat_stream(
         &self,
@@ -266,6 +288,9 @@ impl Router for std::sync::Arc<RealRouter> {
     fn list_providers(&self) -> Vec<String> {
         (**self).list_providers()
     }
+    fn get_provider(&self, name: &str) -> Option<&dyn crate::provider::Provider> {
+        (**self).get_provider(name)
+    }
     async fn chat_stream(
         &self,
         request: UnifiedRequest,
@@ -338,6 +363,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
             )),
             &["gpt-4"],
@@ -355,6 +381,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
             )),
             &["gpt-4"],
@@ -375,6 +402,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
             )),
             &["gpt-4", "gpt-3.5-turbo"],
@@ -397,6 +425,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
             )),
             &["gpt-4"],
@@ -415,6 +444,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
             )) as Box<dyn Provider>,
         );
@@ -459,6 +489,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Emulated,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
                 name: "emulated-mock",
                 captured,
@@ -475,6 +506,7 @@ mod tests {
                     tool_calling: crate::types::ToolCallingSupport::Native,
                     image_input: false,
                     streaming: true,
+                    supports_responses: false,
                 },
                 name: "native-mock",
                 captured,

@@ -152,6 +152,14 @@ pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
             }),
         )
         .route(
+            "/v1/responses",
+            post({
+                let router = router_store.clone();
+                let emitter = metrics_emitter.clone();
+                move |headers, body| responses_handler(headers, body, router, emitter)
+            }),
+        )
+        .route(
             "/v1/models",
             get({
                 let router = router_store.clone();
@@ -204,6 +212,28 @@ async fn messages_handler(
     emitter: MetricsEmitter,
 ) -> impl IntoResponse {
     let proto = protocol::detect_protocol("/v1/messages", &headers);
+    let current_router = router.load_full();
+
+    let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());
+    let guard = metrics::guard::RequestGuard::start(emitter, &provider_name, &model_name);
+
+    match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
+        Ok(response) => response,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/responses — OpenAI Responses API endpoint.
+///
+/// Currently only passthrough mode (provider supports `responses_passthrough`)
+/// is wired up; conversion mode is a placeholder filled in by a later task.
+async fn responses_handler(
+    headers: axum::http::HeaderMap,
+    body: String,
+    router: RouterStore,
+    emitter: MetricsEmitter,
+) -> impl IntoResponse {
+    let proto = protocol::detect_protocol("/v1/responses", &headers);
     let current_router = router.load_full();
 
     let (provider_name, model_name) = resolve_provider_and_model(&body, current_router.as_ref());

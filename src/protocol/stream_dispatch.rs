@@ -76,6 +76,11 @@ fn normalized_sse_response(
                     super::serializer::serialize_openai_chunk(&chunk, &model_name, include_role)
                 }
                 Protocol::Anthropic => anthropic_state.serialize_chunk(&chunk, &model_name),
+                // Unreachable: dispatch_request short-circuits Responses before any
+                // streaming path is reached. Real implementation lands in a later task.
+                Protocol::Responses => {
+                    unreachable!("Responses not yet wired into forward_streaming")
+                }
             };
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
         }
@@ -123,7 +128,9 @@ fn passthrough_sse_response(
                         let excess = buf.len() - 8192;
                         let _ = buf.split_to(excess);
                     }
-                    if let Some(usage) = super::serializer::extract_usage_from_sse_bytes(&buf) {
+                    if let Some(usage) =
+                        super::serializer::extract_usage_from_sse_bytes(&buf, protocol)
+                    {
                         tracker.set_tokens(usage);
                     }
                 }

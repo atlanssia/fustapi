@@ -33,6 +33,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     tool_calling: crate::provider::ToolCallingSupport::Emulated,
                     image_input: true,
                     streaming: true,
+                    supports_responses: false,
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
                 },
             ));
@@ -59,6 +60,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: true,
                 streaming: true,
+                supports_responses: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
             },
         )),
@@ -72,6 +74,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: true,
                 streaming: true,
+                supports_responses: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
@@ -85,6 +88,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: true,
                 streaming: true,
+                supports_responses: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
@@ -98,6 +102,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: false,
                 streaming: true,
+                supports_responses: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Glm,
             },
         )),
@@ -111,6 +116,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 tool_calling: pt.tool_calling_mode(),
                 image_input: false,
                 streaming: true,
+                supports_responses: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::DeepSeek,
             },
         )),
@@ -125,6 +131,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     tool_calling: pt.tool_calling_mode(),
                     image_input: true,
                     streaming: true,
+                    supports_responses: cfg.supports_responses.unwrap_or(pt == Pt::OpenAI),
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
                 },
             ))
@@ -138,6 +145,9 @@ pub struct ProviderCapabilities {
     pub tool_calling: ToolCallingSupport,
     pub image_input: bool,
     pub streaming: bool,
+    /// Whether the upstream supports the Responses API natively.
+    /// `true` → forward as-is (passthrough). `false` → convert to chat completions.
+    pub supports_responses: bool,
 }
 
 /// Provider-agnostic chat message.
@@ -236,6 +246,19 @@ pub trait Provider: Send + Sync {
     /// (e.g., OpenAI-compatible endpoints) should override this.
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
+    }
+
+    /// Forward a raw Responses API request body to an upstream that supports
+    /// the Responses API. Returns Passthrough (streaming) or NonStreaming.
+    /// Default: unsupported. Override in providers that speak Responses.
+    async fn responses_passthrough(
+        &self,
+        _body: String,
+        _stream: bool,
+    ) -> Result<StreamMode, ProviderError> {
+        Err(ProviderError::Internal(
+            "responses_passthrough not supported".into(),
+        ))
     }
 }
 
@@ -411,6 +434,7 @@ mod wrapper_collapse_tests {
             endpoint: "http://localhost:8000/v1".to_string(),
             api_key: None,
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "oMLX");
@@ -429,6 +453,7 @@ mod wrapper_collapse_tests {
             endpoint: "https://api.deepseek.com".to_string(),
             api_key: Some("test-key".to_string()),
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "DeepSeek");
@@ -446,6 +471,7 @@ mod wrapper_collapse_tests {
             endpoint: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
             api_key: Some("test-key".to_string()),
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "GLM");
@@ -463,6 +489,7 @@ mod wrapper_collapse_tests {
             endpoint: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
             api_key: Some("test-key".to_string()),
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "GLM");
@@ -475,6 +502,7 @@ mod wrapper_collapse_tests {
             endpoint: "http://localhost:8000/v1".to_string(),
             api_key: None,
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "oMLX");
@@ -487,6 +515,7 @@ mod wrapper_collapse_tests {
             endpoint: "http://localhost:1234/v1".to_string(),
             api_key: None,
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "LM Studio");
@@ -499,6 +528,7 @@ mod wrapper_collapse_tests {
             endpoint: "http://localhost:30000/v1".to_string(),
             api_key: None,
             model: None,
+            supports_responses: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "SGLang");
@@ -609,5 +639,46 @@ mod balance_struct_tests {
         assert_eq!(MetricStatus::from_percentage(72.0), MetricStatus::Ok);
         assert_eq!(MetricStatus::from_percentage(80.0), MetricStatus::Warn);
         assert_eq!(MetricStatus::from_percentage(95.0), MetricStatus::Critical);
+    }
+}
+
+#[cfg(test)]
+mod supports_responses_tests {
+    use super::*;
+
+    #[test]
+    fn openai_provider_capabilities_supports_responses_by_default() {
+        let p = crate::provider::cloud::openai::OpenAIProvider::new(
+            crate::provider::cloud::openai::OpenAIConfig::default(),
+        );
+        assert!(p.capabilities().supports_responses);
+    }
+
+    #[test]
+    fn deepseek_capabilities_do_not_support_responses() {
+        use crate::config::ProviderConfig;
+        let cfg = ProviderConfig {
+            endpoint: "http://localhost/v1".into(),
+            api_key: None,
+            model: None,
+            r#type: "deepseek".into(),
+            supports_responses: None,
+        };
+        let p = create_provider("ds", &cfg);
+        assert!(!p.capabilities().supports_responses);
+    }
+
+    #[test]
+    fn config_override_enables_responses_on_compatible() {
+        use crate::config::ProviderConfig;
+        let cfg = ProviderConfig {
+            endpoint: "http://localhost/v1".into(),
+            api_key: None,
+            model: None,
+            r#type: "openai-compatible".into(),
+            supports_responses: Some(true),
+        };
+        let p = create_provider("proxy", &cfg);
+        assert!(p.capabilities().supports_responses);
     }
 }
