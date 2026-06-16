@@ -37,12 +37,15 @@ fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
 pub enum Protocol {
     OpenAI,
     Anthropic,
+    Responses,
 }
 
 /// Detect protocol from request path and headers.
 #[must_use]
 pub fn detect_protocol(path: &str, headers: &axum::http::HeaderMap) -> Protocol {
-    if path.starts_with("/v1/messages") || headers.get("anthropic-version").is_some() {
+    if path.starts_with("/v1/responses") {
+        Protocol::Responses
+    } else if path.starts_with("/v1/messages") || headers.get("anthropic-version").is_some() {
         Protocol::Anthropic
     } else {
         Protocol::OpenAI // default for /v1/ and all other paths
@@ -59,6 +62,10 @@ pub async fn dispatch_request(
     match protocol {
         Protocol::OpenAI => openai_handler(body, router, guard).await,
         Protocol::Anthropic => anthropic_handler(body, router, guard).await,
+        Protocol::Responses => Err(ProtocolError::Internal {
+            message: "Responses API not yet implemented".to_string(),
+            protocol: Protocol::Responses,
+        }),
     }
 }
 
@@ -131,6 +138,16 @@ async fn collect_non_streaming(
     protocol: Protocol,
     mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
+    // Responses non-streaming conversion is implemented in a later task;
+    // dispatch_request currently short-circuits Responses before reaching here.
+    if protocol == Protocol::Responses {
+        guard.finish_err();
+        return Err(ProtocolError::Internal {
+            message: "Responses API not yet implemented".to_string(),
+            protocol: Protocol::Responses,
+        });
+    }
+
     // Sync guard model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
         guard.set_model(upstream);
@@ -243,6 +260,9 @@ async fn collect_non_streaming(
                         .expect("serialize_response produced invalid JSON — this is a bug");
                     Ok((StatusCode::OK, Json(body)).into_response())
                 }
+                // Unreachable: the Responses guard at the top of this function
+                // returns early. Real implementation lands in a later task.
+                Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
             }
         }
         crate::streaming::StreamMode::Normalized(mut stream) => {
@@ -293,11 +313,15 @@ async fn collect_non_streaming(
                 match protocol {
                     Protocol::OpenAI => "stop",
                     Protocol::Anthropic => "end_turn",
+                    // Unreachable: guarded at collect_non_streaming entry.
+                    Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
                 }
             } else {
                 match protocol {
                     Protocol::OpenAI => "tool_calls",
                     Protocol::Anthropic => "tool_use",
+                    // Unreachable: guarded at collect_non_streaming entry.
+                    Protocol::Responses => unreachable!("Responses guarded at collect_non_streaming entry"),
                 }
             };
 
@@ -361,6 +385,10 @@ async fn collect_non_streaming(
                         });
                     }
                 },
+                // Unreachable: guarded at collect_non_streaming entry.
+                Protocol::Responses => {
+                    unreachable!("Responses guarded at collect_non_streaming entry")
+                }
             };
 
             guard.finish(true, final_usage, first_token_ms);
@@ -466,6 +494,13 @@ impl IntoResponse for ProtocolError {
                 "type": "error",
                 "error": {
                     "type": if status.is_client_error() { "invalid_request_error" } else { "api_error" },
+                    "message": error_msg
+                }
+            }),
+            // Responses follows the OpenAI error envelope shape.
+            Protocol::Responses => serde_json::json!({
+                "error": {
+                    "type": if status.is_client_error() { "invalid_request_error" } else { "server_error" },
                     "message": error_msg
                 }
             }),
@@ -893,6 +928,30 @@ mod tests {
         let tracker = make_guard().into_tracker();
         let _ = forward_streaming(&router, req, "m", Protocol::OpenAI, tracker).await;
         assert_eq!(*router.allow_passthrough.lock().unwrap(), Some(true));
+    }
+
+    // ── detect_protocol: /v1/responses routing ──────────────────────
+
+    #[test]
+    fn detect_protocol_responses_path() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            detect_protocol("/v1/responses", &headers),
+            Protocol::Responses
+        );
+    }
+
+    #[test]
+    fn detect_protocol_responses_does_not_clobber_others() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            detect_protocol("/v1/chat/completions", &headers),
+            Protocol::OpenAI
+        );
+        assert_eq!(
+            detect_protocol("/v1/messages", &headers),
+            Protocol::Anthropic
+        );
     }
 
     // ── Backward compatibility: Normalized stream still works ───────
