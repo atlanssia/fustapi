@@ -511,7 +511,10 @@ async fn responses_handler_impl(
             Ok(v) => v,
             Err(e) => {
                 guard.finish_err();
-                return Err(ProtocolError::Parse { message: e.to_string(), protocol });
+                return Err(ProtocolError::Parse {
+                    message: e.to_string(),
+                    protocol,
+                });
             }
         };
         // Boundary validation (stateless principle): the gateway does not retain

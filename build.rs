@@ -34,14 +34,12 @@ fn git_describe() -> Option<String> {
         .output()
         .ok()
         .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .any(|line| {
-                    // porcelain format: "XY path" where XY is 2 status chars.
-                    // Path may be quoted if it contains spaces.
-                    let path = line.get(3..).unwrap_or("").trim_matches('"');
-                    path.ends_with(".rs")
-                })
+            String::from_utf8_lossy(&o.stdout).lines().any(|line| {
+                // porcelain format: "XY path" where XY is 2 status chars.
+                // Path may be quoted if it contains spaces.
+                let path = line.get(3..).unwrap_or("").trim_matches('"');
+                path.ends_with(".rs")
+            })
         })
         .unwrap_or(false);
 
