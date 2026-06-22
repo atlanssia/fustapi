@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Path},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -164,6 +164,20 @@ pub fn build_app(router: Arc<RealRouter>, db_path: PathBuf) -> Router {
             get({
                 let router = router_store.clone();
                 move |headers| models_handler(headers, router)
+            }),
+        )
+        .route(
+            "/v1/models/{model}",
+            get({
+                let router = router_store.clone();
+                move |headers, path| model_detail_handler(headers, path, router)
+            }),
+        )
+        .route(
+            "/v1/messages/count_tokens",
+            post({
+                let router = router_store.clone();
+                move |headers, body| count_tokens_handler(headers, body, router)
             }),
         )
         .route("/", get(web::ui_handler))
@@ -330,6 +344,75 @@ async fn models_handler(headers: axum::http::HeaderMap, router: RouterStore) -> 
         )
             .into_response()
     }
+}
+
+/// GET /v1/models/{model} — returns details for a single model.
+async fn model_detail_handler(
+    headers: axum::http::HeaderMap,
+    Path(model_id): Path<String>,
+    router: RouterStore,
+) -> impl IntoResponse {
+    let current_router = router.load_full();
+    let model_ids = current_router.list_models();
+
+    if !model_ids.contains(&model_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": {
+                    "type": "not_found_error",
+                    "message": format!("model '{model_id}' not found")
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let is_anthropic = headers.contains_key("anthropic-version");
+
+    if is_anthropic {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "type": "model",
+                "id": model_id,
+                "display_name": model_id,
+                "created_at": "2024-01-01T00:00:00Z"
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": model_id,
+                "object": "model",
+                "created": 1_000_000_000,
+                "owned_by": "fustapi"
+            })),
+        )
+            .into_response()
+    }
+}
+
+/// POST /v1/messages/count_tokens — estimates token count for messages.
+async fn count_tokens_handler(
+    _headers: axum::http::HeaderMap,
+    body: String,
+    _router: RouterStore,
+) -> impl IntoResponse {
+    // Simple estimation: ~3.5 chars per token for mixed content.
+    // This is a rough estimate; production should call upstream.
+    let char_count = body.chars().count();
+    let estimated_tokens = std::cmp::max(1, (char_count as f64 / 3.5) as u64);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "input_tokens": estimated_tokens
+        })),
+    )
+        .into_response()
 }
 
 /// Fallback handler for unknown routes — returns 404 with JSON error.
