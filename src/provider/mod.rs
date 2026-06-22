@@ -248,6 +248,20 @@ pub trait Provider: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Forward a raw non-streaming Chat Completions body to the upstream.
+    ///
+    /// Bypasses the `UnifiedRequest` parse → re-serialize round-trip for
+    /// OpenAI→OpenAI requests that need no transformation. The default
+    /// returns an error; override in OpenAI-compatible providers.
+    async fn chat_raw_non_streaming(
+        &self,
+        _body: String,
+    ) -> Result<serde_json::Value, ProviderError> {
+        Err(ProviderError::Internal(
+            "raw non-streaming forwarding not supported by this provider".into(),
+        ))
+    }
+
     /// Forward a raw Responses API request body to an upstream that supports
     /// the Responses API. Returns Passthrough (streaming) or NonStreaming.
     /// Default: unsupported. Override in providers that speak Responses.

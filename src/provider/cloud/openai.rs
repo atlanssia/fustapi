@@ -477,6 +477,46 @@ impl Provider for OpenAIProvider {
         }
     }
 
+    async fn chat_raw_non_streaming(
+        &self,
+        body: String,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let url = format!(
+            "{}/chat/completions",
+            self.config.endpoint.trim_end_matches('/')
+        );
+
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body);
+
+        if !self.config.api_key.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        let resp_body = send_with_tcp_retry(builder).await?;
+        if !resp_body.status().is_success() {
+            let status = resp_body.status();
+            let err_text = resp_body.text().await.unwrap_or_default();
+            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
+                ProviderError::Upstream {
+                    status: status.as_u16(),
+                    message: err_text,
+                }
+            } else {
+                ProviderError::Request(format!("provider error {status}: {err_text}"))
+            });
+        }
+
+        let full_bytes = resp_body
+            .bytes()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+        serde_json::from_slice(&full_bytes).map_err(|e| ProviderError::Internal(e.to_string()))
+    }
+
     async fn responses_passthrough(
         &self,
         body: String,

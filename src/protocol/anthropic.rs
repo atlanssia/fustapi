@@ -6,9 +6,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
+use tracing::warn;
 
 use crate::capability::{ImageInput, ImageSource, ToolCall, ToolDefinition};
 use crate::provider::{Message, Role, UnifiedRequest};
+#[cfg(test)]
 use crate::streaming::LLMChunk;
 
 /// Placeholder signature for thinking blocks proxied from non-Anthropic providers.
@@ -556,16 +558,92 @@ pub fn serialize_response(
     serde_json::to_string(&resp).map_err(SerializeError::Json)
 }
 
+/// Convert an OpenAI Chat Completions non-streaming JSON response to an
+/// Anthropic Messages response.
+///
+/// This is the non-streaming counterpart to the chunk-by-chunk conversion
+/// performed by [`AnthropicStreamState`] (serde module) for streaming.
+/// Both paths converge on [`serialize_response`] for the final structured
+/// output.
+pub fn convert_from_openai_non_streaming(
+    openai_json: &Value,
+    model: &str,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> Result<String, SerializeError> {
+    let choices = openai_json["choices"]
+        .as_array()
+        .and_then(|arr| arr.first());
+    let message = choices.and_then(|c| c.get("message"));
+
+    let content = message
+        .and_then(|m| m.get("content").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let reasoning = message.and_then(|m| m.get("reasoning_content").and_then(|v| v.as_str()));
+    let tool_calls_json = message.and_then(|m| m.get("tool_calls").and_then(|v| v.as_array()));
+    let upstream_finish_reason = choices
+        .and_then(|c| c.get("finish_reason").and_then(|v| v.as_str()))
+        .unwrap_or("stop");
+
+    let anthropic_stop_reason = match upstream_finish_reason {
+        "tool_calls" => "tool_use",
+        _ => "end_turn",
+    };
+
+    let tool_calls = tool_calls_json.map(|arr| {
+        let original_count = arr.len();
+        let converted: Vec<_> = arr
+            .iter()
+            .filter_map(|tc| {
+                let name = tc
+                    .get("function")
+                    .and_then(|f| f.get("name").and_then(|v| v.as_str()))?;
+                let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
+                let args = tc
+                    .get("function")
+                    .and_then(|f| f.get("arguments").and_then(|v| v.as_str()))
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
+                Some(ToolCall {
+                    id,
+                    name: name.to_string(),
+                    arguments: args,
+                })
+            })
+            .collect::<Vec<_>>();
+        if converted.len() < original_count {
+            warn!(
+                dropped = original_count - converted.len(),
+                "dropped malformed tool calls in Anthropic non-streaming conversion"
+            );
+        }
+        converted
+    });
+    let tool_calls_opt = tool_calls.filter(|v| !v.is_empty());
+
+    serialize_response(
+        "msg-gw",
+        model,
+        if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        },
+        tool_calls_opt,
+        Some(anthropic_stop_reason),
+        reasoning,
+        prompt_tokens,
+        completion_tokens,
+    )
+}
+
 /// Serialize an `LLMChunk` to Anthropic SSE event format string.
 ///
-/// `need_block_start` indicates whether a `content_block_start` event should
-/// precede the first text delta for this content block.
-/// `stop_reason` is the Anthropic stop reason to use when `chunk.done` is true
-/// (e.g., `"end_turn"` for text, `"tool_use"` for tool calls).
-/// `close_reasoning` signals that the current reasoning block is being closed
-/// and a `signature_delta` must be emitted.
+/// Deprecated in favour of [`super::serializer::AnthropicStreamState::serialize_chunk`],
+/// which manages the full content-block lifecycle. Kept for unit tests.
 #[must_use]
-pub fn serialize_stream_event(
+#[cfg(test)]
+pub(crate) fn serialize_stream_event(
     chunk: &LLMChunk,
     _id: &str,
     _model: &str,

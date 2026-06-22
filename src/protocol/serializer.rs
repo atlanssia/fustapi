@@ -63,12 +63,12 @@ impl AnthropicStreamState {
 
     /// Serialize an `LLMChunk` into Anthropic SSE events, managing block
     /// lifecycle. Returns the SSE text (one or more `event: / data:` lines).
-    pub fn serialize_chunk(&mut self, chunk: &LLMChunk, model: &str) -> String {
+    pub fn serialize_chunk(&mut self, chunk: &LLMChunk, _model: &str) -> String {
         let mut prefix = String::new();
 
         // Close any open block before transitioning to a different block type.
         // tool_block_open is excluded for done chunks — the done case in
-        // serialize_stream_event emits the final content_block_stop itself.
+        // emit_chunk_event handles the final content_block_stop itself.
         let needs_close = (self.reasoning_block_open
             && (chunk.content.is_some() || chunk.tool_call.is_some()))
             || (self.text_block_open
@@ -76,8 +76,6 @@ impl AnthropicStreamState {
             || (self.tool_block_open && !chunk.done);
         if needs_close {
             // When closing a reasoning block, emit the signature_delta first.
-            // Anthropic requires a signature for every thinking block so that
-            // clients preserve reasoning across multi-turn conversations.
             if self.reasoning_block_open {
                 prefix.push_str(&Self::emit_signature_delta(self.block_index));
             }
@@ -104,21 +102,10 @@ impl AnthropicStreamState {
         };
 
         // Determine whether the reasoning block is being closed by this chunk.
-        // Two cases: (a) the chunk carries reasoning_content *and* done, so the
-        // block opens and closes in a single chunk; (b) a bare [DONE] chunk
-        // arrives while a reasoning block is still open from previous chunks.
         let close_reasoning =
             chunk.done && (self.reasoning_block_open || chunk.reasoning_content.is_some());
 
-        let s = super::anthropic::serialize_stream_event(
-            chunk,
-            "msg_gw",
-            model,
-            &self.block_index,
-            self.need_block_start,
-            stop_reason,
-            close_reasoning,
-        );
+        let s = self.emit_chunk_event(chunk, self.need_block_start, stop_reason, close_reasoning);
 
         if chunk.reasoning_content.is_some() {
             self.need_block_start = false;
@@ -144,6 +131,136 @@ impl AnthropicStreamState {
         }
 
         format!("{prefix}{s}")
+    }
+
+    /// Emit SSE events for one chunk (the former `serialize_stream_event`
+    /// from `anthropic.rs`, now a private method — all content-block event
+    /// generation is internal to this struct).
+    fn emit_chunk_event(
+        &self,
+        chunk: &LLMChunk,
+        need_block_start: bool,
+        stop_reason: &str,
+        close_reasoning: bool,
+    ) -> String {
+        let index = self.block_index;
+        let mut s = String::new();
+        let had_reasoning = chunk.reasoning_content.is_some();
+
+        if let Some(reasoning) = &chunk.reasoning_content {
+            if need_block_start {
+                let block_start = serde_json::json!({
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": { "type": "thinking", "thinking": "", "signature": "" }
+                });
+                s.push_str(&format!(
+                    "event: content_block_start\ndata: {}\n\n",
+                    serde_json::to_string(&block_start).unwrap_or_default()
+                ));
+            }
+
+            let delta = serde_json::json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": { "type": "thinking_delta", "thinking": reasoning }
+            });
+            s.push_str(&format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&delta).unwrap_or_default()
+            ));
+
+            if close_reasoning {
+                s.push_str(&Self::emit_signature_delta(index));
+            }
+        }
+
+        if let Some(text) = &chunk.content {
+            if need_block_start {
+                let block_start = serde_json::json!({
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": { "type": "text", "text": "" }
+                });
+                s.push_str(&format!(
+                    "event: content_block_start\ndata: {}\n\n",
+                    serde_json::to_string(&block_start).unwrap_or_default()
+                ));
+            }
+
+            let delta = serde_json::json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": { "type": "text_delta", "text": text }
+            });
+            s.push_str(&format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&delta).unwrap_or_default()
+            ));
+        }
+
+        if let Some(tc) = &chunk.tool_call {
+            let tool_id = tc.id.clone().unwrap_or_else(|| format!("toolu_{index}"));
+            if need_block_start {
+                let block_start = serde_json::json!({
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": tc.name,
+                        "input": {}
+                    }
+                });
+                s.push_str(&format!(
+                    "event: content_block_start\ndata: {}\n\n",
+                    serde_json::to_string(&block_start).unwrap_or_default()
+                ));
+            }
+            let json_str = tc.arguments.to_string();
+            let delta = serde_json::json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": { "type": "input_json_delta", "partial_json": json_str }
+            });
+            s.push_str(&format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&delta).unwrap_or_default()
+            ));
+        }
+
+        if chunk.done {
+            // Bare [DONE] while reasoning block was still open → signature first.
+            if close_reasoning && !had_reasoning {
+                s.push_str(&Self::emit_signature_delta(index));
+            }
+
+            let block_stop = serde_json::json!({
+                "type": "content_block_stop",
+                "index": index
+            });
+            s.push_str(&format!(
+                "event: content_block_stop\ndata: {}\n\n",
+                serde_json::to_string(&block_stop).unwrap_or_default()
+            ));
+
+            let msg_delta = serde_json::json!({
+                "type": "message_delta",
+                "delta": {
+                    "type": "stop_reason",
+                    "stop_reason": stop_reason
+                },
+                "usage": {
+                    "output_tokens": 0
+                }
+            });
+            s.push_str(&format!(
+                "event: message_delta\ndata: {}\n\n",
+                serde_json::to_string(&msg_delta).unwrap_or_default()
+            ));
+        }
+
+        s
     }
 }
 

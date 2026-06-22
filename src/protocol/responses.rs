@@ -24,19 +24,42 @@ struct ResponsesRequest {
     stream: bool,
     #[serde(default)]
     tools: Vec<Value>,
+    #[serde(default)]
+    previous_response_id: Option<String>,
+    #[serde(default)]
+    store: Option<bool>,
     /// Capture all other request parameters (`temperature`, `top_p`, etc.)
     /// for passthrough into `extra_params`.
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Parse a Responses API JSON body into a [`UnifiedRequest`].
+/// Metadata extracted during parsing for boundary validation.
+///
+/// The gateway is stateless — it does not retain conversation history or
+/// store server-side data. These fields are surfaced so the caller can
+/// reject unsupported features with a clear 400.
+#[derive(Debug)]
+pub struct ResponsesBoundaryMeta {
+    pub has_previous_response_id: bool,
+    pub has_store_true: bool,
+    pub has_builtin_tools: bool,
+}
+
+/// Parse a Responses API JSON body into a [`UnifiedRequest`] and boundary
+/// validation metadata.
+///
+/// This is a **single** deserialization pass — boundary checks that were
+/// previously done via a separate `serde_json::Value` pre-parse are now
+/// extracted from the same [`ResponsesRequest`] struct.
 ///
 /// # Errors
 ///
 /// Returns `serde_json::Error` if the body is not valid JSON or does not match
 /// the expected shape (`model` is required, `input` must be a string or array).
-pub fn parse_responses_request(json_str: &str) -> Result<UnifiedRequest, serde_json::Error> {
+pub fn parse_responses_request(
+    json_str: &str,
+) -> Result<(UnifiedRequest, ResponsesBoundaryMeta), serde_json::Error> {
     let req: ResponsesRequest = serde_json::from_str(json_str)?;
 
     let mut messages = Vec::new();
@@ -95,15 +118,33 @@ pub fn parse_responses_request(json_str: &str) -> Result<UnifiedRequest, serde_j
         .and_then(|v| v.as_u64())
         .map(|n| n as u32);
 
-    Ok(UnifiedRequest {
-        model: req.model,
-        messages,
-        tools: tools_opt,
-        stream: req.stream,
-        temperature,
-        max_tokens,
-        extra_params: req.extra,
-    })
+    let meta = ResponsesBoundaryMeta {
+        has_previous_response_id: req
+            .previous_response_id
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        has_store_true: req.store.unwrap_or(false),
+        has_builtin_tools: req.tools.iter().any(|t| {
+            t.get("type")
+                .and_then(|ty| ty.as_str())
+                .map(|s| s != "function")
+                .unwrap_or(true)
+        }),
+    };
+
+    Ok((
+        UnifiedRequest {
+            model: req.model,
+            messages,
+            tools: tools_opt,
+            stream: req.stream,
+            temperature,
+            max_tokens,
+            extra_params: req.extra,
+        },
+        meta,
+    ))
 }
 
 /// Parse a single `input` array item into a [`Message`].
@@ -299,16 +340,19 @@ mod tests {
 
     #[test]
     fn parse_string_input_to_user_message() {
-        let req = parse_responses_request(r#"{"model":"m","input":"hello"}"#).unwrap();
+        let (req, meta) = parse_responses_request(r#"{"model":"m","input":"hello"}"#).unwrap();
         assert_eq!(req.model, "m");
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].role, Role::User);
         assert_eq!(req.messages[0].content, "hello");
+        assert!(!meta.has_previous_response_id);
+        assert!(!meta.has_store_true);
+        assert!(!meta.has_builtin_tools);
     }
 
     #[test]
     fn parse_instructions_to_system_message() {
-        let req =
+        let (req, _meta) =
             parse_responses_request(r#"{"model":"m","input":"hi","instructions":"be brief"}"#)
                 .unwrap();
         let sys = req
@@ -324,7 +368,7 @@ mod tests {
         let body = r#"{"model":"m","input":[
             {"role":"user","content":[{"type":"input_text","text":"q"}]},
             {"role":"assistant","content":[{"type":"output_text","text":"a"}]}]}"#;
-        let req = parse_responses_request(body).unwrap();
+        let (req, _meta) = parse_responses_request(body).unwrap();
         assert!(req.messages.iter().any(|m| m.role == Role::User));
         assert!(req.messages.iter().any(|m| m.role == Role::Assistant));
     }
@@ -332,8 +376,34 @@ mod tests {
     #[test]
     fn parse_function_tools() {
         let body = r#"{"model":"m","input":"x","tools":[{"type":"function","name":"f","description":"d","parameters":{"type":"object"}}]}"#;
-        let req = parse_responses_request(body).unwrap();
+        let (req, meta) = parse_responses_request(body).unwrap();
         assert_eq!(req.tools.unwrap().len(), 1);
+        assert!(!meta.has_builtin_tools);
+    }
+
+    #[test]
+    fn parse_boundary_meta_rejects_previous_response_id() {
+        let (_, meta) = parse_responses_request(
+            r#"{"model":"m","input":"hi","previous_response_id":"resp_1"}"#,
+        )
+        .unwrap();
+        assert!(meta.has_previous_response_id);
+    }
+
+    #[test]
+    fn parse_boundary_meta_rejects_store_true() {
+        let (_, meta) =
+            parse_responses_request(r#"{"model":"m","input":"hi","store":true}"#).unwrap();
+        assert!(meta.has_store_true);
+    }
+
+    #[test]
+    fn parse_boundary_meta_detects_builtin_tools() {
+        let body = r#"{"model":"m","input":"hi","tools":[
+            {"type":"function","name":"f"},
+            {"type":"web_search_preview"}]}"#;
+        let (_, meta) = parse_responses_request(body).unwrap();
+        assert!(meta.has_builtin_tools);
     }
 
     #[test]

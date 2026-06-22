@@ -83,14 +83,75 @@ async fn openai_handler(
         }
     };
     let model_name = unified_req.model.clone();
-    let provider_req = unified_req.clone();
 
     if unified_req.stream {
         let tracker = guard.into_tracker();
-        forward_streaming(router, provider_req, &model_name, Protocol::OpenAI, tracker).await
+        forward_streaming(router, unified_req, &model_name, Protocol::OpenAI, tracker).await
     } else {
-        collect_non_streaming(router, provider_req, &model_name, Protocol::OpenAI, guard).await
+        collect_non_streaming_raw(body, router, &model_name, guard).await
     }
+}
+
+/// Forward a raw non-streaming body to the provider, bypassing the
+/// `UnifiedRequest` parse → re-serialize round-trip.
+///
+/// Only invoked for OpenAI protocol, non-streaming requests.
+async fn collect_non_streaming_raw(
+    mut body: String,
+    router: &dyn Router,
+    model: &str,
+    mut guard: crate::metrics::guard::RequestGuard,
+) -> Result<Response, ProtocolError> {
+    let provider_name = match router.resolve(model) {
+        Ok(n) => n,
+        Err(e) => {
+            guard.finish_err();
+            return Err(map_router_error(e, Protocol::OpenAI));
+        }
+    };
+    let provider = match router.get_provider(&provider_name) {
+        Some(p) => p,
+        None => {
+            guard.finish_err();
+            return Err(ProtocolError::Internal {
+                message: "provider not found".into(),
+                protocol: Protocol::OpenAI,
+            });
+        }
+    };
+
+    // Sync guard model for accurate metrics + patch body if override.
+    if let Some(upstream) = router.resolve_upstream_model(model) {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) {
+            v["model"] = serde_json::json!(&upstream);
+            body = serde_json::to_string(&v).unwrap_or(body);
+        }
+        guard.set_model(upstream);
+    }
+
+    let json = match provider.chat_raw_non_streaming(body).await {
+        Ok(v) => v,
+        Err(e) => {
+            guard.finish_err();
+            return Err(map_router_error(
+                crate::router::RouterError::from(e),
+                Protocol::OpenAI,
+            ));
+        }
+    };
+
+    // Extract usage for metrics.
+    let usage = json.get("usage").map(|u| crate::metrics::TokenUsage {
+        prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    });
+    let first_token_ms = Some(guard.elapsed_ms());
+    guard.finish(true, usage, first_token_ms);
+
+    Ok((StatusCode::OK, Json(json)).into_response())
 }
 
 /// Forward provider stream as SSE response.
@@ -180,73 +241,16 @@ async fn collect_non_streaming(
                     Ok((StatusCode::OK, Json(json)).into_response())
                 }
                 Protocol::Anthropic => {
-                    // Convert OpenAI-format upstream JSON to Anthropic format.
-                    let choices = json["choices"].as_array().and_then(|arr| arr.first());
-                    let message = choices.and_then(|c| c.get("message"));
-
-                    let content = message
-                        .and_then(|m| m.get("content").and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let reasoning =
-                        message.and_then(|m| m.get("reasoning_content").and_then(|v| v.as_str()));
-                    let tool_calls_json =
-                        message.and_then(|m| m.get("tool_calls").and_then(|v| v.as_array()));
-                    let upstream_finish_reason = choices
-                        .and_then(|c| c.get("finish_reason").and_then(|v| v.as_str()))
-                        .unwrap_or("stop");
-
-                    let anthropic_stop_reason = match upstream_finish_reason {
-                        "tool_calls" => "tool_use",
-                        _ => "end_turn",
-                    };
-
-                    let tool_calls = tool_calls_json.map(|arr| {
-                        let original_count = arr.len();
-                        let converted: Vec<_> = arr
-                            .iter()
-                            .filter_map(|tc| {
-                                let name = tc
-                                    .get("function")
-                                    .and_then(|f| f.get("name").and_then(|v| v.as_str()))?;
-                                let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
-                                let args = tc
-                                    .get("function")
-                                    .and_then(|f| f.get("arguments").and_then(|v| v.as_str()))
-                                    .and_then(|s| serde_json::from_str(s).ok())
-                                    .unwrap_or_default();
-                                Some(crate::capability::ToolCall {
-                                    id,
-                                    name: name.to_string(),
-                                    arguments: args,
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        if converted.len() < original_count {
-                            tracing::warn!(
-                                dropped = original_count - converted.len(),
-                                "dropped malformed tool calls in Anthropic NonStreaming conversion"
-                            );
-                        }
-                        converted
-                    });
-                    let tool_calls_opt = tool_calls.filter(|v| !v.is_empty());
-
+                    // Conversion logic is in anthropic::convert_from_openai_non_streaming
+                    // so that all Anthropic response formatting lives in one module.
                     let usage_ref = usage.as_ref();
                     let prompt_tokens = usage_ref.map(|u| u.prompt_tokens as usize).unwrap_or(0);
                     let completion_tokens =
                         usage_ref.map(|u| u.completion_tokens as usize).unwrap_or(0);
 
-                    let response_body = anthropic::serialize_response(
-                        "msg-gw",
+                    let response_body = anthropic::convert_from_openai_non_streaming(
+                        &json,
                         model,
-                        if content.is_empty() {
-                            None
-                        } else {
-                            Some(content)
-                        },
-                        tool_calls_opt,
-                        Some(anthropic_stop_reason),
-                        reasoning,
                         prompt_tokens,
                         completion_tokens,
                     )
@@ -505,10 +509,10 @@ async fn responses_handler_impl(
         dispatch_responses_stream_mode(mode, guard, protocol)
     } else {
         // Conversion mode: Responses client → Chat Completions upstream.
-        // Parse body once; thread through boundary checks + request parser
-        // to avoid re-parsing the same JSON (issue #1, code review).
-        let parsed: serde_json::Value = match serde_json::from_str(&body) {
-            Ok(v) => v,
+        // Single parse: boundary metadata is extracted during deserialization
+        // so the body is never parsed twice.
+        let (unified, meta) = match responses::parse_responses_request(&body) {
+            Ok(r) => r,
             Err(e) => {
                 guard.finish_err();
                 return Err(ProtocolError::Parse {
@@ -520,7 +524,7 @@ async fn responses_handler_impl(
         // Boundary validation (stateless principle): the gateway does not retain
         // conversation state, so stateful Responses features must be rejected
         // with a clear 400 rather than silently dropped.
-        if has_previous_response_id(&parsed) || has_store_true(&parsed) {
+        if meta.has_previous_response_id || meta.has_store_true {
             guard.finish_err();
             return Err(ProtocolError::Parse {
                 message: "previous_response_id / store not supported in conversion mode; \
@@ -529,7 +533,7 @@ async fn responses_handler_impl(
                 protocol,
             });
         }
-        if has_builtin_tools_value(&parsed) {
+        if meta.has_builtin_tools {
             guard.finish_err();
             return Err(ProtocolError::Parse {
                 message: "built-in tools (web_search/file_search/computer_use) not supported \
@@ -538,16 +542,6 @@ async fn responses_handler_impl(
                 protocol,
             });
         }
-        let unified = match responses::parse_responses_request(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                guard.finish_err();
-                return Err(ProtocolError::Parse {
-                    message: e.to_string(),
-                    protocol,
-                });
-            }
-        };
         let unified = if let Some(up) = router.resolve_upstream_model(&model) {
             let mut u = unified;
             u.model = up;
@@ -566,37 +560,6 @@ async fn responses_handler_impl(
         };
         dispatch_responses_conversion(stream_mode, &model, guard, protocol)
     }
-}
-
-/// Check whether the pre-parsed request body carries a non-empty `previous_response_id`.
-fn has_previous_response_id(parsed: &serde_json::Value) -> bool {
-    parsed
-        .get("previous_response_id")
-        .and_then(|f| f.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
-}
-
-/// Check whether the pre-parsed request body sets `store: true`.
-fn has_store_true(parsed: &serde_json::Value) -> bool {
-    parsed
-        .get("store")
-        .and_then(|f| f.as_bool())
-        .unwrap_or(false)
-}
-
-/// Check whether the pre-parsed request body's `tools` array contains any non-function
-/// (built-in) tool entry (`web_search_preview`, `file_search`, `computer_use`, ...).
-fn has_builtin_tools_value(parsed: &serde_json::Value) -> bool {
-    let Some(tools) = parsed.get("tools").and_then(|t| t.as_array()) else {
-        return false;
-    };
-    tools.iter().any(|t| {
-        t.get("type")
-            .and_then(|ty| ty.as_str())
-            .map(|s| s != "function")
-            .unwrap_or(true)
-    })
 }
 
 /// Dispatch a conversion-mode `StreamMode` to a final HTTP response.
@@ -827,8 +790,45 @@ mod tests {
 
     // ── Mock Router ──────────────────────────────────────────────────
 
+    /// Minimal mock provider that returns a canned JSON value from
+    /// `chat_raw_non_streaming`.
+    struct MockProvider {
+        raw_response: Arc<Mutex<Option<serde_json::Value>>>,
+    }
+
+    #[async_trait]
+    impl crate::provider::Provider for MockProvider {
+        async fn chat_stream(
+            &self,
+            _request: UnifiedRequest,
+            _allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, crate::provider::ProviderError> {
+            unimplemented!()
+        }
+        fn capabilities(&self) -> crate::provider::ProviderCapabilities {
+            crate::provider::ProviderCapabilities {
+                tool_calling: crate::provider::ToolCallingSupport::Native,
+                image_input: false,
+                streaming: false,
+                supports_responses: false,
+            }
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        async fn chat_raw_non_streaming(
+            &self,
+            _body: String,
+        ) -> Result<serde_json::Value, crate::provider::ProviderError> {
+            self.raw_response.lock().unwrap().take().ok_or_else(|| {
+                crate::provider::ProviderError::Internal("no response configured".into())
+            })
+        }
+    }
+
     struct MockRouter {
         stream_mode: Arc<Mutex<Option<crate::streaming::StreamMode>>>,
+        mock_provider: Option<Arc<MockProvider>>,
     }
 
     impl MockRouter {
@@ -837,12 +837,14 @@ mod tests {
                 stream_mode: Arc::new(Mutex::new(Some(
                     crate::streaming::StreamMode::NonStreaming(json),
                 ))),
+                mock_provider: None,
             }
         }
 
         fn with_router_error() -> Self {
             Self {
                 stream_mode: Arc::new(Mutex::new(None)),
+                mock_provider: None,
             }
         }
 
@@ -851,6 +853,16 @@ mod tests {
             let mode = crate::streaming::StreamMode::Normalized(Box::pin(stream));
             Self {
                 stream_mode: Arc::new(Mutex::new(Some(mode))),
+                mock_provider: None,
+            }
+        }
+
+        fn with_raw_provider(raw_response: serde_json::Value) -> Self {
+            Self {
+                stream_mode: Arc::new(Mutex::new(None)),
+                mock_provider: Some(Arc::new(MockProvider {
+                    raw_response: Arc::new(Mutex::new(Some(raw_response))),
+                })),
             }
         }
     }
@@ -868,6 +880,11 @@ mod tests {
         }
         fn list_providers(&self) -> Vec<String> {
             vec!["mock".to_string()]
+        }
+        fn get_provider(&self, _name: &str) -> Option<&dyn crate::provider::Provider> {
+            self.mock_provider
+                .as_ref()
+                .map(|p| p.as_ref() as &dyn crate::provider::Provider)
         }
         async fn chat_stream(
             &self,
@@ -1134,6 +1151,7 @@ mod tests {
         let mode = crate::streaming::StreamMode::Passthrough(Box::pin(stream));
         let router = MockRouter {
             stream_mode: Arc::new(Mutex::new(Some(mode))),
+            mock_provider: None,
         };
         let guard = make_guard();
         let result = collect_non_streaming(
@@ -1295,5 +1313,25 @@ mod tests {
         assert_eq!(v["choices"][0]["message"]["content"], "Hello world");
         assert_eq!(v["usage"]["prompt_tokens"], 10);
         assert_eq!(v["usage"]["completion_tokens"], 5);
+    }
+
+    #[tokio::test]
+    async fn collect_non_streaming_raw_returns_provider_response() {
+        let raw_json = serde_json::json!({
+            "choices": [{"message": {"content": "from raw"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2}
+        });
+        let router = MockRouter::with_raw_provider(raw_json);
+        let guard = make_guard();
+        let result =
+            collect_non_streaming_raw(r#"{"model":"x","messages":[]}"#.into(), &router, "x", guard)
+                .await
+                .unwrap();
+        let body = result.into_body();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "from raw");
+        assert_eq!(v["usage"]["prompt_tokens"], 1);
+        assert_eq!(v["usage"]["completion_tokens"], 2);
     }
 }
