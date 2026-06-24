@@ -13,6 +13,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::router::{Router, RouterError};
+use crate::streaming::StreamMode;
 
 /// Map a `RouterError` to the appropriate `ProtocolError`, preserving upstream HTTP status.
 fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
@@ -422,35 +423,123 @@ async fn collect_non_streaming(
 }
 
 /// Handle an Anthropic-format request. Forwards to the appropriate provider.
+///
+/// Dual-mode dispatch:
+/// * If the selected provider advertises `supports_anthropic`, forward the raw
+///   body via [`Provider::anthropic_passthrough`] (passthrough — the upstream
+///   already speaks the Anthropic Messages wire format).
+/// * Otherwise, convert to OpenAI Chat Completions format and convert the
+///   response back to Anthropic format.
 async fn anthropic_handler(
     body: String,
     router: &dyn Router,
-    guard: crate::metrics::guard::RequestGuard,
+    mut guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
-    let unified_req = match anthropic::parse_messages_request(&body) {
-        Ok(req) => req,
+    let protocol = Protocol::Anthropic;
+
+    // ── Lightweight model extraction (before full parse) ────────────────
+    let model_name = extract_model_field(&body);
+
+    // Sync guard model with the upstream model for accurate metrics.
+    if let Some(upstream) = router.resolve_upstream_model(&model_name) {
+        guard.set_model(upstream);
+    }
+
+    let provider_name = match router.resolve(&model_name) {
+        Ok(n) => n,
         Err(e) => {
-            return Err(ProtocolError::Parse {
-                message: e.to_string(),
-                protocol: Protocol::Anthropic,
+            guard.finish_err();
+            return Err(map_router_error(e, protocol));
+        }
+    };
+    let provider = match router.get_provider(&provider_name) {
+        Some(p) => p,
+        None => {
+            guard.finish_err();
+            return Err(ProtocolError::Internal {
+                message: "provider not found".into(),
+                protocol,
             });
         }
     };
 
-    let model_name = unified_req.model.clone();
+    let caps = provider.capabilities();
+    let stream = extract_stream_field(&body);
+
+    // ── Passthrough path: upstream speaks Anthropic natively ─────────────
+    if caps.supports_anthropic {
+        let mut passthrough_body = body;
+        // Patch model if upstream override is configured.
+        if let Some(upstream) = router.resolve_upstream_model(&model_name)
+            && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&passthrough_body)
+        {
+            v["model"] = serde_json::json!(&upstream);
+            passthrough_body = serde_json::to_string(&v).unwrap_or(passthrough_body);
+        }
+
+        let mode = match provider
+            .anthropic_passthrough(passthrough_body, stream)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                guard.finish_err();
+                return Err(map_router_error(
+                    crate::router::RouterError::from(e),
+                    protocol,
+                ));
+            }
+        };
+
+        return match mode {
+            StreamMode::Passthrough(byte_stream) => {
+                let tracker = guard.into_tracker();
+                Ok(stream_dispatch::forward_as_sse_response_skip_wrap(
+                    StreamMode::Passthrough(byte_stream),
+                    protocol,
+                    &model_name,
+                    tracker,
+                ))
+            }
+            StreamMode::NonStreaming(json) => {
+                // Extract usage from Anthropic-format response.
+                let usage = json.get("usage").map(|u| crate::metrics::TokenUsage {
+                    prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as u32,
+                    completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as u32,
+                });
+                let first_token_ms = Some(guard.elapsed_ms());
+                guard.finish(true, usage, first_token_ms);
+                Ok((StatusCode::OK, Json(json)).into_response())
+            }
+            StreamMode::Normalized(_) => {
+                guard.finish_err();
+                Err(ProtocolError::Internal {
+                    message: "unexpected Normalized stream from anthropic_passthrough".into(),
+                    protocol,
+                })
+            }
+        };
+    }
+
+    // ── Conversion path: parse → UnifiedRequest → chat/completions ───────
+    let unified_req = match anthropic::parse_messages_request(&body) {
+        Ok(req) => req,
+        Err(e) => {
+            guard.finish_err();
+            return Err(ProtocolError::Parse {
+                message: e.to_string(),
+                protocol,
+            });
+        }
+    };
 
     if unified_req.stream {
         let tracker = guard.into_tracker();
-        forward_streaming(
-            router,
-            unified_req,
-            &model_name,
-            Protocol::Anthropic,
-            tracker,
-        )
-        .await
+        forward_streaming(router, unified_req, &model_name, protocol, tracker).await
     } else {
-        collect_non_streaming(router, unified_req, &model_name, Protocol::Anthropic, guard).await
+        collect_non_streaming(router, unified_req, &model_name, protocol, guard).await
     }
 }
 
@@ -811,6 +900,7 @@ mod tests {
                 image_input: false,
                 streaming: false,
                 supports_responses: false,
+                supports_anthropic: false,
             }
         }
         fn name(&self) -> &str {

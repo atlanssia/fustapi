@@ -29,10 +29,32 @@ pub(crate) fn forward_as_sse_response(
     model: &str,
     tracker: StreamTracker,
 ) -> Response {
+    forward_as_sse_response_inner(stream_mode, protocol, model, tracker, false)
+}
+
+/// Same as [`forward_as_sse_response`] but allows skipping the Anthropic
+/// `message_start` / `message_stop` wrapper. Set `skip_wrap = true` when the
+/// upstream already emits proper Anthropic SSE events (passthrough mode).
+pub(crate) fn forward_as_sse_response_skip_wrap(
+    stream_mode: StreamMode,
+    protocol: Protocol,
+    model: &str,
+    tracker: StreamTracker,
+) -> Response {
+    forward_as_sse_response_inner(stream_mode, protocol, model, tracker, true)
+}
+
+fn forward_as_sse_response_inner(
+    stream_mode: StreamMode,
+    protocol: Protocol,
+    model: &str,
+    tracker: StreamTracker,
+    skip_wrap: bool,
+) -> Response {
     match stream_mode {
         StreamMode::Normalized(stream) => normalized_sse_response(stream, protocol, model, tracker),
         StreamMode::Passthrough(byte_stream) => {
-            passthrough_sse_response(byte_stream, protocol, model, tracker)
+            passthrough_sse_response(byte_stream, protocol, model, tracker, skip_wrap)
         }
         StreamMode::NonStreaming(_) => {
             // Non-streaming responses are handled by collect_non_streaming().
@@ -115,6 +137,7 @@ fn passthrough_sse_response(
     protocol: Protocol,
     model: &str,
     mut tracker: StreamTracker,
+    skip_wrap: bool,
 ) -> Response {
     let mut buf = bytes::BytesMut::with_capacity(8192);
     let model_for_wrap = model.to_string();
@@ -155,7 +178,7 @@ fn passthrough_sse_response(
 
     let pinned = Box::pin(body_stream);
 
-    if protocol == Protocol::Anthropic {
+    if protocol == Protocol::Anthropic && !skip_wrap {
         wrap_anthropic(pinned, &model_for_wrap)
     } else {
         sse_response(pinned)

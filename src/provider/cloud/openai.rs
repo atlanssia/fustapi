@@ -35,6 +35,9 @@ pub struct OpenAIConfig {
     /// Default `true` for the canonical `OpenAI` endpoint; `create_provider`
     /// sets it explicitly per provider type.
     pub supports_responses: bool,
+    /// Whether the upstream supports the Anthropic Messages API natively.
+    /// When `true`, `/v1/messages` requests are forwarded as-is.
+    pub supports_anthropic: bool,
     /// Balance strategy — selects the provider-specific balance query logic.
     pub balance_strategy: BalanceStrategy,
 }
@@ -65,6 +68,7 @@ impl Default for OpenAIConfig {
             image_input: true,
             streaming: true,
             supports_responses: true,
+            supports_anthropic: false,
             balance_strategy: BalanceStrategy::Default,
         }
     }
@@ -567,12 +571,63 @@ impl Provider for OpenAIProvider {
         }
     }
 
+    async fn anthropic_passthrough(
+        &self,
+        body: String,
+        stream: bool,
+    ) -> Result<crate::streaming::StreamMode, ProviderError> {
+        let url = format!("{}/v1/messages", self.config.endpoint.trim_end_matches('/'));
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("anthropic-version", "2023-06-01");
+
+        if !self.config.api_key.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        let builder = builder.body(body);
+        let resp = send_with_tcp_retry(builder).await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
+                ProviderError::Upstream {
+                    status: status.as_u16(),
+                    message: err_text,
+                }
+            } else {
+                ProviderError::Request(format!("provider error {status}: {err_text}"))
+            });
+        }
+
+        if stream {
+            let byte_stream = futures::StreamExt::map(resp.bytes_stream(), |res| {
+                res.map_err(|e| crate::streaming::StreamError::Connection(e.to_string()))
+            });
+            Ok(crate::streaming::StreamMode::Passthrough(Box::pin(
+                byte_stream,
+            )))
+        } else {
+            let full = resp
+                .bytes()
+                .await
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
+            let json: serde_json::Value = serde_json::from_slice(&full)
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
+            Ok(crate::streaming::StreamMode::NonStreaming(json))
+        }
+    }
+
     fn capabilities(&self) -> crate::provider::ProviderCapabilities {
         crate::provider::ProviderCapabilities {
             tool_calling: self.config.tool_calling,
             image_input: self.config.image_input,
             streaming: self.config.streaming,
             supports_responses: self.config.supports_responses,
+            supports_anthropic: self.config.supports_anthropic,
         }
     }
 
@@ -712,10 +767,18 @@ impl OpenAIProvider {
     }
 
     async fn balance_deepseek(&self) -> Result<Option<ProviderBalance>, ProviderError> {
-        let url = format!(
-            "{}/user/balance",
-            self.config.endpoint.trim_end_matches('/')
-        );
+        // Extract the origin (scheme + host + port) so that path prefixes
+        // like /anthropic don't leak into the /user/balance URL.
+        // e.g. "https://api.deepseek.com/anthropic" → "https://api.deepseek.com"
+        let origin: String = self
+            .config
+            .endpoint
+            .trim_end_matches('/')
+            .split('/')
+            .take(3) // "https:", "", "api.deepseek.com"
+            .collect::<Vec<_>>()
+            .join("/");
+        let url = format!("{origin}/user/balance");
         let mut builder = self.client.get(&url).header("Accept", "application/json");
         if !self.config.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));

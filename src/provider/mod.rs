@@ -34,6 +34,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     image_input: true,
                     streaming: true,
                     supports_responses: false,
+                    supports_anthropic: false,
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
                 },
             ));
@@ -61,6 +62,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: true,
                 streaming: true,
                 supports_responses: false,
+                supports_anthropic: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Omlx,
             },
         )),
@@ -75,6 +77,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: true,
                 streaming: true,
                 supports_responses: false,
+                supports_anthropic: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
@@ -89,6 +92,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: true,
                 streaming: true,
                 supports_responses: false,
+                supports_anthropic: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
             },
         )),
@@ -103,6 +107,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: false,
                 streaming: true,
                 supports_responses: false,
+                supports_anthropic: false,
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Glm,
             },
         )),
@@ -117,6 +122,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: false,
                 streaming: true,
                 supports_responses: false,
+                supports_anthropic: cfg.supports_anthropic.unwrap_or(false),
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::DeepSeek,
             },
         )),
@@ -132,6 +138,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     image_input: true,
                     streaming: true,
                     supports_responses: cfg.supports_responses.unwrap_or(pt == Pt::OpenAI),
+                    supports_anthropic: cfg.supports_anthropic.unwrap_or(false),
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
                 },
             ))
@@ -148,6 +155,9 @@ pub struct ProviderCapabilities {
     /// Whether the upstream supports the Responses API natively.
     /// `true` → forward as-is (passthrough). `false` → convert to chat completions.
     pub supports_responses: bool,
+    /// Whether the upstream supports the Anthropic Messages API natively.
+    /// `true` → forward `/v1/messages` requests as-is (passthrough).
+    pub supports_anthropic: bool,
 }
 
 /// Provider-agnostic chat message.
@@ -272,6 +282,20 @@ pub trait Provider: Send + Sync {
     ) -> Result<StreamMode, ProviderError> {
         Err(ProviderError::Internal(
             "responses_passthrough not supported".into(),
+        ))
+    }
+
+    /// Forward a raw Anthropic Messages request body to an upstream that
+    /// supports the Anthropic Messages API natively. Returns Passthrough
+    /// (streaming) or NonStreaming.
+    /// Default: unsupported. Override in providers that speak Anthropic.
+    async fn anthropic_passthrough(
+        &self,
+        _body: String,
+        _stream: bool,
+    ) -> Result<StreamMode, ProviderError> {
+        Err(ProviderError::Internal(
+            "anthropic passthrough not supported".into(),
         ))
     }
 }
@@ -449,6 +473,7 @@ mod wrapper_collapse_tests {
             api_key: None,
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "oMLX");
@@ -468,6 +493,7 @@ mod wrapper_collapse_tests {
             api_key: Some("test-key".to_string()),
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "DeepSeek");
@@ -486,6 +512,7 @@ mod wrapper_collapse_tests {
             api_key: Some("test-key".to_string()),
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "GLM");
@@ -504,6 +531,7 @@ mod wrapper_collapse_tests {
             api_key: Some("test-key".to_string()),
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "GLM");
@@ -517,6 +545,7 @@ mod wrapper_collapse_tests {
             api_key: None,
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "oMLX");
@@ -530,6 +559,7 @@ mod wrapper_collapse_tests {
             api_key: None,
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "LM Studio");
@@ -543,6 +573,7 @@ mod wrapper_collapse_tests {
             api_key: None,
             model: None,
             supports_responses: None,
+            supports_anthropic: None,
         };
         let provider = create_provider("test", &cfg);
         assert_eq!(provider.name(), "SGLang");
@@ -677,6 +708,7 @@ mod supports_responses_tests {
             model: None,
             r#type: "deepseek".into(),
             supports_responses: None,
+            supports_anthropic: None,
         };
         let p = create_provider("ds", &cfg);
         assert!(!p.capabilities().supports_responses);
@@ -691,6 +723,7 @@ mod supports_responses_tests {
             model: None,
             r#type: "openai-compatible".into(),
             supports_responses: Some(true),
+            supports_anthropic: None,
         };
         let p = create_provider("proxy", &cfg);
         assert!(p.capabilities().supports_responses);

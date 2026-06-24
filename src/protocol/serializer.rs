@@ -711,9 +711,8 @@ pub fn extract_usage_from_sse_bytes(
 ) -> Option<crate::metrics::TokenUsage> {
     let (prompt_key, completion_key) = match protocol {
         super::Protocol::Responses => ("input_tokens", "output_tokens"),
-        super::Protocol::OpenAI | super::Protocol::Anthropic => {
-            ("prompt_tokens", "completion_tokens")
-        }
+        super::Protocol::Anthropic => ("input_tokens", "output_tokens"),
+        super::Protocol::OpenAI => ("prompt_tokens", "completion_tokens"),
     };
     let text = String::from_utf8_lossy(buf);
     for line in text.lines() {

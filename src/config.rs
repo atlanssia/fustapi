@@ -48,6 +48,11 @@ pub struct ProviderConfig {
     /// (`openai` → `true`, everything else → `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_responses: Option<bool>,
+    /// Optional override declaring whether the upstream supports the Anthropic
+    /// Messages API natively. When `true`, `/v1/messages` requests are forwarded
+    /// as-is without OpenAI-format conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_anthropic: Option<bool>,
 }
 
 pub(crate) fn default_type() -> String {
@@ -148,6 +153,7 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
                 model: rec.upstream_model.clone(),
                 r#type: rec.r#type.clone(),
                 supports_responses: None,
+                supports_anthropic: None,
             },
         );
     }
@@ -286,6 +292,7 @@ mod tests {
                 model: None,
                 r#type: "omlx".into(),
                 supports_responses: None,
+                supports_anthropic: None,
             },
         );
         first.router.insert(
@@ -306,6 +313,7 @@ mod tests {
                 model: None,
                 r#type: "openai".into(),
                 supports_responses: None,
+                supports_anthropic: None,
             },
         );
         second.router.insert(
@@ -349,6 +357,7 @@ mod tests {
                 model: None,
                 r#type: "openai".into(),
                 supports_responses: None,
+                supports_anthropic: None,
             },
         );
         config.providers.insert(
@@ -359,6 +368,7 @@ mod tests {
                 model: None,
                 r#type: "deepseek".into(),
                 supports_responses: None,
+                supports_anthropic: None,
             },
         );
         let mut upstream = HashMap::new();

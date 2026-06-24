@@ -163,6 +163,7 @@ fn provider_config_from_form(
         model,
         r#type: form.provider_type,
         supports_responses: existing.and_then(|cfg| cfg.supports_responses),
+        supports_anthropic: existing.and_then(|cfg| cfg.supports_anthropic),
     }
 }
 
@@ -708,6 +709,7 @@ mod tests {
             model: Some("gpt-4".into()),
             r#type: "openai".into(),
             supports_responses: None,
+            supports_anthropic: None,
         };
 
         let info = provider_info_from_config("main".into(), Some(&cfg));
@@ -728,6 +730,7 @@ mod tests {
             model: Some("old-model".into()),
             r#type: "openai".into(),
             supports_responses: None,
+            supports_anthropic: None,
         };
         let form = ProviderForm {
             name: "main".into(),
@@ -752,6 +755,7 @@ mod tests {
             model: None,
             r#type: "openai".into(),
             supports_responses: None,
+            supports_anthropic: None,
         };
         let form = ProviderForm {
             name: "main".into(),
