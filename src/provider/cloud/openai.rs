@@ -287,16 +287,22 @@ impl OpenAIProvider {
 
     /// Fetch available models from the provider's `/v1/models` endpoint.
     pub async fn fetch_model_list(&self) -> Result<Vec<String>, ProviderError> {
-        let base = self
+        // Extract the origin so path prefixes like /anthropic or /v1
+        // don't leak into the /v1/models URL.
+        // e.g. "https://api.deepseek.com/anthropic" → "https://api.deepseek.com"
+        let origin: String = self
             .config
             .endpoint
-            .trim_end_matches("/v1")
-            .trim_end_matches('/');
+            .trim_end_matches('/')
+            .split('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("/");
         let is_local = self.config.endpoint.contains("localhost")
             || self.config.endpoint.contains("127.0.0.1")
             || self.config.endpoint.contains("::1");
 
-        let mut builder = self.client.get(format!("{}/v1/models", base));
+        let mut builder = self.client.get(format!("{origin}/v1/models"));
         if !self.config.api_key.is_empty() && !is_local {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
         }
@@ -694,12 +700,15 @@ impl OpenAIProvider {
         let config = self.config.clone();
         let name = self.name().to_string();
         let fetch = Box::pin(async move {
-            let base = config
+            let base: String = config
                 .endpoint
-                .trim_end_matches("/v1")
-                .trim_end_matches('/');
+                .trim_end_matches('/')
+                .split('/')
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("/");
             let local = super::health_prober::is_local(&config.endpoint);
-            let mut builder = client.get(format!("{}/v1/models", base));
+            let mut builder = client.get(format!("{base}/v1/models"));
             if !config.api_key.is_empty() && !local {
                 builder = builder.header("Authorization", format!("Bearer {}", config.api_key));
             }
