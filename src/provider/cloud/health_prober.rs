@@ -32,19 +32,9 @@ pub async fn probe_balance(
 ) -> Result<Option<ProviderBalance>, ProviderError> {
     let local = is_local(&config.endpoint);
 
-    // Extract origin so path prefixes like /anthropic or /v1
-    // don't leak into metadata endpoint URLs.
-    let base: String = config
-        .endpoint
-        .trim_end_matches('/')
-        .split('/')
-        .take(3)
-        .collect::<Vec<_>>()
-        .join("/");
-
     // Strategy 1 (local only): Try /health endpoint
     let health_ok = if local {
-        match client.get(format!("{base}/health")).send().await {
+        match client.get(config.metadata_url("/health")).send().await {
             Ok(resp) if resp.status().is_success() => match resp.text().await {
                 Ok(text) if text.trim().is_empty() => Some((true, None)),
                 Ok(text) => {

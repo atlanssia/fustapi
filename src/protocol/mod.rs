@@ -14,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::router::{Router, RouterError};
 use crate::streaming::StreamMode;
+use tracing::{debug, error};
 
 /// Map a `RouterError` to the appropriate `ProtocolError`, preserving upstream HTTP status.
 fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
@@ -61,6 +62,8 @@ pub async fn dispatch_request(
     router: &dyn Router,
     guard: crate::metrics::guard::RequestGuard,
 ) -> Result<Response, ProtocolError> {
+    debug!(model = %extract_model_field(&body), ?protocol, "dispatching request");
+
     match protocol {
         Protocol::OpenAI => openai_handler(body, router, guard).await,
         Protocol::Anthropic => anthropic_handler(body, router, guard).await,
@@ -166,6 +169,7 @@ async fn forward_streaming(
     mut tracker: crate::metrics::StreamTracker,
 ) -> Result<Response, ProtocolError> {
     let allow_passthrough = protocol == Protocol::OpenAI;
+    debug!(%model, ?protocol, allow_passthrough, "streaming dispatch");
 
     // Sync tracker model with the upstream model for accurate metrics.
     if let Some(upstream) = router.resolve_upstream_model(model) {
@@ -468,6 +472,12 @@ async fn anthropic_handler(
 
     // ── Passthrough path: upstream speaks Anthropic natively ─────────────
     if caps.supports_anthropic {
+        debug!(
+            provider = %provider_name,
+            model = %model_name,
+            stream,
+            "anthropic passthrough"
+        );
         let mut passthrough_body = body;
         // Patch model if upstream override is configured.
         if let Some(upstream) = router.resolve_upstream_model(&model_name)
@@ -484,6 +494,7 @@ async fn anthropic_handler(
             Ok(m) => m,
             Err(e) => {
                 guard.finish_err();
+                error!(%e, provider = %provider_name, "passthrough failed");
                 return Err(map_router_error(
                     crate::router::RouterError::from(e),
                     protocol,

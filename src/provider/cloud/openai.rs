@@ -99,7 +99,7 @@ impl OpenAIProvider {
     /// Target URL for Responses API: `{endpoint}/responses`.
     #[must_use]
     pub(crate) fn responses_target_url(&self) -> String {
-        format!("{}/responses", self.config.endpoint.trim_end_matches('/'))
+        self.config.api_url("/responses")
     }
 
     /// Build the OpenAI-compatible request body from a `UnifiedRequest`.
@@ -287,22 +287,11 @@ impl OpenAIProvider {
 
     /// Fetch available models from the provider's `/v1/models` endpoint.
     pub async fn fetch_model_list(&self) -> Result<Vec<String>, ProviderError> {
-        // Extract the origin so path prefixes like /anthropic or /v1
-        // don't leak into the /v1/models URL.
-        // e.g. "https://api.deepseek.com/anthropic" → "https://api.deepseek.com"
-        let origin: String = self
-            .config
-            .endpoint
-            .trim_end_matches('/')
-            .split('/')
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("/");
         let is_local = self.config.endpoint.contains("localhost")
             || self.config.endpoint.contains("127.0.0.1")
             || self.config.endpoint.contains("::1");
 
-        let mut builder = self.client.get(format!("{origin}/v1/models"));
+        let mut builder = self.client.get(self.config.metadata_url("/v1/models"));
         if !self.config.api_key.is_empty() && !is_local {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
         }
@@ -319,9 +308,11 @@ impl OpenAIProvider {
                     })
                 })
                 .ok_or_else(|| ProviderError::Internal("Failed to parse models response".into())),
-            Ok(_) => Err(ProviderError::Connection(
-                "models endpoint returned non-success status".into(),
-            )),
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                Err(classify_http_error(status, body))
+            }
             Err(e) => Err(ProviderError::Connection(e.to_string())),
         }
     }
@@ -413,10 +404,7 @@ impl Provider for OpenAIProvider {
         allow_passthrough: bool,
     ) -> Result<crate::streaming::StreamMode, ProviderError> {
         let body = self.build_request_body(&request);
-        let url = format!(
-            "{}/chat/completions",
-            self.config.endpoint.trim_end_matches('/')
-        );
+        let url = self.config.api_url("/chat/completions");
 
         let mut builder = self
             .client
@@ -433,16 +421,9 @@ impl Provider for OpenAIProvider {
             let resp = send_with_tcp_retry(builder).await?;
 
             if !resp.status().is_success() {
-                let status = resp.status();
-                let err_text = resp.text().await.unwrap_or_default();
-                return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                    ProviderError::Upstream {
-                        status: status.as_u16(),
-                        message: err_text,
-                    }
-                } else {
-                    ProviderError::Request(format!("provider error {status}: {err_text}"))
-                });
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(classify_http_error(status, body));
             }
 
             if allow_passthrough {
@@ -461,16 +442,9 @@ impl Provider for OpenAIProvider {
             let resp_body = send_with_tcp_retry(builder).await?;
 
             if !resp_body.status().is_success() {
-                let status = resp_body.status();
-                let err_text = resp_body.text().await.unwrap_or_default();
-                return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                    ProviderError::Upstream {
-                        status: status.as_u16(),
-                        message: err_text,
-                    }
-                } else {
-                    ProviderError::Request(format!("provider error {status}: {err_text}"))
-                });
+                let status = resp_body.status().as_u16();
+                let body = resp_body.text().await.unwrap_or_default();
+                return Err(classify_http_error(status, body));
             }
 
             // Read the full response body and return as raw JSON, avoiding the
@@ -491,10 +465,7 @@ impl Provider for OpenAIProvider {
         &self,
         body: String,
     ) -> Result<serde_json::Value, ProviderError> {
-        let url = format!(
-            "{}/chat/completions",
-            self.config.endpoint.trim_end_matches('/')
-        );
+        let url = self.config.api_url("/chat/completions");
 
         let mut builder = self
             .client
@@ -508,16 +479,9 @@ impl Provider for OpenAIProvider {
 
         let resp_body = send_with_tcp_retry(builder).await?;
         if !resp_body.status().is_success() {
-            let status = resp_body.status();
-            let err_text = resp_body.text().await.unwrap_or_default();
-            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                ProviderError::Upstream {
-                    status: status.as_u16(),
-                    message: err_text,
-                }
-            } else {
-                ProviderError::Request(format!("provider error {status}: {err_text}"))
-            });
+            let status = resp_body.status().as_u16();
+            let body = resp_body.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         let full_bytes = resp_body
@@ -547,16 +511,9 @@ impl Provider for OpenAIProvider {
         let resp = send_with_tcp_retry(builder).await?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                ProviderError::Upstream {
-                    status: status.as_u16(),
-                    message: err_text,
-                }
-            } else {
-                ProviderError::Request(format!("provider error {status}: {err_text}"))
-            });
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         if stream {
@@ -582,7 +539,7 @@ impl Provider for OpenAIProvider {
         body: String,
         stream: bool,
     ) -> Result<crate::streaming::StreamMode, ProviderError> {
-        let url = format!("{}/v1/messages", self.config.endpoint.trim_end_matches('/'));
+        let url = self.config.api_url("/v1/messages");
         let mut builder = self
             .client
             .post(&url)
@@ -597,16 +554,9 @@ impl Provider for OpenAIProvider {
         let resp = send_with_tcp_retry(builder).await?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(if status.as_u16() >= 400 && status.as_u16() < 500 {
-                ProviderError::Upstream {
-                    status: status.as_u16(),
-                    message: err_text,
-                }
-            } else {
-                ProviderError::Request(format!("provider error {status}: {err_text}"))
-            });
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         if stream {
@@ -683,10 +633,9 @@ impl OpenAIProvider {
             .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(ProviderError::Connection(format!(
-                "GLM models endpoint returned {}",
-                resp.status()
-            )));
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         resp.json::<serde_json::Value>()
@@ -707,15 +656,8 @@ impl OpenAIProvider {
         let config = self.config.clone();
         let name = self.name().to_string();
         let fetch = Box::pin(async move {
-            let base: String = config
-                .endpoint
-                .trim_end_matches('/')
-                .split('/')
-                .take(3)
-                .collect::<Vec<_>>()
-                .join("/");
             let local = super::health_prober::is_local(&config.endpoint);
-            let mut builder = client.get(format!("{base}/v1/models"));
+            let mut builder = client.get(config.metadata_url("/v1/models"));
             if !config.api_key.is_empty() && !local {
                 builder = builder.header("Authorization", format!("Bearer {}", config.api_key));
             }
@@ -734,9 +676,11 @@ impl OpenAIProvider {
                     .ok_or_else(|| {
                         ProviderError::Internal("Failed to parse models response".into())
                     }),
-                Ok(_) => Err(ProviderError::Connection(
-                    "models endpoint returned non-success status".into(),
-                )),
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let body = resp.text().await.unwrap_or_default();
+                    Err(classify_http_error(status, body))
+                }
                 Err(e) => Err(ProviderError::Connection(e.to_string())),
             }
         });
@@ -744,13 +688,7 @@ impl OpenAIProvider {
     }
 
     async fn balance_omlx(&self) -> Result<Option<ProviderBalance>, ProviderError> {
-        let url = self
-            .config
-            .endpoint
-            .trim_end_matches("/v1")
-            .trim_end_matches('/')
-            .to_string()
-            + "/health";
+        let url = self.config.metadata_url("/health");
 
         let resp = self
             .client
@@ -760,11 +698,9 @@ impl OpenAIProvider {
             .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Request(format!(
-                "health query failed {status}: {err_text}"
-            )));
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         let body = resp
@@ -786,15 +722,7 @@ impl OpenAIProvider {
         // Extract the origin (scheme + host + port) so that path prefixes
         // like /anthropic don't leak into the /user/balance URL.
         // e.g. "https://api.deepseek.com/anthropic" → "https://api.deepseek.com"
-        let origin: String = self
-            .config
-            .endpoint
-            .trim_end_matches('/')
-            .split('/')
-            .take(3) // "https:", "", "api.deepseek.com"
-            .collect::<Vec<_>>()
-            .join("/");
-        let url = format!("{origin}/user/balance");
+        let url = self.config.metadata_url("/user/balance");
         let mut builder = self.client.get(&url).header("Accept", "application/json");
         if !self.config.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -806,11 +734,9 @@ impl OpenAIProvider {
             .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Request(format!(
-                "balance query failed {status}: {err_text}"
-            )));
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         let body = resp.text().await.unwrap_or_default();
@@ -840,11 +766,9 @@ impl OpenAIProvider {
             .map_err(|e| ProviderError::Connection(e.to_string()))?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Request(format!(
-                "balance query failed {status}: {err_text}"
-            )));
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body));
         }
 
         let body = resp.text().await.unwrap_or_default();
@@ -859,10 +783,106 @@ impl OpenAIProvider {
     }
 }
 
+// ── URL construction ──────────────────────────────────────────────────
+
+impl OpenAIConfig {
+    /// Build a URL for a standard metadata endpoint (`/v1/models`, `/health`,
+    /// `/user/balance`). Extracts the origin so path prefixes like `/anthropic`
+    /// or `/v1` don't leak into the URL.
+    ///
+    /// For providers with non-standard API path layouts (e.g. GLM's
+    /// `/api/coding/paas/v4`), use direct construction — this helper only
+    /// handles origin-based metadata endpoints.
+    pub fn metadata_url(&self, path: &str) -> String {
+        let origin: String = self
+            .endpoint
+            .trim_end_matches('/')
+            .split('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("/");
+        format!("{origin}{path}")
+    }
+
+    /// Build a URL by appending `path` directly to the configured endpoint.
+    /// Use for chat endpoints (/chat/completions, /v1/messages, /responses)
+    /// where the path prefix is part of the upstream's API routing.
+    pub fn api_url(&self, path: &str) -> String {
+        format!("{}{path}", self.endpoint.trim_end_matches('/'))
+    }
+}
+
+// ── HTTP error classification ──────────────────────────────────────────
+
+/// Classify a non-success HTTP status into the appropriate `ProviderError`.
+fn classify_http_error(status: u16, body: String) -> ProviderError {
+    // Truncate for logging — upstream error pages can be large HTML.
+    // Use char-based truncation to avoid splitting multi-byte UTF-8.
+    let log_body: std::borrow::Cow<'_, str> = if body.len() > 512 {
+        std::borrow::Cow::Owned(format!("{}…", body.chars().take(512).collect::<String>()))
+    } else {
+        std::borrow::Cow::Borrowed(&body)
+    };
+    if (400..500).contains(&status) {
+        tracing::warn!(status, %log_body, "upstream returned client error");
+        ProviderError::Upstream {
+            status,
+            message: body,
+        }
+    } else {
+        tracing::error!(status, %log_body, "upstream returned server error");
+        ProviderError::Request(format!("provider error {status}: {body}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::streaming::LLMStream;
+
+    // ── classify_http_error tests ──────────────────────────────────────
+
+    #[test]
+    fn classify_4xx_returns_upstream_error() {
+        let err = classify_http_error(429, "rate limited".into());
+        match err {
+            ProviderError::Upstream { status, message } => {
+                assert_eq!(status, 429);
+                assert_eq!(message, "rate limited");
+            }
+            other => panic!("expected Upstream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_5xx_returns_request_error() {
+        let err = classify_http_error(502, "bad gateway".into());
+        match err {
+            ProviderError::Request(msg) => {
+                assert!(msg.contains("502"));
+                assert!(msg.contains("bad gateway"));
+            }
+            other => panic!("expected Request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_400_boundary_is_upstream() {
+        let err = classify_http_error(400, "bad request".into());
+        assert!(matches!(err, ProviderError::Upstream { .. }));
+    }
+
+    #[test]
+    fn classify_499_boundary_is_upstream() {
+        let err = classify_http_error(499, "client closed".into());
+        assert!(matches!(err, ProviderError::Upstream { .. }));
+    }
+
+    #[test]
+    fn classify_500_boundary_is_request() {
+        let err = classify_http_error(500, "internal error".into());
+        assert!(matches!(err, ProviderError::Request(_)));
+    }
 
     fn chat_response_with_reasoning(reasoning: &str, content: &str) -> OpenAIChatResponse {
         OpenAIChatResponse {
@@ -1378,5 +1398,65 @@ mod tests {
             "temperature should be ~0.7, got {temp}"
         );
         assert_eq!(body["max_tokens"], 1024);
+    }
+
+    // ── metadata_url / api_url tests ───────────────────────────────────
+
+    fn config_with(endpoint: &str) -> OpenAIConfig {
+        OpenAIConfig {
+            endpoint: endpoint.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn metadata_url_strips_v1_suffix() {
+        let cfg = config_with("https://api.openai.com/v1");
+        assert_eq!(
+            cfg.metadata_url("/v1/models"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn metadata_url_strips_anthropic_suffix() {
+        let cfg = config_with("https://api.deepseek.com/anthropic");
+        assert_eq!(
+            cfg.metadata_url("/v1/models"),
+            "https://api.deepseek.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn metadata_url_no_path_suffix() {
+        let cfg = config_with("https://api.deepseek.com");
+        assert_eq!(
+            cfg.metadata_url("/user/balance"),
+            "https://api.deepseek.com/user/balance"
+        );
+    }
+
+    #[test]
+    fn metadata_url_localhost() {
+        let cfg = config_with("http://127.0.0.1:8000/v1");
+        assert_eq!(cfg.metadata_url("/health"), "http://127.0.0.1:8000/health");
+    }
+
+    #[test]
+    fn api_url_appends_to_endpoint() {
+        let cfg = config_with("https://api.deepseek.com/anthropic");
+        assert_eq!(
+            cfg.api_url("/v1/messages"),
+            "https://api.deepseek.com/anthropic/v1/messages"
+        );
+    }
+
+    #[test]
+    fn api_url_standard_openai() {
+        let cfg = config_with("https://api.openai.com/v1");
+        assert_eq!(
+            cfg.api_url("/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
     }
 }
