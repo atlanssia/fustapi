@@ -664,9 +664,16 @@ impl OpenAIProvider {
     /// GLM uses `{endpoint}/models` (not `{base}/v1/models`) and sends the
     /// API key directly without the "Bearer " prefix.
     async fn list_models_glm(&self) -> Result<Vec<String>, ProviderError> {
-        let base = self.config.endpoint.trim_end_matches('/');
-        let url = format!("{base}/models");
-        let mut req = self.client.get(&url);
+        // GLM's models endpoint lives at /api/paas/v4/models regardless of
+        // the chat endpoint path (e.g. /api/coding/paas/v4). Extract the host
+        // and use the standard path, same pattern as balance_glm.
+        let models_url = if let Some(pos) = self.config.endpoint.find("/api/") {
+            let host = &self.config.endpoint[..pos];
+            format!("{host}/api/paas/v4/models")
+        } else {
+            format!("{}/models", self.config.endpoint.trim_end_matches('/'))
+        };
+        let mut req = self.client.get(&models_url);
         if !self.config.api_key.is_empty() {
             req = req.header("Authorization", &self.config.api_key);
         }
