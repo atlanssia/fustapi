@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{debug, info};
 
 // ── Config Types ──────────────────────────────────────────────────────
 
@@ -168,7 +168,7 @@ pub fn load_from_db(db_path: &Path) -> Result<AppConfig, ConfigError> {
             },
         );
     }
-    info!(
+    debug!(
         providers = providers.len(),
         routes = router.len(),
         "Loaded configuration from SQLite"
