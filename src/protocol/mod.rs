@@ -24,10 +24,7 @@ fn map_router_error(e: RouterError, protocol: Protocol) -> ProtocolError {
             message,
             protocol,
         },
-        RouterError::ModelNotFound(msg) => ProtocolError::Parse {
-            message: msg,
-            protocol,
-        },
+        RouterError::ModelNotFound(name) => ProtocolError::ModelNotFound { name, protocol },
         other => ProtocolError::Internal {
             message: other.to_string(),
             protocol,
@@ -871,6 +868,11 @@ pub enum ProtocolError {
         message: String,
         protocol: Protocol,
     },
+    /// The requested model is not configured in any route.
+    ModelNotFound {
+        name: String,
+        protocol: Protocol,
+    },
     Internal {
         message: String,
         protocol: Protocol,
@@ -889,6 +891,11 @@ impl IntoResponse for ProtocolError {
             ProtocolError::Parse { message, protocol } => {
                 (StatusCode::BAD_REQUEST, message, protocol)
             }
+            ProtocolError::ModelNotFound { name, protocol } => (
+                StatusCode::BAD_REQUEST,
+                format!("model '{}' not found", name),
+                protocol,
+            ),
             ProtocolError::Internal { message, protocol } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, message, protocol)
             }
