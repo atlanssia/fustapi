@@ -16,7 +16,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::metrics::{self, MetricsEmitter};
 use crate::protocol;
@@ -214,7 +214,10 @@ async fn chat_completions_handler(
 
     match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
         Ok(response) => response,
-        Err(e) => e.into_response(),
+        Err(e) => {
+            error!(?e, endpoint = "chat/completions", "request failed");
+            e.into_response()
+        }
     }
 }
 
@@ -233,7 +236,10 @@ async fn messages_handler(
 
     match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
         Ok(response) => response,
-        Err(e) => e.into_response(),
+        Err(e) => {
+            error!(?e, endpoint = "messages", "request failed");
+            e.into_response()
+        }
     }
 }
 
@@ -256,7 +262,10 @@ async fn responses_handler(
 
     match protocol::dispatch_request(proto, body, current_router.as_ref(), guard).await {
         Ok(response) => response,
-        Err(e) => e.into_response(),
+        Err(e) => {
+            error!(?e, endpoint = "responses", "request failed");
+            e.into_response()
+        }
     }
 }
 
@@ -272,10 +281,11 @@ struct ModelField {
 /// allocation of an intermediate `serde_json::Value`. The body will be fully
 /// parsed again downstream by the protocol handler.
 fn resolve_provider_and_model(body: &str, router: &dyn crate::router::Router) -> (String, String) {
-    let model = serde_json::from_str::<ModelField>(body)
+    let raw = serde_json::from_str::<ModelField>(body)
         .ok()
         .and_then(|m| m.model)
         .unwrap_or_else(|| "unknown".to_string());
+    let model = crate::router::normalize_model_name(&raw).to_string();
     let provider = router
         .resolve(&model)
         .ok()

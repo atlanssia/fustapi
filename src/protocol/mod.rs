@@ -125,19 +125,23 @@ async fn collect_non_streaming_raw(
     };
 
     // Sync guard model for accurate metrics + normalize model and patch body if override.
-    let normalized = router::normalize_model_name(model);
-    let mut needs_patch = normalized != model;
-    if let Some(upstream) = router.resolve_upstream_model(model) {
-        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) {
+        let mut patched = false;
+        if let Some(upstream) = router.resolve_upstream_model(model) {
             v["model"] = serde_json::json!(&upstream);
+            guard.set_model(upstream);
+            patched = true;
+        } else {
+            let normalized = router::normalize_model_name(model);
+            if normalized != model {
+                v["model"] = serde_json::json!(normalized);
+                guard.set_model(normalized.to_string());
+                patched = true;
+            }
+        }
+        if patched {
             body = serde_json::to_string(&v).unwrap_or(body);
         }
-        guard.set_model(upstream);
-        needs_patch = false; // already patched
-    }
-    if needs_patch && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) {
-        v["model"] = serde_json::json!(normalized);
-        body = serde_json::to_string(&v).unwrap_or(body);
     }
 
     let json = match provider.chat_raw_non_streaming(body).await {
@@ -178,9 +182,12 @@ async fn forward_streaming(
     let allow_passthrough = protocol == Protocol::OpenAI;
     debug!(%model, ?protocol, allow_passthrough, "streaming dispatch");
 
-    // Sync tracker model with the upstream model for accurate metrics.
+    // Sync tracker model for accurate metrics (upstream override or [1m] normalization).
+    let normalized = router::normalize_model_name(model);
     if let Some(upstream) = router.resolve_upstream_model(model) {
         tracker.set_model(upstream);
+    } else if normalized != model {
+        tracker.set_model(normalized.to_string());
     }
 
     let stream_mode = router
@@ -220,9 +227,12 @@ async fn collect_non_streaming(
         });
     }
 
-    // Sync guard model with the upstream model for accurate metrics.
+    // Sync guard model for accurate metrics (upstream override or [1m] normalization).
+    let normalized = router::normalize_model_name(model);
     if let Some(upstream) = router.resolve_upstream_model(model) {
         guard.set_model(upstream);
+    } else if normalized != model {
+        guard.set_model(normalized.to_string());
     }
 
     let stream_mode = match router.chat_stream(request, false).await {
@@ -451,9 +461,12 @@ async fn anthropic_handler(
     // ── Lightweight model extraction (before full parse) ────────────────
     let model_name = extract_model_field(&body);
 
-    // Sync guard model with the upstream model for accurate metrics.
+    // Sync guard model for accurate metrics (upstream override or [1m] normalization).
+    let normalized = router::normalize_model_name(&model_name);
     if let Some(upstream) = router.resolve_upstream_model(&model_name) {
         guard.set_model(upstream);
+    } else if normalized != model_name {
+        guard.set_model(normalized.to_string());
     }
 
     let provider_name = match router.resolve(&model_name) {
@@ -488,15 +501,20 @@ async fn anthropic_handler(
         let mut passthrough_body = body;
         // Normalize model (strip [1m] suffix) and apply upstream override if configured.
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&passthrough_body) {
+            let mut patched = false;
             if let Some(upstream) = router.resolve_upstream_model(&model_name) {
                 v["model"] = serde_json::json!(&upstream);
+                patched = true;
             } else {
                 let normalized = router::normalize_model_name(&model_name);
                 if normalized != model_name {
                     v["model"] = serde_json::json!(normalized);
+                    patched = true;
                 }
             }
-            passthrough_body = serde_json::to_string(&v).unwrap_or(passthrough_body);
+            if patched {
+                passthrough_body = serde_json::to_string(&v).unwrap_or(passthrough_body);
+            }
         }
 
         let mode = match provider
@@ -581,9 +599,12 @@ async fn responses_handler_impl(
     let protocol = Protocol::Responses;
     let model = extract_model_field(&body);
 
-    // Sync guard model with the upstream model for accurate metrics.
+    // Sync guard model for accurate metrics (upstream override or [1m] normalization).
+    let normalized = router::normalize_model_name(&model);
     if let Some(upstream) = router.resolve_upstream_model(&model) {
         guard.set_model(upstream);
+    } else if normalized != model {
+        guard.set_model(normalized.to_string());
     }
 
     let provider_name = match router.resolve(&model) {
@@ -611,15 +632,20 @@ async fn responses_handler_impl(
         // Normalize model (strip [1m] suffix) and apply upstream override if configured.
         let mut req_body = body;
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&req_body) {
+            let mut patched = false;
             if let Some(upstream) = router.resolve_upstream_model(&model) {
                 v["model"] = serde_json::json!(&upstream);
+                patched = true;
             } else {
                 let normalized = router::normalize_model_name(&model);
                 if normalized != model {
                     v["model"] = serde_json::json!(normalized);
+                    patched = true;
                 }
             }
-            req_body = serde_json::to_string(&v).unwrap_or(req_body);
+            if patched {
+                req_body = serde_json::to_string(&v).unwrap_or(req_body);
+            }
         }
         let mode = match provider.responses_passthrough(req_body, stream).await {
             Ok(m) => m,
