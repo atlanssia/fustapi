@@ -107,6 +107,12 @@ impl std::fmt::Debug for RealRouter {
     }
 }
 
+/// Strip the `[1m]` suffix that Claude Code appends to model names when
+/// `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is configured for 1M context.
+fn normalize_model_name(model: &str) -> &str {
+    model.strip_suffix("[1m]").unwrap_or(model)
+}
+
 impl RealRouter {
     /// Create a new real router from config.
     #[must_use]
@@ -137,7 +143,7 @@ impl RealRouter {
     /// Get the provider instance for a model name.
     fn get_provider_for_model(&self, model: &str) -> Option<&dyn Provider> {
         self.routes
-            .get(model)
+            .get(normalize_model_name(model))
             .and_then(|entry| {
                 entry
                     .provider_ids
@@ -159,6 +165,7 @@ impl RealRouter {
 #[async_trait]
 impl Router for RealRouter {
     fn resolve(&self, model: &str) -> Result<String, RouterError> {
+        let model = normalize_model_name(model);
         if let Some(entry) = self.routes.get(model)
             && let Some(first) = entry.provider_ids.first()
         {
@@ -167,6 +174,7 @@ impl Router for RealRouter {
         Err(RouterError::ModelNotFound(model.to_string()))
     }
     fn resolve_upstream_model(&self, model: &str) -> Option<String> {
+        let model = normalize_model_name(model);
         if let Some(entry) = self.routes.get(model)
             && let Some(provider_id) = entry.provider_ids.first()
         {
@@ -191,7 +199,8 @@ impl Router for RealRouter {
         mut request: UnifiedRequest,
         mut allow_passthrough: bool,
     ) -> Result<crate::streaming::StreamMode, RouterError> {
-        let model_name = request.model.clone();
+        let model_name = normalize_model_name(&request.model).to_string();
+        request.model.clone_from(&model_name);
 
         // Inject per-provider upstream model override from route config
         if let Some(entry) = self.routes.get(&model_name)
@@ -746,5 +755,143 @@ mod tests {
         let req = make_request("unknown-model", None);
         let result = router.chat_stream(req, true).await;
         assert!(matches!(result, Err(RouterError::ModelNotFound(_))));
+    }
+
+    // ── [1m] suffix normalization tests ─────────────────────────────────
+
+    #[test]
+    fn normalize_model_name_strips_suffix() {
+        assert_eq!(normalize_model_name("opus[1m]"), "opus");
+        assert_eq!(normalize_model_name("sonnet"), "sonnet");
+        assert_eq!(normalize_model_name(""), "");
+        assert_eq!(normalize_model_name("[1m]"), "");
+        // Only last occurrence stripped
+        assert_eq!(normalize_model_name("op[1m]us[1m]"), "op[1m]us");
+        // Mid-string [1m] is not a suffix — not stripped
+        assert_eq!(
+            normalize_model_name("model[1m]-variant"),
+            "model[1m]-variant"
+        );
+    }
+
+    #[test]
+    fn resolve_model_with_suffix() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                    supports_responses: false,
+                    supports_anthropic: false,
+                },
+            )),
+            &["gpt-4"],
+        );
+        assert_eq!(router.resolve("gpt-4[1m]").unwrap(), "p1");
+        // Without suffix still works
+        assert_eq!(router.resolve("gpt-4").unwrap(), "p1");
+    }
+
+    #[test]
+    fn resolve_unknown_model_with_suffix_returns_error() {
+        let router = router_with(
+            "p1",
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                    supports_responses: false,
+                    supports_anthropic: false,
+                },
+            )),
+            &["gpt-4"],
+        );
+        let err = router.resolve("unknown[1m]").unwrap_err();
+        assert!(matches!(err, RouterError::ModelNotFound(_)));
+        // Error message uses normalized name (without [1m])
+        assert_eq!(err.to_string(), "model not found: unknown");
+    }
+
+    #[test]
+    fn resolve_upstream_model_with_suffix() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "p1".to_string(),
+            Box::new(MockProvider::new(
+                "p1",
+                ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                    supports_responses: false,
+                    supports_anthropic: false,
+                },
+            )) as Box<dyn Provider>,
+        );
+        let mut upstream = HashMap::new();
+        upstream.insert("p1".to_string(), "upstream-model".to_string());
+        let mut routes = HashMap::new();
+        routes.insert(
+            "my-model".to_string(),
+            RouteEntry {
+                provider_ids: vec!["p1".to_string()],
+                upstream_models: upstream,
+            },
+        );
+        let router = RealRouter { providers, routes };
+        assert_eq!(
+            router.resolve_upstream_model("my-model[1m]"),
+            Some("upstream-model".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_normalizes_model_suffix() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_native(captured.clone(), vec![]);
+        let router = router_with("native-mock", Box::new(provider), &["test-model"]);
+
+        let req = make_request("test-model[1m]", None);
+        let result = router.chat_stream(req, true).await;
+        assert!(result.is_ok(), "should resolve with normalized model name");
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        assert_eq!(
+            cap.model, "test-model",
+            "request.model should be normalized (no [1m] suffix)"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_upstream_model_override_with_suffix() {
+        let captured: Arc<Mutex<Option<UnifiedRequest>>> = Arc::new(Mutex::new(None));
+        let provider = CapturingMockProvider::new_native(captured.clone(), vec![]);
+        let mut providers = HashMap::new();
+        providers.insert("p1".to_string(), Box::new(provider) as Box<dyn Provider>);
+        let mut upstream = HashMap::new();
+        upstream.insert("p1".to_string(), "real-upstream-model".to_string());
+        let mut routes = HashMap::new();
+        routes.insert(
+            "my-model".to_string(),
+            RouteEntry {
+                provider_ids: vec!["p1".to_string()],
+                upstream_models: upstream,
+            },
+        );
+        let router = RealRouter { providers, routes };
+
+        let req = make_request("my-model[1m]", None);
+        let _ = router.chat_stream(req, true).await;
+
+        let cap = captured.lock().unwrap().take().unwrap();
+        assert_eq!(
+            cap.model, "real-upstream-model",
+            "upstream model override should still apply with [1m] suffix"
+        );
     }
 }
