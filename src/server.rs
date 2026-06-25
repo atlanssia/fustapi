@@ -355,7 +355,10 @@ async fn model_detail_handler(
     let current_router = router.load_full();
     let model_ids = current_router.list_models();
 
-    if !model_ids.contains(&model_id) {
+    // Normalize [1m] suffix (Claude Code auto-compact window) before lookup.
+    let normalized_id = crate::router::normalize_model_name(&model_id);
+
+    if !model_ids.iter().any(|m| m == normalized_id) {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -375,8 +378,8 @@ async fn model_detail_handler(
             StatusCode::OK,
             Json(serde_json::json!({
                 "type": "model",
-                "id": model_id,
-                "display_name": model_id,
+                "id": normalized_id,
+                "display_name": normalized_id,
                 "created_at": "2024-01-01T00:00:00Z"
             })),
         )
@@ -385,7 +388,7 @@ async fn model_detail_handler(
         (
             StatusCode::OK,
             Json(serde_json::json!({
-                "id": model_id,
+                "id": normalized_id,
                 "object": "model",
                 "created": 1_000_000_000,
                 "owned_by": "fustapi"

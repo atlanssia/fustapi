@@ -109,7 +109,7 @@ impl std::fmt::Debug for RealRouter {
 
 /// Strip the `[1m]` suffix that Claude Code appends to model names when
 /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is configured for 1M context.
-fn normalize_model_name(model: &str) -> &str {
+pub(crate) fn normalize_model_name(model: &str) -> &str {
     model.strip_suffix("[1m]").unwrap_or(model)
 }
 
