@@ -98,7 +98,7 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
         )),
         Pt::Glm | Pt::Zai => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
-                endpoint,
+                endpoint: endpoint.clone(),
                 api_key,
                 model,
                 stream_options: false,
@@ -107,13 +107,15 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: false,
                 streaming: true,
                 supports_responses: false,
-                supports_anthropic: false,
+                supports_anthropic: cfg
+                    .supports_anthropic
+                    .unwrap_or(endpoint.contains("/anthropic")),
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Glm,
             },
         )),
         Pt::DeepSeek => Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
             crate::provider::cloud::openai::OpenAIConfig {
-                endpoint,
+                endpoint: endpoint.clone(),
                 api_key,
                 model,
                 stream_options: true,
@@ -122,14 +124,16 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                 image_input: false,
                 streaming: true,
                 supports_responses: false,
-                supports_anthropic: cfg.supports_anthropic.unwrap_or(false),
+                supports_anthropic: cfg
+                    .supports_anthropic
+                    .unwrap_or(endpoint.contains("/anthropic")),
                 balance_strategy: crate::provider::cloud::openai::BalanceStrategy::DeepSeek,
             },
         )),
         Pt::OpenAI | Pt::OpenAICompatible => {
             Box::new(crate::provider::cloud::openai::OpenAIProvider::new(
                 crate::provider::cloud::openai::OpenAIConfig {
-                    endpoint,
+                    endpoint: endpoint.clone(),
                     api_key,
                     model,
                     stream_options: pt.stream_options(),
@@ -138,7 +142,9 @@ pub fn create_provider(_name: &str, cfg: &crate::config::ProviderConfig) -> Box<
                     image_input: true,
                     streaming: true,
                     supports_responses: cfg.supports_responses.unwrap_or(pt == Pt::OpenAI),
-                    supports_anthropic: cfg.supports_anthropic.unwrap_or(false),
+                    supports_anthropic: cfg
+                        .supports_anthropic
+                        .unwrap_or(endpoint.contains("/anthropic")),
                     balance_strategy: crate::provider::cloud::openai::BalanceStrategy::Default,
                 },
             ))
