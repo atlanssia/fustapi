@@ -77,6 +77,7 @@ async fn openai_handler(
     let unified_req = match openai::parse_chat_request(&body) {
         Ok(req) => req,
         Err(e) => {
+            guard.finish_err();
             return Err(ProtocolError::Parse {
                 message: e.to_string(),
                 protocol: Protocol::OpenAI,
