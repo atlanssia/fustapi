@@ -109,6 +109,7 @@ fn normalized_sse_response(
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
         }
         Err(e) => {
+            tracing::error!(%e, model = %model_name, protocol = ?protocol, "stream chunk error");
             tracker.set_success(false);
             let err_json = serde_json::json!({
                 "error": {
@@ -141,9 +142,11 @@ fn passthrough_sse_response(
 ) -> Response {
     let mut buf = bytes::BytesMut::with_capacity(8192);
     let model_for_wrap = model.to_string();
+    let model_for_err = model.to_string();
 
-    let body_stream =
-        futures::StreamExt::map(byte_stream, move |chunk_result| match chunk_result {
+    let body_stream = futures::StreamExt::map(
+        byte_stream,
+        move |chunk_result| match chunk_result {
             Ok(bytes) => {
                 tracker.set_ttft(tracker.start.elapsed().as_millis() as u64);
 
@@ -163,6 +166,7 @@ fn passthrough_sse_response(
                 Ok::<_, std::convert::Infallible>(bytes)
             }
             Err(e) => {
+                tracing::error!(%e, model = %model_for_err, protocol = ?protocol, "passthrough stream chunk error");
                 tracker.set_success(false);
                 let err_json = serde_json::json!({
                     "error": {
@@ -174,7 +178,8 @@ fn passthrough_sse_response(
                     "data: {err_json}\n\n"
                 )))
             }
-        });
+        },
+    );
 
     let pinned = Box::pin(body_stream);
 
