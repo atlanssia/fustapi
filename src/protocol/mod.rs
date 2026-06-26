@@ -126,9 +126,11 @@ async fn collect_non_streaming_raw(
     if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) {
         let mut patched = false;
         if let Some(upstream) = router.resolve_upstream_model(model) {
-            v["model"] = serde_json::json!(&upstream);
+            if v.get("model").and_then(|m| m.as_str()) != Some(&upstream) {
+                v["model"] = serde_json::json!(&upstream);
+                patched = true;
+            }
             guard.set_model(upstream);
-            patched = true;
         } else {
             let normalized = router::normalize_model_name(model);
             if normalized != model {
@@ -501,8 +503,10 @@ async fn anthropic_handler(
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&passthrough_body) {
             let mut patched = false;
             if let Some(upstream) = router.resolve_upstream_model(&model_name) {
-                v["model"] = serde_json::json!(&upstream);
-                patched = true;
+                if v.get("model").and_then(|m| m.as_str()) != Some(&upstream) {
+                    v["model"] = serde_json::json!(&upstream);
+                    patched = true;
+                }
             } else {
                 let normalized = router::normalize_model_name(&model_name);
                 if normalized != model_name {
@@ -632,8 +636,10 @@ async fn responses_handler_impl(
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&req_body) {
             let mut patched = false;
             if let Some(upstream) = router.resolve_upstream_model(&model) {
-                v["model"] = serde_json::json!(&upstream);
-                patched = true;
+                if v.get("model").and_then(|m| m.as_str()) != Some(&upstream) {
+                    v["model"] = serde_json::json!(&upstream);
+                    patched = true;
+                }
             } else {
                 let normalized = router::normalize_model_name(&model);
                 if normalized != model {
@@ -781,6 +787,7 @@ fn responses_conversion_sse(
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text))
         }
         Err(e) => {
+            tracing::error!(%e, model = %model_name, protocol = ?Protocol::Responses, "responses conversion stream chunk error");
             tracker.set_success(false);
             let err_json = serde_json::json!({
                 "error": {
@@ -855,10 +862,13 @@ fn dispatch_responses_stream_mode(
                 tracker,
             ))
         }
-        StreamMode::Normalized(_) => Err(ProtocolError::Internal {
-            message: "responses_passthrough returned Normalized".into(),
-            protocol,
-        }),
+        StreamMode::Normalized(_) => {
+            guard.finish_err();
+            Err(ProtocolError::Internal {
+                message: "responses_passthrough returned Normalized".into(),
+                protocol,
+            })
+        }
     }
 }
 
@@ -1101,6 +1111,60 @@ mod tests {
                 "total_tokens": 40
             }
         })
+    }
+
+    // ── ModelNotFound error response ──────────────────────────────────
+
+    #[test]
+    fn model_not_found_error_into_response() {
+        let err = ProtocolError::ModelNotFound {
+            name: "deepseek-v4-flash".into(),
+            protocol: Protocol::OpenAI,
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn model_not_found_error_message_contains_model_name() {
+        for protocol in [Protocol::OpenAI, Protocol::Anthropic, Protocol::Responses] {
+            let err = ProtocolError::ModelNotFound {
+                name: "missing-model".into(),
+                protocol,
+            };
+            let resp = err.into_response();
+            // Extract body — the message MUST contain the model name,
+            // not just a bare string that looks like a parse error.
+            let body = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let (_, body) = resp.into_parts();
+                let bytes = axum::body::to_bytes(body, 1024).await.unwrap();
+                String::from_utf8(bytes.to_vec()).unwrap()
+            });
+            assert!(
+                body.contains("model 'missing-model' not found"),
+                "body should contain descriptive message, got: {body}"
+            );
+        }
+    }
+
+    // ── openai_handler: guard consumed on parse failure ────────────────
+
+    #[tokio::test]
+    async fn openai_handler_returns_parse_error_for_bad_json() {
+        let (emitter, _reader) = crate::metrics::init();
+        let router = MockRouter::with_non_streaming(openai_chat_json("unused", None));
+        let guard = crate::metrics::guard::RequestGuard::start(emitter, "mock", "raw-model");
+
+        let result = openai_handler("not valid json".into(), &router, guard).await;
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ProtocolError::Parse { message, protocol } => {
+                assert_eq!(protocol, Protocol::OpenAI);
+                assert!(!message.is_empty());
+            }
+            other => panic!("expected Parse error, got: {other:?}"),
+        }
     }
 
     // ── NonStreaming: OpenAI pass-through ───────────────────────────
