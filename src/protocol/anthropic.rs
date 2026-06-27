@@ -303,6 +303,11 @@ fn parse_anthropic_messages(msg: AnthropicMessage) -> Result<Vec<Message>, Parse
     let role = match role_str.as_str() {
         "user" => Role::User,
         "assistant" => Role::Assistant,
+        // Tolerate a system role placed inside the messages array (some clients,
+        // incl. Claude Code in certain flows, do this instead of using the
+        // top-level system field). Real /anthropic endpoints accept it; map it
+        // to Role::System so the conversion path no longer rejects such requests.
+        "system" => Role::System,
         other => {
             return Err(ParseError::InvalidFormat(format!(
                 "unsupported role '{other}'"
@@ -867,6 +872,23 @@ mod tests {
         assert!(result.stream);
         assert_eq!(result.temperature, Some(0.5));
         assert_eq!(result.max_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_parse_messages_with_system_role_in_array() {
+        // Some Anthropic-compatible clients (incl. Claude Code in certain flows)
+        // place a system role inside the messages array rather than the top-level
+        // system field. Real /anthropic endpoints (deepseek/glm) accept this via
+        // passthrough; only fustapi's own conversion parser was stricter and
+        // rejected it — breaking local /v1 backends (sglang etc.) that go through
+        // conversion. Tolerate it: map to Role::System like a top-level system.
+        let json = r#"{"model":"qwen","messages":[{"role":"system","content":"be helpful"},{"role":"user","content":"hi"}],"max_tokens":16}"#;
+        let result = parse_messages_request(json)
+            .expect("system role in messages array must be tolerated on the conversion path");
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.messages[0].role, Role::System);
+        assert_eq!(result.messages[0].content, "be helpful");
+        assert_eq!(result.messages[1].role, Role::User);
     }
 
     #[test]
