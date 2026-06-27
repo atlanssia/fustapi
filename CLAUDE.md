@@ -99,6 +99,7 @@ For multi-step tasks:
 4. **StreamMode has three variants.** `Normalized` (LLMChunk-based conversion), `Passthrough` (byte-level forwarding), `NonStreaming` (raw JSON passthrough). Every `match` on it must be exhaustive.
 5. **`Protocol` enum is exhaustive.** Adding a protocol requires updating `detect_protocol`, `dispatch_request`, and every `match protocol` in the codebase.
 6. **Provider capabilities drive dispatch.** `supports_responses`, `tool_calling`, `image_input`, `streaming` — all in `ProviderCapabilities`. Config override via `ProviderConfig` optional fields.
+7. **Route is a two-layer alias, NOT a passthrough of upstream model names.** A route's `model` field is the client-facing **alias** the client must send (e.g. `sonnet`). `provider_ids` is the fallback chain. `upstream_models` (keyed by provider id) holds each provider's **real** model name (e.g. `sonnet → [deepseek] → {deepseek: deepseek-v4-flash}`). The gateway resolves alias → provider → real model name; the client never sees upstream names. **Never** register a provider's real model name (e.g. `deepseek-v4-flash`) as a route `model` key — that misuses the abstraction (value-as-key), is redundant with the alias that already maps to it, and gets wiped on the next `save_to_db` (full `DELETE`+`INSERT` overwrite). If a client sends a raw upstream name, the fix is on the client side (send an alias) or by configuring an alias route — not by creating a same-named route key.
 
 ---
 
