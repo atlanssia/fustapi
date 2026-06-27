@@ -311,7 +311,12 @@ impl OpenAIProvider {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
-                Err(classify_http_error(status, body))
+                Err(classify_http_error(
+                    status,
+                    body,
+                    self.name(),
+                    self.config.model.as_deref().unwrap_or("?"),
+                ))
             }
             Err(e) => Err(ProviderError::Connection(e.to_string())),
         }
@@ -423,7 +428,12 @@ impl Provider for OpenAIProvider {
             if !resp.status().is_success() {
                 let status = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
-                return Err(classify_http_error(status, body));
+                return Err(classify_http_error(
+                    status,
+                    body,
+                    self.name(),
+                    self.config.model.as_deref().unwrap_or("?"),
+                ));
             }
 
             if allow_passthrough {
@@ -444,7 +454,12 @@ impl Provider for OpenAIProvider {
             if !resp_body.status().is_success() {
                 let status = resp_body.status().as_u16();
                 let body = resp_body.text().await.unwrap_or_default();
-                return Err(classify_http_error(status, body));
+                return Err(classify_http_error(
+                    status,
+                    body,
+                    self.name(),
+                    self.config.model.as_deref().unwrap_or("?"),
+                ));
             }
 
             // Read the full response body and return as raw JSON, avoiding the
@@ -481,7 +496,12 @@ impl Provider for OpenAIProvider {
         if !resp_body.status().is_success() {
             let status = resp_body.status().as_u16();
             let body = resp_body.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         let full_bytes = resp_body
@@ -513,7 +533,12 @@ impl Provider for OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         if stream {
@@ -556,7 +581,12 @@ impl Provider for OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         if stream {
@@ -635,7 +665,12 @@ impl OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         resp.json::<serde_json::Value>()
@@ -679,7 +714,12 @@ impl OpenAIProvider {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
                     let body = resp.text().await.unwrap_or_default();
-                    Err(classify_http_error(status, body))
+                    Err(classify_http_error(
+                        status,
+                        body,
+                        config.provider_name.as_deref().unwrap_or("OpenAI"),
+                        config.model.as_deref().unwrap_or("?"),
+                    ))
                 }
                 Err(e) => Err(ProviderError::Connection(e.to_string())),
             }
@@ -700,7 +740,12 @@ impl OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         let body = resp
@@ -736,7 +781,12 @@ impl OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         let body = resp.text().await.unwrap_or_default();
@@ -768,7 +818,12 @@ impl OpenAIProvider {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(classify_http_error(status, body));
+            return Err(classify_http_error(
+                status,
+                body,
+                self.name(),
+                self.config.model.as_deref().unwrap_or("?"),
+            ));
         }
 
         let body = resp.text().await.unwrap_or_default();
@@ -815,7 +870,7 @@ impl OpenAIConfig {
 // ── HTTP error classification ──────────────────────────────────────────
 
 /// Classify a non-success HTTP status into the appropriate `ProviderError`.
-fn classify_http_error(status: u16, body: String) -> ProviderError {
+fn classify_http_error(status: u16, body: String, provider: &str, model: &str) -> ProviderError {
     // Truncate for logging — upstream error pages can be large HTML.
     // Use char-based truncation to avoid splitting multi-byte UTF-8.
     let log_body: std::borrow::Cow<'_, str> = if body.len() > 512 {
@@ -824,13 +879,13 @@ fn classify_http_error(status: u16, body: String) -> ProviderError {
         std::borrow::Cow::Borrowed(&body)
     };
     if (400..500).contains(&status) {
-        tracing::warn!(status, %log_body, "upstream returned client error");
+        tracing::warn!(status, %log_body, provider, model, "upstream returned client error");
         ProviderError::Upstream {
             status,
             message: body,
         }
     } else {
-        tracing::error!(status, %log_body, "upstream returned server error");
+        tracing::error!(status, %log_body, provider, model, "upstream returned server error");
         ProviderError::Request(format!("provider error {status}: {body}"))
     }
 }
@@ -842,9 +897,14 @@ mod tests {
 
     // ── classify_http_error tests ──────────────────────────────────────
 
+    // Helper: classify with dummy provider/model context (logging only).
+    fn cls(status: u16, body: &str) -> ProviderError {
+        classify_http_error(status, body.into(), "test-provider", "test-model")
+    }
+
     #[test]
     fn classify_4xx_returns_upstream_error() {
-        let err = classify_http_error(429, "rate limited".into());
+        let err = cls(429, "rate limited");
         match err {
             ProviderError::Upstream { status, message } => {
                 assert_eq!(status, 429);
@@ -856,7 +916,7 @@ mod tests {
 
     #[test]
     fn classify_5xx_returns_request_error() {
-        let err = classify_http_error(502, "bad gateway".into());
+        let err = cls(502, "bad gateway");
         match err {
             ProviderError::Request(msg) => {
                 assert!(msg.contains("502"));
@@ -868,19 +928,19 @@ mod tests {
 
     #[test]
     fn classify_400_boundary_is_upstream() {
-        let err = classify_http_error(400, "bad request".into());
+        let err = cls(400, "bad request");
         assert!(matches!(err, ProviderError::Upstream { .. }));
     }
 
     #[test]
     fn classify_499_boundary_is_upstream() {
-        let err = classify_http_error(499, "client closed".into());
+        let err = cls(499, "client closed");
         assert!(matches!(err, ProviderError::Upstream { .. }));
     }
 
     #[test]
     fn classify_500_boundary_is_request() {
-        let err = classify_http_error(500, "internal error".into());
+        let err = cls(500, "internal error");
         assert!(matches!(err, ProviderError::Request(_)));
     }
 

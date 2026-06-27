@@ -279,6 +279,17 @@ pub fn parse_messages_request(json_str: &str) -> Result<UnifiedRequest, ParseErr
     extra.remove("top_k");
     extra.remove("metadata");
 
+    // Normalize: some /v1 backends (sglang, new-api) require all system messages
+    // at the very beginning of the conversation. Move any system message to the
+    // front (preserving relative order among system and non-system messages).
+    // The passthrough path never parses the body, so native /anthropic upstreams
+    // that tolerate system mid-conversation are unaffected.
+    let (mut system_msgs, other_msgs): (Vec<Message>, Vec<Message>) = messages
+        .into_iter()
+        .partition(|m| matches!(m.role, Role::System));
+    system_msgs.extend(other_msgs);
+    let messages = system_msgs;
+
     Ok(UnifiedRequest {
         model: req.model,
         messages,
@@ -888,6 +899,23 @@ mod tests {
         assert_eq!(result.messages.len(), 2);
         assert_eq!(result.messages[0].role, Role::System);
         assert_eq!(result.messages[0].content, "be helpful");
+        assert_eq!(result.messages[1].role, Role::User);
+    }
+
+    #[test]
+    fn test_parse_normalizes_system_messages_to_front() {
+        // Some /v1 backends (sglang, new-api) require all system messages at the
+        // beginning of the conversation. A system role placed after user must be
+        // moved to the front so the converted OpenAI request is accepted.
+        let json = r#"{"model":"qwen","messages":[{"role":"user","content":"hi"},{"role":"system","content":"rules"}],"max_tokens":16}"#;
+        let result = parse_messages_request(json).expect("parse ok");
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(
+            result.messages[0].role,
+            Role::System,
+            "system must be normalized to the front"
+        );
+        assert_eq!(result.messages[0].content, "rules");
         assert_eq!(result.messages[1].role, Role::User);
     }
 
