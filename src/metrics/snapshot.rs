@@ -31,6 +31,14 @@ pub struct TimeseriesPoint {
     pub error_count: u64,
 }
 
+/// Per-model timeseries for the dashboard (stacked area / multi-line charts).
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelTimeseries {
+    pub provider: String,
+    pub model: String,
+    pub points: Vec<TimeseriesPoint>,
+}
+
 /// Per-provider+model stats for the dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderStats {
@@ -60,6 +68,7 @@ pub struct MetricsSnapshot {
     pub uptime_secs: u64,
     pub provider_stats: Vec<ProviderStats>,
     pub timeseries: Vec<TimeseriesPoint>,
+    pub per_model_timeseries: Vec<ModelTimeseries>,
 }
 
 impl Default for MetricsSnapshot {
@@ -75,6 +84,7 @@ impl Default for MetricsSnapshot {
             uptime_secs: 0,
             provider_stats: Vec::new(),
             timeseries: Vec::new(),
+            per_model_timeseries: Vec::new(),
         }
     }
 }
@@ -85,6 +95,10 @@ pub struct SnapshotBuilder {
     timeseries: Vec<TimeseriesPoint>,
     /// Recent request counts for RPM sliding window.
     recent_totals: Vec<(u64, u64)>,
+    /// Per-model recent request counts for per-model RPM sliding window.
+    per_model_recent: HashMap<String, Vec<(u64, u64)>>,
+    /// Per-model timeseries points (capped to MAX_TIMESERIES_POINTS each).
+    per_model_series: HashMap<String, Vec<TimeseriesPoint>>,
 }
 
 impl Default for SnapshotBuilder {
@@ -100,6 +114,8 @@ impl SnapshotBuilder {
             start_time: now_secs(),
             timeseries: Vec::new(),
             recent_totals: Vec::new(),
+            per_model_recent: HashMap::new(),
+            per_model_series: HashMap::new(),
         }
     }
 
@@ -208,6 +224,56 @@ impl SnapshotBuilder {
             self.timeseries.drain(..drain_count);
         }
 
+        // Per-model timeseries: rpm + avg latency for each provider:model.
+        let mut per_model_timeseries: Vec<ModelTimeseries> = Vec::with_capacity(provider_map.len());
+        for (key, c) in provider_map {
+            let entry = self.per_model_recent.entry(key.clone()).or_default();
+            entry.push((now, c.request_count));
+            entry.retain(|(ts, _)| *ts >= cutoff);
+            let model_rpm = if entry.len() >= 2 {
+                let first = &entry[0];
+                let last = &entry[entry.len() - 1];
+                let dt = last.0.saturating_sub(first.0);
+                let dr = last.1.saturating_sub(first.1);
+                if dt > 0 {
+                    (dr as f64 / dt as f64) * 60.0
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let model_avg_lat = if c.request_count > 0 {
+                c.total_latency_ms as f64 / c.request_count as f64
+            } else {
+                0.0
+            };
+            let series = self.per_model_series.entry(key.clone()).or_default();
+            series.push(TimeseriesPoint {
+                timestamp: now,
+                rpm: model_rpm,
+                avg_latency_ms: model_avg_lat,
+                total_requests: c.request_count,
+                error_count: c.failure_count,
+            });
+            if series.len() > MAX_TIMESERIES_POINTS {
+                let drain_count = series.len() - MAX_TIMESERIES_POINTS;
+                series.drain(..drain_count);
+            }
+            let (provider_name, model) = key
+                .split_once(':')
+                .map(|(p, m)| (p.to_string(), m.to_string()))
+                .unwrap_or((key.clone(), "-".to_string()));
+            per_model_timeseries.push(ModelTimeseries {
+                provider: provider_name,
+                model,
+                points: series.clone(),
+            });
+        }
+        per_model_timeseries.sort_by_key(|m| {
+            std::cmp::Reverse(m.points.last().map(|p| p.total_requests).unwrap_or(0))
+        });
+
         MetricsSnapshot {
             rpm,
             avg_latency_ms,
@@ -219,6 +285,7 @@ impl SnapshotBuilder {
             uptime_secs,
             provider_stats,
             timeseries: self.timeseries.clone(),
+            per_model_timeseries,
         }
     }
 }
@@ -314,5 +381,75 @@ mod tests {
             builder.build(&global, &HashMap::new());
         }
         assert!(builder.timeseries.len() <= 300);
+    }
+
+    #[test]
+    fn test_per_model_timeseries_built_and_sorted() {
+        let mut builder = SnapshotBuilder::new();
+        let global = GlobalSnapshot {
+            total_requests: 100,
+            success_requests: 95,
+            failed_requests: 5,
+            in_flight_requests: 0,
+        };
+        let mut providers = HashMap::new();
+        providers.insert(
+            "omlx:gpt-4".to_string(),
+            ProviderCounters {
+                request_count: 60,
+                failure_count: 3,
+                fallback_count: 0,
+                total_latency_ms: 9000,
+                prompt_tokens: 600,
+                completion_tokens: 1200,
+                total_ttft_ms: 3000,
+                ttft_samples: 60,
+                total_generation_time_ms: 6000,
+                generation_tokens: 1200,
+            },
+        );
+        providers.insert(
+            "lmstudio:llama3".to_string(),
+            ProviderCounters {
+                request_count: 40,
+                failure_count: 2,
+                fallback_count: 5,
+                total_latency_ms: 8000,
+                prompt_tokens: 400,
+                completion_tokens: 800,
+                total_ttft_ms: 2000,
+                ttft_samples: 40,
+                total_generation_time_ms: 6000,
+                generation_tokens: 800,
+            },
+        );
+        let snap = builder.build(&global, &providers);
+        // One series per provider:model.
+        assert_eq!(snap.per_model_timeseries.len(), 2);
+        // Sorted by request_count descending → omlx:gpt-4 (60) first.
+        assert_eq!(snap.per_model_timeseries[0].provider, "omlx");
+        assert_eq!(snap.per_model_timeseries[0].model, "gpt-4");
+        assert_eq!(snap.per_model_timeseries[0].points.len(), 1);
+        // avg latency = total_latency_ms / request_count = 9000/60 = 150.
+        assert!((snap.per_model_timeseries[0].points[0].avg_latency_ms - 150.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_per_model_timeseries_cap() {
+        let mut builder = SnapshotBuilder::new();
+        let global = GlobalSnapshot {
+            total_requests: 0,
+            success_requests: 0,
+            failed_requests: 0,
+            in_flight_requests: 0,
+        };
+        let mut providers = HashMap::new();
+        providers.insert("omlx:gpt-4".to_string(), ProviderCounters::default());
+        for _ in 0..350 {
+            builder.build(&global, &providers);
+        }
+        let snap = builder.build(&global, &providers);
+        assert_eq!(snap.per_model_timeseries.len(), 1);
+        assert!(snap.per_model_timeseries[0].points.len() <= 300);
     }
 }

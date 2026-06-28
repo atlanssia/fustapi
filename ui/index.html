@@ -3338,8 +3338,7 @@
         `).join("");
       }
 
-      drawChart("chart-qps", m.timeseries, "rpm", "#84A98C");
-      drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#7AABB4");
+      drawPerModelCharts(m);
     }
 
     function drawChart(canvasId, timeseries, dataKey, color) {
@@ -3428,6 +3427,222 @@
       ctx.textBaseline = "top";
       ctx.fillStyle = color;
       ctx.fillText(display, width - padRight, padTop + 2);
+    }
+
+    // ── Per-model chart helpers (stacked area for RPM, multi-line for latency) ──
+
+    const PROVIDER_COLORS = {
+      deepseek: "#84C49A", glm: "#84A98C", openai: "#7ABF94", zai: "#7AB4CA",
+      omlx: "#D4BA7A", sglang: "#CA9A7A", lmstudio: "#CA8A8A", "openai-compatible": "#8A9A92",
+    };
+    const FALLBACK_COLORS = ["#7AB4CA", "#D4BA7A", "#CA9A7A", "#CA8A8A", "#8A9A92"];
+
+    function modelColor(provider, idx) {
+      return PROVIDER_COLORS[provider] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
+    }
+
+    function hexToRgba(hex, a) {
+      const h = hex.replace("#", "");
+      const r = parseInt(h.substring(0, 2), 16);
+      const g = parseInt(h.substring(2, 4), 16);
+      const b = parseInt(h.substring(4, 6), 16);
+      return `rgba(${r},${g},${b},${a})`;
+    }
+
+    // chart-canvas boilerplate (DPR scaling + pad + clear) shared by both charts.
+    function prepCanvas(canvasId) {
+      const canvas = byId(canvasId);
+      if (!canvas) return null;
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+      }
+      const padLeft = 42, padRight = 8, padTop = 8, padBottom = 4;
+      const width = rect.width, height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+      return { ctx, width, height, plotW: width - padLeft - padRight, plotH: height - padTop - padBottom, padLeft, padRight, padTop, padBottom };
+    }
+
+    function drawAxes(c, maxVal, fmt) {
+      const { ctx, width, plotW, plotH, padLeft, padRight, padTop } = c;
+      ctx.fillStyle = "#6A8078";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i <= 2; i++) {
+        const val = maxVal * (2 - i) / 2;
+        const y = padTop + (plotH * i / 2);
+        ctx.fillText(fmt(val), padLeft - 6, y);
+      }
+      ctx.strokeStyle = "rgba(132,169,140,0.08)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 2; i++) {
+        const y = padTop + (plotH * i / 2);
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(width - padRight, y);
+        ctx.stroke();
+      }
+    }
+
+    // Stacked area: one layer per model, layers sum to total RPM.
+    function drawStackedAreaChart(canvasId, series) {
+      if (!series || series.length === 0) return;
+      const n = series[0].values.length;
+      if (n === 0) return;
+      const c = prepCanvas(canvasId);
+      if (!c) return;
+      const { ctx, width, padLeft, padRight, padTop, plotW, plotH } = c;
+
+      // Cumulative tops per series (series is already sorted: largest at bottom).
+      const tops = series.map(() => new Array(n));
+      {
+        const acc = new Array(n).fill(0);
+        for (let s = 0; s < series.length; s++) {
+          for (let i = 0; i < n; i++) { acc[i] += series[s].values[i] || 0; tops[s][i] = acc[i]; }
+        }
+      }
+      const topAll = tops[tops.length - 1];
+      let maxVal = 1;
+      for (const v of topAll) if (v > maxVal) maxVal = v;
+
+      drawAxes(c, maxVal, v => v.toFixed(1));
+
+      const xAt = i => padLeft + (i / Math.max(n - 1, 1)) * plotW;
+      const yAt = v => padTop + plotH - (v / maxVal) * plotH;
+
+      let lower = new Array(n).fill(0);
+      for (let s = 0; s < series.length; s++) {
+        const top = tops[s];
+        ctx.beginPath();
+        ctx.moveTo(xAt(0), yAt(top[0]));
+        for (let i = 1; i < n; i++) ctx.lineTo(xAt(i), yAt(top[i]));
+        for (let i = n - 1; i >= 0; i--) ctx.lineTo(xAt(i), yAt(lower[i]));
+        ctx.closePath();
+        ctx.fillStyle = hexToRgba(series[s].color, 0.45);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(xAt(0), yAt(top[0]));
+        for (let i = 1; i < n; i++) ctx.lineTo(xAt(i), yAt(top[i]));
+        ctx.strokeStyle = series[s].color;
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = "round";
+        ctx.stroke();
+        lower = top;
+      }
+
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#E8F0EB";
+      ctx.fillText(topAll[n - 1].toFixed(1), width - padRight, padTop + 2);
+    }
+
+    // Multi-line: one stroke per model (latency is an average, not stackable).
+    function drawMultiLineChart(canvasId, series) {
+      if (!series || series.length === 0) return;
+      const n = series[0].values.length;
+      if (n === 0) return;
+      const c = prepCanvas(canvasId);
+      if (!c) return;
+      const { ctx, width, padLeft, padRight, padTop, plotW, plotH } = c;
+
+      let maxVal = 1;
+      for (const ser of series) for (const v of ser.values) if (v > maxVal) maxVal = v;
+
+      drawAxes(c, maxVal, v => fmtMs(v));
+
+      const xAt = i => padLeft + (i / Math.max(n - 1, 1)) * plotW;
+      const yAt = v => padTop + plotH - (v / maxVal) * plotH;
+
+      for (const ser of series) {
+        ctx.beginPath();
+        ctx.strokeStyle = ser.color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        for (let i = 0; i < n; i++) {
+          const x = xAt(i), y = yAt(ser.values[i] || 0);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      let cur = 0;
+      for (const ser of series) cur = Math.max(cur, ser.values[n - 1] || 0);
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#E8F0EB";
+      ctx.fillText(fmtMs(cur), width - padRight, padTop + 2);
+    }
+
+    // Build per-model series from the snapshot, aligning each model's (possibly
+    // shorter) history to the global timeseries length by left-padding zeros.
+    function drawPerModelCharts(m) {
+      const pms = m.per_model_timeseries;
+      const havePm = pms && pms.length > 0 && m.timeseries && m.timeseries.length > 0;
+      if (!havePm) {
+        drawChart("chart-qps", m.timeseries, "rpm", "#84A98C");
+        drawChart("chart-latency", m.timeseries, "avg_latency_ms", "#7AABB4");
+        renderChartLegend("chart-qps", []);
+        renderChartLegend("chart-latency", []);
+        return;
+      }
+      const N = m.timeseries.length;
+      const align = (points, key) => {
+        const vals = points.map(p => p[key] || 0);
+        const pad = N - vals.length;
+        return pad > 0 ? new Array(pad).fill(0).concat(vals) : vals;
+      };
+      const rpmSeries = pms.map((mt, i) => ({
+        label: mt.model, color: modelColor(mt.provider, i), values: align(mt.points, "rpm"),
+      }));
+      const latSeries = pms.map((mt, i) => ({
+        label: mt.model, color: modelColor(mt.provider, i), values: align(mt.points, "avg_latency_ms"),
+      }));
+      drawStackedAreaChart("chart-qps", rpmSeries);
+      drawMultiLineChart("chart-latency", latSeries);
+      const legend = ser => ({ label: ser.label, color: ser.color, value: ser.values[ser.values.length - 1] });
+      renderChartLegend("chart-qps", rpmSeries.map(legend));
+      renderChartLegend("chart-latency", latSeries.map(legend));
+    }
+
+    // Legend via DOM methods (no innerHTML) — labels come from server config.
+    function renderChartLegend(canvasId, items) {
+      const canvas = byId(canvasId);
+      if (!canvas) return;
+      const card = canvas.closest(".chart-card");
+      if (!card) return;
+      let legend = card.querySelector(".chart-legend");
+      if (!legend) {
+        legend = document.createElement("div");
+        legend.className = "chart-legend";
+        legend.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 12px;padding:6px 4px 2px;font-family:var(--font-heading)";
+        card.appendChild(legend);
+      }
+      while (legend.firstChild) legend.removeChild(legend.firstChild);
+      if (!items || items.length === 0) return;
+      for (const it of items.slice(0, 6)) {
+        const span = document.createElement("span");
+        span.style.cssText = "display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted)";
+        const sw = document.createElement("span");
+        sw.style.cssText = "width:8px;height:8px;border-radius:2px;background:" + it.color;
+        const label = document.createElement("span");
+        label.textContent = it.label;
+        const val = document.createElement("span");
+        val.style.color = "var(--text)";
+        val.textContent = typeof it.value === "number"
+          ? (it.value < 100 ? it.value.toFixed(1) : Math.round(it.value))
+          : it.value;
+        span.appendChild(sw);
+        span.appendChild(label);
+        span.appendChild(val);
+        legend.appendChild(span);
+      }
     }
 
     function setupEvents() {
