@@ -672,9 +672,10 @@
     .shell {
       position: relative;
       z-index: 1;
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
 
     .topbar {
@@ -832,6 +833,7 @@
     .layout {
       display: flex;
       flex: 1;
+      min-height: 0;
     }
 
     .sidebar {
@@ -844,9 +846,7 @@
       display: flex;
       flex-direction: column;
       padding: 1.5rem 0;
-      position: sticky;
-      top: 0;
-      height: 100vh;
+      height: 100%;
       overflow-y: auto;
     }
 
@@ -890,6 +890,7 @@
       flex: 1;
       min-width: 0;
       padding: 1.25rem;
+      overflow-y: auto;
     }
 
     .panel {
@@ -3431,14 +3432,31 @@
 
     // ── Per-model chart helpers (stacked area for RPM, multi-line for latency) ──
 
-    const PROVIDER_COLORS = {
-      deepseek: "#84C49A", glm: "#84A98C", openai: "#7ABF94", zai: "#7AB4CA",
-      omlx: "#D4BA7A", sglang: "#CA9A7A", lmstudio: "#CA8A8A", "openai-compatible": "#8A9A92",
+    // Provider → base hue, so a model's color still echoes its provider's theme.
+    const PROVIDER_HUES = {
+      deepseek: 145, glm: 150, openai: 140, zai: 200,
+      omlx: 45, sglang: 25, lmstudio: 0, "openai-compatible": 120,
     };
-    const FALLBACK_COLORS = ["#7AB4CA", "#D4BA7A", "#CA9A7A", "#CA8A8A", "#8A9A92"];
 
+    // Distinct color per model. The provider's hue anchors the palette, and the
+    // index rotates it so multiple models that share a provider don't collapse
+    // onto the same color (which made overlapping series indistinguishable).
     function modelColor(provider, idx) {
-      return PROVIDER_COLORS[provider] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
+      const base = PROVIDER_HUES[provider];
+      const hue = (base == null ? idx * 47 : base + idx * 37) % 360;
+      return hslToHex(hue, 55, 60);
+    }
+
+    function hslToHex(h, s, l) {
+      s /= 100;
+      l /= 100;
+      const k = n => (n + h / 30) % 12;
+      const a = s * Math.min(l, 1 - l);
+      const f = n => {
+        const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        return Math.round(c * 255).toString(16).padStart(2, "0");
+      };
+      return `#${f(0)}${f(8)}${f(4)}`;
     }
 
     function hexToRgba(hex, a) {
