@@ -842,20 +842,25 @@ impl OpenAIProvider {
 
 impl OpenAIConfig {
     /// Build a URL for a standard metadata endpoint (`/v1/models`, `/health`,
-    /// `/user/balance`). Extracts the origin so path prefixes like `/anthropic`
-    /// or `/v1` don't leak into the URL.
+    /// `/user/balance`).
+    ///
+    /// When the endpoint is a versioned API base ending in `/v1` (e.g.
+    /// `https://opencode.ai/zen/go/v1`), metadata lives under that base, so the
+    /// `/v1` prefix is kept and only the duplicated `/v1` from `path` is
+    /// stripped. Otherwise the origin is extracted so protocol-alias prefixes
+    /// like `/anthropic` don't leak into the URL.
     ///
     /// For providers with non-standard API path layouts (e.g. GLM's
     /// `/api/coding/paas/v4`), use direct construction — this helper only
-    /// handles origin-based metadata endpoints.
+    /// handles origin-based and `/v1`-based metadata endpoints.
     pub fn metadata_url(&self, path: &str) -> String {
-        let origin: String = self
-            .endpoint
-            .trim_end_matches('/')
-            .split('/')
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("/");
+        let ep = self.endpoint.trim_end_matches('/');
+        if ep.ends_with("/v1")
+            && let Some(rest) = path.strip_prefix("/v1")
+        {
+            return format!("{ep}{rest}");
+        }
+        let origin: String = ep.split('/').take(3).collect::<Vec<_>>().join("/");
         format!("{origin}{path}")
     }
 
@@ -1500,6 +1505,19 @@ mod tests {
     fn metadata_url_localhost() {
         let cfg = config_with("http://127.0.0.1:8000/v1");
         assert_eq!(cfg.metadata_url("/health"), "http://127.0.0.1:8000/health");
+    }
+
+    #[test]
+    fn metadata_url_keeps_versioned_api_prefix() {
+        // A provider whose endpoint is itself a versioned API base (ending in
+        // `/v1`) with a non-standard prefix — e.g. opencode's
+        // `https://opencode.ai/zen/go/v1` — serves `/v1/models` under that
+        // base, not at the origin. The prefix must be kept, not stripped.
+        let cfg = config_with("https://opencode.ai/zen/go/v1");
+        assert_eq!(
+            cfg.metadata_url("/v1/models"),
+            "https://opencode.ai/zen/go/v1/models"
+        );
     }
 
     #[test]
