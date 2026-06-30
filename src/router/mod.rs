@@ -259,7 +259,12 @@ impl Router for RealRouter {
                     use tokio_stream::StreamExt;
                     let s = stream.map(|chunk_result| match chunk_result {
                         Ok(chunk) => Ok(chunk),
-                        Err(e) => Err(crate::streaming::StreamError::Provider(e.to_string())),
+                        // Forward the stream error unchanged. Re-wrapping it as
+                        // StreamError::Provider collapses the variant
+                        // (Connection/Parse/Provider) and double-prefixes the
+                        // Display ("provider error: provider error: …"), which
+                        // is what surfaced as the noisy stream chunk error log.
+                        Err(e) => Err(e),
                     });
 
                     let s = if let Some(t) = &transform {
@@ -552,6 +557,50 @@ mod tests {
         }
     }
 
+    /// A mock provider that emits a single `StreamError` in its Normalized
+    /// stream. Used to verify the router forwards stream errors unchanged
+    /// rather than re-wrapping them (which collapses the variant and
+    /// double-prefixes the Display).
+    struct ErrorStreamMock {
+        caps: ProviderCapabilities,
+    }
+
+    impl ErrorStreamMock {
+        fn new() -> Self {
+            Self {
+                caps: ProviderCapabilities {
+                    tool_calling: crate::types::ToolCallingSupport::Native,
+                    image_input: false,
+                    streaming: true,
+                    supports_responses: false,
+                    supports_anthropic: false,
+                },
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for ErrorStreamMock {
+        async fn chat_stream(
+            &self,
+            _request: UnifiedRequest,
+            _allow_passthrough: bool,
+        ) -> Result<crate::streaming::StreamMode, ProviderError> {
+            let item: Result<crate::streaming::LLMChunk, crate::streaming::StreamError> = Err(
+                crate::streaming::StreamError::Connection("upstream dropped".to_string()),
+            );
+            Ok(crate::streaming::StreamMode::Normalized(Box::pin(
+                tokio_stream::iter(std::iter::once(item)),
+            )))
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.caps
+        }
+        fn name(&self) -> &str {
+            "error-mock"
+        }
+    }
+
     fn make_tools() -> Vec<crate::capability::ToolDefinition> {
         vec![crate::capability::ToolDefinition {
             name: "get_weather".to_string(),
@@ -755,6 +804,43 @@ mod tests {
         let req = make_request("unknown-model", None);
         let result = router.chat_stream(req, true).await;
         assert!(matches!(result, Err(RouterError::ModelNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn chat_stream_forwards_stream_error_without_rewrapping() {
+        // When a provider's Normalized stream yields a StreamError mid-stream
+        // (e.g. reqwest "error decoding response body" when upstream drops the
+        // chunked connection), the router must forward the error unchanged.
+        // Re-wrapping it as StreamError::Provider collapses the variant and
+        // double-prefixes the Display ("provider error: provider error: …"),
+        // which is what surfaced as the noisy stream chunk error log.
+        let provider = ErrorStreamMock::new();
+        let router = router_with("error-mock", Box::new(provider), &["error-model"]);
+
+        let req = make_request("error-model", None);
+        let result = router.chat_stream(req, true).await.unwrap();
+
+        match result {
+            crate::streaming::StreamMode::Normalized(mut stream) => {
+                use tokio_stream::StreamExt;
+                let item = stream
+                    .next()
+                    .await
+                    .expect("stream should yield the injected error");
+                match item {
+                    Err(crate::streaming::StreamError::Connection(msg)) => {
+                        assert_eq!(msg, "upstream dropped");
+                    }
+                    other => panic!("expected StreamError::Connection, got {other:?}"),
+                }
+            }
+            crate::streaming::StreamMode::Passthrough(_) => {
+                panic!("expected Normalized stream, got Passthrough");
+            }
+            crate::streaming::StreamMode::NonStreaming(_) => {
+                panic!("expected Normalized stream, got NonStreaming");
+            }
+        }
     }
 
     // ── [1m] suffix normalization tests ─────────────────────────────────

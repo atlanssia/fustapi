@@ -241,6 +241,21 @@ pub fn parse_openai_sse_stream(
                     state.feed(&bytes);
                 }
                 Some(Err(e)) => {
+                    // Classify the reqwest error at the source so intermittent
+                    // upstream drops — e.g. "error decoding response body"
+                    // (hyper chunked connection closed mid-stream) — are
+                    // distinguishable from timeouts / connect failures in the
+                    // logs. The downstream `stream chunk error` log only shows
+                    // the Display string, not the reqwest error category.
+                    tracing::warn!(
+                        error = %e,
+                        is_timeout = e.is_timeout(),
+                        is_connect = e.is_connect(),
+                        is_decode = e.is_decode(),
+                        is_body = e.is_body(),
+                        is_request = e.is_request(),
+                        "upstream stream error"
+                    );
                     return Some((
                         Err(crate::streaming::StreamError::Provider(e.to_string())),
                         (stream, state),
